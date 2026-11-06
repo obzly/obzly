@@ -39,6 +39,52 @@ func setUpConnectorAtURL(t *testing.T, issuerURL, clientID string) *sso_models.C
 // A second call must not hit the IdP's discovery endpoint within discoveryCacheTTL.
 func Test_ListPublicConnectors_CachesDiscoveryAcrossCalls(t *testing.T) {
 	fake := newFakeOIDCServer(t, "test-client-id")
+	countingProxy, discoveryHits := newCountingDiscoveryProxy(t, fake)
+
+	// CreateConnector's own (uncached) discovery accounts for one hit already.
+	connector := setUpConnectorAtURL(t, countingProxy.URL, fake.ClientID)
+	require.True(t, connector.Enabled)
+	baseline := atomic.LoadInt64(discoveryHits)
+
+	_, err := GetConnectorService().ListPublicConnectors("http://localhost/callback")
+	require.NoError(t, err)
+	afterFirst := atomic.LoadInt64(discoveryHits)
+	assert.Equal(t, baseline+1, afterFirst, "the first call should hit discovery once")
+
+	_, err = GetConnectorService().ListPublicConnectors("http://localhost/callback")
+	require.NoError(t, err)
+	afterSecond := atomic.LoadInt64(discoveryHits)
+	assert.Equal(t, afterFirst, afterSecond, "the second call should be served from the cache, no new discovery hit")
+}
+
+// Connectors sharing an issuer are discovered concurrently on the login page;
+// they must share one discovery request. A test connector left behind on a
+// reused loopback port made CI see two.
+func Test_ListPublicConnectors_ConnectorsWithSameIssuer_DiscoverOnce(t *testing.T) {
+	fake := newFakeOIDCServer(t, "test-client-id")
+	countingProxy, discoveryHits := newCountingDiscoveryProxy(t, fake)
+
+	setUpConnectorAtURL(t, countingProxy.URL, fake.ClientID)
+	setUpConnectorAtURL(t, countingProxy.URL, fake.ClientID)
+	baseline := atomic.LoadInt64(discoveryHits)
+
+	response, err := GetConnectorService().ListPublicConnectors("http://localhost/callback")
+	require.NoError(t, err)
+	assert.Equal(t, baseline+1, atomic.LoadInt64(discoveryHits))
+
+	sameIssuer := 0
+	for _, connector := range response.Connectors {
+		if strings.HasPrefix(connector.AuthorizeURL, countingProxy.URL) {
+			sameIssuer++
+		}
+	}
+	assert.Equal(t, 2, sameIssuer, "both connectors are still listed")
+}
+
+// newCountingDiscoveryProxy serves fake's discovery document as its own and
+// counts the requests for it.
+func newCountingDiscoveryProxy(t *testing.T, fake *fakeOIDCServer) (*httptest.Server, *int64) {
+	t.Helper()
 
 	var discoveryHits int64
 	var proxyURL string
@@ -68,19 +114,5 @@ func Test_ListPublicConnectors_CachesDiscoveryAcrossCalls(t *testing.T) {
 	}))
 	proxyURL = countingProxy.URL
 	t.Cleanup(countingProxy.Close)
-
-	// CreateConnector's own (uncached) discovery accounts for one hit already.
-	connector := setUpConnectorAtURL(t, countingProxy.URL, fake.ClientID)
-	require.True(t, connector.Enabled)
-	baseline := atomic.LoadInt64(&discoveryHits)
-
-	_, err := GetConnectorService().ListPublicConnectors("http://localhost/callback")
-	require.NoError(t, err)
-	afterFirst := atomic.LoadInt64(&discoveryHits)
-	assert.Equal(t, baseline+1, afterFirst, "the first call should hit discovery once")
-
-	_, err = GetConnectorService().ListPublicConnectors("http://localhost/callback")
-	require.NoError(t, err)
-	afterSecond := atomic.LoadInt64(&discoveryHits)
-	assert.Equal(t, afterFirst, afterSecond, "the second call should be served from the cache, no new discovery hit")
+	return countingProxy, &discoveryHits
 }

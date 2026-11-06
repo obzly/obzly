@@ -23,6 +23,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 )
 
 var ErrInsufficientPermissions = errors.New("insufficient permissions to manage SSO connectors")
@@ -360,9 +361,20 @@ type discoveryCacheEntry struct {
 var (
 	discoveryCacheMu sync.Mutex
 	discoveryCache   = map[string]discoveryCacheEntry{}
+	// Connectors sharing an issuer are discovered at the same time by
+	// ListPublicConnectors; they wait for one request instead of each sending one.
+	discoveryInFlight singleflight.Group
 )
 
 func discoverProviderCached(issuerURL string) (*oidc.Provider, error) {
+	result, err, _ := discoveryInFlight.Do(issuerURL, func() (any, error) {
+		return discoverAndCache(issuerURL)
+	})
+	provider, _ := result.(*oidc.Provider)
+	return provider, err
+}
+
+func discoverAndCache(issuerURL string) (*oidc.Provider, error) {
 	discoveryCacheMu.Lock()
 	if entry, ok := discoveryCache[issuerURL]; ok && time.Now().Before(entry.expiresAt) {
 		discoveryCacheMu.Unlock()
