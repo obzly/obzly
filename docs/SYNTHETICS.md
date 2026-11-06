@@ -298,10 +298,10 @@ it needs no extra storage.
 
 ## Release pipeline
 
-In `.github/workflows/ci-release.yml`:
+In `.github/workflows/release.yml`, on a `vX.Y.Z` tag:
 
 - **image:** a second `build-push-action` from `Dockerfile.probe` to `ghcr.io/obzly/obzly-probe`
-  with the same tags (the package is private on first push, like the main image);
+  with the same version tag as the main image;
 - **release:** the release job builds the static binaries and attaches them with `install.sh`, the
   systemd unit and `checksums.txt`;
 - **chart:** `helm.yml` lints the new chart.

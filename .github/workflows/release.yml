@@ -1,0 +1,171 @@
+name: Release
+
+# Pushing a vX.Y.Z tag on a commit in main publishes that version: the
+# images, the probe binaries and the GitHub Release. It never moves the
+# `latest` image tags.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Read-only by default; the image and release jobs ask for more themselves.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Only merged code is released: main requires a PR and passing checks,
+      # a tag doesn't.
+      - name: Check the tag is on main
+        id: version
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) isn't a commit on main"
+            exit 1
+          fi
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # The charts, the Kubernetes manifests and the VM installer deploy
+      # this release by default, so the release PR must have bumped them.
+      - name: Check the repo points at this version
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          stale=0
+          for chart in deploy/helm/*/Chart.yaml; do
+            grep -qx "appVersion: \"${VERSION}\"" "$chart" || { echo "::error file=$chart::appVersion isn't \"${VERSION}\""; stale=1; }
+          done
+          grep -qx "OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"" install-obzly.sh || { echo "::error file=install-obzly.sh::OBZLY_DEFAULT_IMAGE_TAG isn't v${VERSION}"; stale=1; }
+          while IFS= read -r line; do
+            echo "::error::${line} (expected :v${VERSION})"; stale=1
+          done < <(grep -rnE "image: ghcr\.io/obzly/obzly(-probe)?:" deploy/kubernetes | grep -v ":v${VERSION}\$" || true)
+          exit $stale
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [check]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The backend and frontend are cross-compiled (Dockerfile), so
+      # emulation only runs the arm64 runtime stage's package install.
+      - name: Set up QEMU (the arm64 image's runtime stage)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            APP_VERSION=${{ needs.check.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          tags: ghcr.io/obzly/obzly:v${{ needs.check.outputs.version }}
+
+      - name: Build and push the probe image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: Dockerfile.probe
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            APP_VERSION=${{ needs.check.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          tags: ghcr.io/obzly/obzly-probe:v${{ needs.check.outputs.version }}
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [check, images]
+    permissions:
+      contents: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.3"
+          cache: false
+
+      # Static binaries named without the version, so
+      # releases/latest/download/... always works (deploy/probe/install.sh).
+      - name: Build the probe binaries
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            (cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" -o "../dist/obzly-probe_linux_${arch}" ./cmd/probe)
+          done
+          cp deploy/probe/install.sh deploy/probe/obzly-probe.service dist/
+          # The VM installer (README), its image tag pinned to this release.
+          sed "s/^OBZLY_DEFAULT_IMAGE_TAG=.*/OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"/" install-obzly.sh > dist/install-obzly.sh
+          grep -q "^OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"$" dist/install-obzly.sh
+          (cd dist && sha256sum obzly-probe_linux_* install.sh obzly-probe.service install-obzly.sh > checksums.txt)
+
+      # Notes: docs/releases/vX.Y.Z.md when there is one, the images, then
+      # GitHub's list of PRs merged since the previous tag.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            if [ -f "docs/releases/v${VERSION}.md" ]; then
+              cat "docs/releases/v${VERSION}.md"
+              echo
+            fi
+            echo "### Images"
+            echo
+            echo "- \`ghcr.io/obzly/obzly:v${VERSION}\`"
+            echo "- \`ghcr.io/obzly/obzly-probe:v${VERSION}\` (probe binaries and install scripts are attached below)"
+            echo "- Platforms: linux/amd64, linux/arm64"
+            echo
+            echo "Before upgrading, read [the upgrade runbook](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/docs/runbooks/upgrade.md#releases-that-need-action)."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Obzly v${VERSION}" --notes-file notes.md --generate-notes \
+            dist/obzly-probe_linux_amd64 dist/obzly-probe_linux_arm64 dist/install.sh \
+            dist/obzly-probe.service dist/install-obzly.sh dist/checksums.txt
