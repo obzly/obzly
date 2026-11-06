@@ -21,6 +21,8 @@ import type { DataSourceConfigFile, DataSourceConfigResult, DataSourceDefinition
 const BASE_URL = 'https://obzly.example.com';
 const API_KEY = 'obz_0123456789abcdef0123456789abcdef'; // gitleaks:allow (test fixture)
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const LANGUAGE_SOURCES: DataSourceDefinition[] = [
   javaSdkDataSource,
   dotnetSdkDataSource,
@@ -190,10 +192,12 @@ describe('language data sources', () => {
             expect(text).toContain(`endpoint: "${BASE_URL}"`);
           } else {
             expect(text).toMatch(
-              new RegExp(`OTEL_EXPORTER_OTLP_HEADERS(=|: |=")"?X-API-Key=${API_KEY}`),
+              new RegExp(`OTEL_EXPORTER_OTLP_HEADERS(=|: |=")"?X-API-Key=${escapeRegExp(API_KEY)}`),
             );
             expect(text).toMatch(
-              new RegExp(`OTEL_EXPORTER_OTLP_ENDPOINT(="|\\n\\s+value: ")${BASE_URL}"`),
+              new RegExp(
+                `OTEL_EXPORTER_OTLP_ENDPOINT(="|\\n\\s+value: ")${escapeRegExp(BASE_URL)}"`,
+              ),
             );
             if (definition === erlangSdkDataSource) expect(text).toContain('http_protobuf');
             else

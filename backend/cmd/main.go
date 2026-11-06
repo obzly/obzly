@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1571,23 +1572,25 @@ func mountFrontend(ginApp *gin.Engine) {
 // "Unexpected token '<'" and swallowed OTLP exports on a control plane.
 func frontendFallback(staticDir string, isControlPlane bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		path := c.Request.URL.Path
+		// Cleaned against "/" so ".." can't climb out of staticDir.
+		requestPath := path.Clean("/" + c.Request.URL.Path)
+		c.Request.URL.Path = requestPath
 		isPageRequest := c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead
-		if strings.HasPrefix(path, "/v1/") && isControlPlane {
+		if strings.HasPrefix(requestPath, "/v1/") && isControlPlane {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "this is a control plane: send telemetry to a Site's URL, not the control plane's",
 			})
 			return
 		}
-		if !isPageRequest || strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/sites/") ||
-			strings.HasPrefix(path, "/v1/") {
+		if !isPageRequest || strings.HasPrefix(requestPath, "/api/") || strings.HasPrefix(requestPath, "/sites/") ||
+			strings.HasPrefix(requestPath, "/v1/") {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
 
-		filePath := filepath.Join(staticDir, path)
+		filePath := filepath.Join(staticDir, requestPath)
 		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
-			c.Header("Cache-Control", cacheControlFor(path))
+			c.Header("Cache-Control", cacheControlFor(requestPath))
 			c.File(filePath)
 			return
 		}

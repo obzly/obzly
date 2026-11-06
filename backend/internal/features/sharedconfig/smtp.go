@@ -159,13 +159,16 @@ func SendMail(ctx context.Context, to []string, subjectLine, body string) error 
 // Send delivers one message over TLS 1.2+ (implicit TLS or STARTTLS, never
 // plaintext).
 func (s *SMTP) Send(ctx context.Context, to []string, subjectLine, body string) error {
+	from, recipients, err := envelope(s.From, to)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, smtpTimeout)
 	defer cancel()
 	address := net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
 	tlsConfig := &tls.Config{ServerName: s.Host, MinVersion: tls.VersionTLS12}
 	dialer := &net.Dialer{Timeout: smtpTimeout}
 	var conn net.Conn
-	var err error
 	if s.TLS == "tls" {
 		conn, err = (&tls.Dialer{NetDialer: dialer, Config: tlsConfig}).DialContext(ctx, "tcp", address)
 	} else {
@@ -193,19 +196,19 @@ func (s *SMTP) Send(ctx context.Context, to []string, subjectLine, body string) 
 			return fmt.Errorf("mail relay auth: %w", err)
 		}
 	}
-	if err := client.Mail(s.From); err != nil {
+	if err := client.Mail(from.Address); err != nil {
 		return fmt.Errorf("mail relay: %w", err)
 	}
-	for _, recipient := range to {
-		if err := client.Rcpt(recipient); err != nil {
-			return fmt.Errorf("mail relay refused %s: %w", recipient, err)
+	for _, recipient := range recipients {
+		if err := client.Rcpt(recipient.Address); err != nil {
+			return fmt.Errorf("mail relay refused %s: %w", recipient.Address, err)
 		}
 	}
 	writer, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("mail relay: %w", err)
 	}
-	if _, err := writer.Write([]byte(message(s.From, to, subjectLine, body))); err != nil {
+	if _, err := writer.Write([]byte(message(from, recipients, subjectLine, body))); err != nil {
 		return fmt.Errorf("mail relay: %w", err)
 	}
 	if err := writer.Close(); err != nil {
@@ -285,7 +288,29 @@ func forgetSMTP() {
 // message builds the email. Control characters in the subject (it may come
 // from a rule name; a bare CR ends a header on some relays) become spaces,
 // and it's RFC 2047-encoded.
-func message(from string, to []string, subjectLine, body string) string {
+// envelope parses the sender and recipients once: headers and the SMTP
+// envelope carry only parsed addresses, so an address that skipped
+// validation can't add a header line.
+func envelope(from string, to []string) (*mail.Address, []*mail.Address, error) {
+	sender, err := mail.ParseAddress(from)
+	if err != nil {
+		return nil, nil, errors.New("the From address isn't a valid email address")
+	}
+	if len(to) == 0 {
+		return nil, nil, errors.New("no recipients")
+	}
+	recipients := make([]*mail.Address, 0, len(to))
+	for _, address := range to {
+		parsed, err := mail.ParseAddress(address)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%q isn't a valid email address", address)
+		}
+		recipients = append(recipients, parsed)
+	}
+	return sender, recipients, nil
+}
+
+func message(from *mail.Address, to []*mail.Address, subjectLine, body string) string {
 	subjectLine = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
@@ -295,5 +320,13 @@ func message(from string, to []string, subjectLine, body string) string {
 	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n")
 	return fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\n"+
 		"Content-Type: text/plain; charset=utf-8\r\n\r\n%s\r\n",
-		from, strings.Join(to, ", "), mime.QEncoding.Encode("utf-8", subjectLine), body)
+		from.String(), joinAddresses(to), mime.QEncoding.Encode("utf-8", subjectLine), body)
+}
+
+func joinAddresses(addresses []*mail.Address) string {
+	formatted := make([]string, len(addresses))
+	for i, address := range addresses {
+		formatted[i] = address.String()
+	}
+	return strings.Join(formatted, ", ")
 }
