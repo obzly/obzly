@@ -311,6 +311,12 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
   - Probe group members silent for an hour are forgotten (was a day), and Infrastructure removes
     replaced Kubernetes nodes and deleted or terminated cloud resources instead of keeping them for
     `INVENTORY_RETENTION_DAYS`; on the first build after the upgrade, ones already gone are removed.
+- **v1.0.0** (first release from github.com/obzly/obzly) - no migration. Upgrade the Site, the
+  control plane, then the probes, as for v0.58.1. The UI's static file handler cleans request
+  paths before looking for a file, and alert mail refuses a From or recipient address that would
+  add a header. The Helm charts, the Kubernetes manifests in `deploy/kubernetes` (until now
+  `:latest`) and `install-obzly.sh` deploy `v1.0.0` by default, and the probe installer downloads
+  from github.com/obzly/obzly releases.
 
 ## Order
 

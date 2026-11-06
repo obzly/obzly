@@ -42,7 +42,7 @@ spec:
         kubernetes.io/arch: arm64
       containers:
         - name: obzly
-          image: ghcr.io/obzly/obzly:latest
+          image: ghcr.io/obzly/obzly:v1.0.0
           imagePullPolicy: Always
           # Starts as root only to chown /obzly-data and write
           # runtime-config.js, then drops to uid 1000 with no capabilities.

@@ -1,7 +1,7 @@
 # Contributing to Obzly
 
 Thanks for helping. This page covers how to get a working setup, what a change needs before it can
-be merged, and how releases follow from commit messages.
+be merged, and how releases are cut.
 
 ## Where to start
 
@@ -52,8 +52,14 @@ layout and conventions; [`docs/configuration.md`](docs/configuration.md) lists e
 
 ## Commit messages and versioning
 
-Every merge to `main` that contains a releasable commit cuts a release (`.github/workflows/ci-release.yml`).
-The version follows [Semantic Versioning](https://semver.org) and is derived from commit subjects:
+A maintainer cuts a release by pushing a `vX.Y.Z` tag on a commit in `main`;
+`.github/workflows/release.yml` then builds the images and probe binaries and publishes the GitHub
+Release. Before tagging, a release PR sets the new version as `appVersion` in
+`deploy/helm/*/Chart.yaml` (and bumps each chart's `version`), as the image tag in
+`deploy/kubernetes/**`, and as `OBZLY_DEFAULT_IMAGE_TAG` in `install-obzly.sh`; it can add
+`docs/releases/vX.Y.Z.md` for the top of the release notes. The workflow refuses a tag that these
+don't match. The version follows [Semantic Versioning](https://semver.org), and the commit subjects
+since the previous release decide which part goes up:
 
 | Subject starts with | Release |
 | --- | --- |
@@ -62,12 +68,11 @@ The version follows [Semantic Versioning](https://semver.org) and is derived fro
 | `DOCS`, `TEST`, `CHORE`, ... | none on its own |
 | `TYPE (scope)!: ...`, or `BREAKING CHANGE` in the subject | major |
 
-Add `[skip-release]` to a merge commit's message to build without releasing. Keep subjects short and
-in the imperative ("add", "fix"); the body says why. Each release's notes are generated from these
-subjects - see [CHANGELOG.md](CHANGELOG.md).
+Keep subjects short and in the imperative ("add", "fix"); the body says why. Each release's notes
+list the pull requests merged since the previous release - see [CHANGELOG.md](CHANGELOG.md).
 
-Until 1.0, minor releases may include changes operators must act on; they're always listed in the
-upgrade runbook. Rolling back one release is supported; two is not.
+Changes operators must act on are always listed in the upgrade runbook. Rolling back one release is
+supported; two is not.
 
 ## Code of conduct
 

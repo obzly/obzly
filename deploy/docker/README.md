@@ -41,7 +41,7 @@ all relative to wherever you ran `docker compose` from (the repo root).
 
 The examples build from source. To run a release instead, replace each service's `build:` block
 with `image: ghcr.io/obzly/obzly:${OBZLY_IMAGE_TAG:-latest}` and set `OBZLY_IMAGE_TAG` in `.env`
-(for example `v0.48.1`; images are published for `linux/amd64` and `linux/arm64`). Upgrading is
+(for example `v1.0.0`; images are published for `linux/amd64` and `linux/arm64`). Upgrading is
 then `docker compose pull && docker compose up -d`.
 
 ### Configuration
