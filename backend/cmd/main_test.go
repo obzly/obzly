@@ -84,6 +84,27 @@ func Test_FrontendFallback_NonPageRequests_ReturnJSON404(t *testing.T) {
 	}
 }
 
+func Test_FrontendFallback_PathOutsideStaticDir_ServesIndexInstead(t *testing.T) {
+	root := t.TempDir()
+	staticDir := filepath.Join(root, "ui", "build")
+	require.NoError(t, os.MkdirAll(staticDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<html></html>"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "secret.txt"), []byte("not for clients"), 0o600))
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.NoRoute(frontendFallback(staticDir, false))
+
+	for _, path := range []string{"/../../secret.txt", "/assets/../../../secret.txt", "/..%2f..%2fsecret.txt"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+
+		assert.Equal(t, http.StatusOK, recorder.Code, path)
+		assert.Contains(t, recorder.Body.String(), "<html>", path)
+		assert.NotContains(t, recorder.Body.String(), "not for clients", path)
+	}
+}
+
 func Test_OpenQueryExecutorDB_CapsMemoryAndSpillsUnderTheGivenDir(t *testing.T) {
 	spillDir := filepath.Join(t.TempDir(), "query-results", "spill")
 
