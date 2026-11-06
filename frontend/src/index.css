@@ -1,0 +1,221 @@
+@import 'tailwindcss';
+
+/* Tailwind v4: make `dark:` follow the `.dark` class ThemeContext sets, not the OS. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  font-family:
+    'Jost',
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+div,
+p,
+span,
+a,
+button,
+input,
+textarea,
+select,
+option,
+label,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family:
+    'Jost',
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    sans-serif;
+}
+
+code,
+code * {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace !important;
+}
+
+:root,
+html,
+body {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+html.dark {
+  background: #0b1220;
+}
+
+*::-webkit-scrollbar {
+  width: 3px;
+  padding: 5px;
+}
+
+*::-webkit-scrollbar-track {
+  background: gainsboro;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #adadad;
+  border-radius: 360px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #555;
+  cursor: pointer;
+}
+
+/* Sign-in brand panel: plain CSS only for what Tailwind can't express
+   (@keyframes, prefers-reduced-motion). */
+
+.auth-brand-glow {
+  animation: auth-drift 16s ease-in-out infinite alternate;
+}
+
+@keyframes auth-drift {
+  from {
+    transform: translate(-2%, -1%) scale(1);
+  }
+  to {
+    transform: translate(2%, 2%) scale(1.06);
+  }
+}
+
+.auth-chip {
+  animation: auth-chip-float 4.5s ease-in-out infinite;
+}
+
+@keyframes auth-chip-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.auth-card-in {
+  animation: auth-card-in 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes auth-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-brand-glow,
+  .auth-chip,
+  .auth-card-in {
+    animation: none;
+  }
+}
+
+/* Site picker heartbeat: the trace sweeps across; degraded beats slower. */
+.obzly-heartbeat {
+  stroke-dasharray: 60;
+  animation: obzly-heartbeat 1.4s linear infinite;
+}
+
+.obzly-heartbeat-slow {
+  animation-duration: 2.8s;
+}
+
+@keyframes obzly-heartbeat {
+  from {
+    stroke-dashoffset: 60;
+  }
+  to {
+    stroke-dashoffset: -60;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .obzly-heartbeat {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}
+
+/* Query editor (CodeMirror) - search syntax highlighting and tooltips. */
+.cmq-field {
+  color: #7c3aed;
+}
+.cmq-operator {
+  color: #6b7280;
+  font-weight: 600;
+}
+.cmq-value {
+  color: #047857;
+}
+.cmq-number {
+  color: #b45309;
+}
+.cmq-atom {
+  color: #0891b2;
+}
+.cmq-keyword {
+  color: #db2777;
+  font-weight: 600;
+}
+.cmq-paren {
+  color: #6b7280;
+}
+.dark .cmq-field {
+  color: #c4b5fd;
+}
+.dark .cmq-operator {
+  color: #9ca3af;
+}
+.dark .cmq-value {
+  color: #6ee7b7;
+}
+.dark .cmq-number {
+  color: #fcd34d;
+}
+.dark .cmq-atom {
+  color: #67e8f9;
+}
+.dark .cmq-keyword {
+  color: #f9a8d4;
+}
+.dark .cmq-paren {
+  color: #9ca3af;
+}
+.cmq-tip {
+  max-width: 360px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.cmq-tip-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  margin-bottom: 2px;
+}

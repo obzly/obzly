@@ -1,0 +1,6 @@
+mode: control-plane
+config:
+  publicUrl: https://control-plane.example.com
+  adminEmail: superadmin
+secrets:
+  databaseDsn: host=pg user=obzly password=x dbname=obzly_cp port=5432 sslmode=require

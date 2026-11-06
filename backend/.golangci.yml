@@ -1,0 +1,23 @@
+version: "2"
+
+run:
+  # golangci-lint v2 on a cold CI cache can exceed 1m.
+  timeout: 5m
+  tests: false
+  concurrency: 4
+
+linters:
+  default: standard
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+
+formatters:
+  enable:
+    - gofmt
+    - golines
+    - goimports
+  settings:
+    golines:
+      max-len: 120

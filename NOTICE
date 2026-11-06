@@ -1,0 +1,17 @@
+Obzly
+Copyright 2025-2026 Obzly contributors
+
+This product includes software originally developed as Log Bull
+(https://github.com/logbull/logbull), Copyright 2025 LogBull, licensed under
+the Apache License, Version 2.0 (see LICENSE).
+
+The Infrastructure view's resource icons (frontend/public/icons/infra/) are:
+- Kubernetes community icons (https://github.com/kubernetes/community/tree/main/icons),
+  Copyright The Kubernetes Authors, licensed under CC BY 4.0
+  (https://creativecommons.org/licenses/by/4.0/); unmodified.
+- AWS Architecture Icons (https://aws.amazon.com/architecture/icons/), provided by
+  Amazon Web Services under its icon usage terms. AWS and the AWS service names are
+  trademarks of Amazon.com, Inc. or its affiliates.
+- Azure public service icons (https://learn.microsoft.com/azure/architecture/icons/),
+  provided by Microsoft under its icon terms. Microsoft and Azure are trademarks of
+  the Microsoft group of companies.

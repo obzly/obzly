@@ -1,0 +1,49 @@
+# Non-secret configuration for a control plane (ARCHITECTURE.md
+# "Multi-site: control plane and Sites"). No LOGS_DATA_DIR/
+# OBJECT_STORAGE_URL/OTLP_GRPC_PORT here - a control plane never stores or
+# receives a signal itself (see deployment.yaml's doc comment).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obzly-control-plane-config
+  namespace: obzly-control-plane
+data:
+  SERVICE_MODE: "control-plane"
+  # Keep serving for 15s after SIGTERM with /system/ready failing, so the
+  # Service/LB stops routing here before connections close (2 replicas,
+  # RollingUpdate).
+  SHUTDOWN_DRAIN_SECONDS: "15"
+  ENV_MODE: "production"
+
+  # In-cluster Valkey - see valkey-service.yaml.
+  VALKEY_HOST: "obzly-control-plane-valkey"
+  VALKEY_PORT: "6379"
+  VALKEY_IS_SSL: "false"
+
+  # REQUIRED - this control plane's real, public, browser-facing origin
+  # (scheme + host[:port], no path) - becomes the `iss` of every
+  # assertion it signs (every Site's own CONTROL_PLANE_ISSUER must match
+  # this exactly) and the origin of MCP clients' OAuth.
+  PUBLIC_URL: "https://control-plane.example.com"
+
+  # Comma-separated CIDRs this control plane restricts its own outbound
+  # calls to a Site to. Empty (default) = any non-loopback, non-link-
+  # local address - the SSRF floor that always applies regardless.
+  CONTROL_PLANE_EGRESS_ALLOWLIST: ""
+
+  # Load balancer / ingress addresses whose X-Forwarded-For is trusted
+  # (comma-separated CIDRs). Behind an AWS ALB/NLB or an ingress
+  # controller, set this to your VPC CIDR (e.g. "10.0.0.0/16" - see
+  # `aws ec2 describe-vpcs`). Left empty, nothing is trusted and every
+  # request is logged, audited, rate-limited and IP-allow-listed as coming
+  # from the load balancer's own private IP instead of the real client.
+  # Don't use 0.0.0.0/0: anyone could then fake their IP with a header.
+  TRUSTED_PROXIES: ""
+
+  # Bootstrap super-admin account email. "superadmin" is a control plane's
+  # default (a Site's root admin stays "admin" - the two must differ, since
+  # a Site's root admin can never be claimed by a central account); set a
+  # real address here if you prefer.
+  ADMIN_EMAIL: "superadmin"
+
+  WEBSITE_URL: ""

@@ -1,0 +1,5 @@
+obzly-probe is starting in {{ .Release.Namespace }}: {{ .Values.replicas }} instance(s) of one probe
+group. Its monitors come from the control plane ({{ .Values.controlPlaneUrl }}), and each one runs on
+one live instance. The instances show under Synthetics -> Probe groups within a minute.
+
+Logs: kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "obzly-probe.fullname" . }} -f

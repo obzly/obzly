@@ -1,0 +1,63 @@
+{{- if eq .Values.mode "single" }}
+{{- $fullname := include "obzly.fullname" . }}
+{{- $ctx := dict "root" . "component" "obzly" }}
+# Every role in one pod on a volume: one replica, replaced not rolled.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-data
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.single.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.single.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
+    spec:
+      {{- include "obzly.podSpec" (dict "root" . "tier" .Values.single) | nindent 6 }}
+      containers:
+        - name: obzly
+          {{- include "obzly.containerBase" . | nindent 10 }}
+          {{- with include "obzly.otlpTlsEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 4005
+            - name: otlp-grpc
+              containerPort: 4317
+            {{- include "obzly.metricsPort" . | nindent 12 }}
+          {{- include "obzly.httpProbes" . | nindent 10 }}
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+            {{- with include "obzly.otlpTlsMount" . }}{{ . | nindent 12 }}{{ end }}
+          resources:
+            {{- toYaml .Values.single.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-data
+        {{- with include "obzly.otlpTlsVolume" . }}{{ . | nindent 8 }}{{ end }}
+{{- end }}

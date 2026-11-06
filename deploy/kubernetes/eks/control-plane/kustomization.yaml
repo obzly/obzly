@@ -1,0 +1,13 @@
+# secret.yaml is deliberately NOT listed here - fill it in and apply it
+# separately (or swap it for your own secret-management tool). See
+# README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - valkey-deployment.yaml
+  - valkey-service.yaml
+  - networkpolicy-valkey.yaml
+  - deployment.yaml
+  - service.yaml

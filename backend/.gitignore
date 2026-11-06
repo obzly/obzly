@@ -1,0 +1,11 @@
+main
+.env
+docker-compose.yml
+pgdata
+main.exe
+ui/build/*
+temp/
+victorialogs-data/
+valkey-data/
+cmd.exe
+opensearch-data/

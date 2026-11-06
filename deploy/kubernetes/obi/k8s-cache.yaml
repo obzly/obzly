@@ -1,0 +1,59 @@
+# OPTIONAL: OBI's Kubernetes metadata cache. One list/watch connection to the
+# API server shared by every OBI pod, instead of one per node - worth it on
+# large clusters. Not in kustomization.yaml; to enable:
+#   1. kubectl apply -f k8s-cache.yaml
+#   2. add to daemonset.yaml's env:
+#        - name: OTEL_EBPF_KUBE_META_CACHE_ADDRESS
+#          value: "obi-k8s-cache.obzly-obi.svc:50055"
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obi-k8s-cache
+  namespace: obzly-obi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi-k8s-cache-obzly-obi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi-obzly-obi
+subjects:
+  - kind: ServiceAccount
+    name: obi-k8s-cache
+    namespace: obzly-obi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obi-k8s-cache
+  namespace: obzly-obi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: obi-k8s-cache
+  template:
+    metadata:
+      labels:
+        app: obi-k8s-cache
+    spec:
+      serviceAccountName: obi-k8s-cache
+      containers:
+        - name: k8s-cache
+          image: otel/opentelemetry-ebpf-k8s-cache:v0.14.0
+          ports:
+            - containerPort: 50055
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: obi-k8s-cache
+  namespace: obzly-obi
+spec:
+  selector:
+    app: obi-k8s-cache
+  ports:
+    - port: 50055
+      targetPort: 50055

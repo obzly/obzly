@@ -1,0 +1,60 @@
+name: Vulnerability check
+
+# govulncheck reports known vulnerabilities (Go vulnerability database) in
+# the code paths the backend actually calls - not just every advisory in
+# go.sum - so a failure here means a vulnerable function is reachable.
+# Kept out of ci-release.yml on purpose: the weekly schedule catches
+# advisories published after a dependency was merged, without touching the
+# release jobs, and a newly published advisory can't block a release of an
+# already-merged fix.
+on:
+  pull_request:
+    paths-ignore: &no-build-paths
+      - ".claude/**"
+      - "docs/**"
+      - "deploy/**"
+      - "tests/**"
+      - "assets/**"
+      - "**.md"
+      - "LICENSE"
+  push:
+    branches: ["main"]
+    paths-ignore: *no-build-paths
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC, ahead of Renovate's Monday window
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Install tools
+        run: |
+          go install github.com/swaggo/swag/cmd/swag@v1.16.6
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      # cmd/main.go imports the generated swagger package (gitignored), so
+      # it has to exist for govulncheck to load the program.
+      - name: Generate swagger docs
+        run: |
+          cd backend
+          swag init -d . -g cmd/main.go -o swagger
+
+      - name: Run govulncheck
+        run: |
+          cd backend
+          govulncheck ./...

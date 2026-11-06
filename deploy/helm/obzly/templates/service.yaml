@@ -1,0 +1,26 @@
+{{- $component := get (dict "ha" "api" "single" "obzly" "control-plane" "control-plane") .Values.mode }}
+{{- $ctx := dict "root" . "component" $component }}
+# The HTTP API/UI and OTLP gRPC ingest; worker and broker pods aren't behind it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "obzly.fullname" . }}
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "obzly.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: 4005
+      targetPort: http
+    {{- if ne .Values.mode "control-plane" }}
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    {{- end }}

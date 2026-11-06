@@ -1,0 +1,44 @@
+{{- if eq .Values.mode "ha" }}
+{{- $ctx := dict "root" . "component" "worker" }}
+# Writes batches from the broker to Parquet; compaction, retention, quotas,
+# uploads, alert evaluation. Serves nothing, so no Service and no probes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "obzly.fullname" . }}-worker
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
+    spec:
+      {{- include "obzly.podSpec" (dict "root" . "tier" .Values.worker) | nindent 6 }}
+      containers:
+        - name: obzly
+          {{- include "obzly.containerBase" . | nindent 10 }}
+          env:
+            - name: SERVICE_MODE
+              value: "worker"
+            - name: INGEST_BUFFER
+              value: "jetstream"
+          {{- if .Values.metrics.enabled }}
+          ports:
+            {{- include "obzly.metricsPort" . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: {{ .Values.worker.dataSizeLimit }}
+{{- end }}

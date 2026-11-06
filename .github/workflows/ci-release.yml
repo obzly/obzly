@@ -1,0 +1,291 @@
+name: CI
+
+# Files that never reach the image or the tests don't trigger a run;
+# workflow_dispatch still forces one.
+on:
+  push:
+    branches: ["main"]
+    paths-ignore: &no-build-paths
+      - ".claude/**"
+      - "docs/**"
+      - "deploy/**"
+      - "tests/**"
+      - "assets/**"
+      - "**.md"
+      - "LICENSE"
+  # Every PR, whatever its base branch.
+  pull_request:
+    paths-ignore: *no-build-paths
+  workflow_dispatch:
+
+# A newer push to the same branch or PR replaces a run still in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Install swag for swagger generation
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.6
+
+      - name: Generate swagger docs
+        run: |
+          cd backend
+          swag init -d . -g cmd/main.go -o swagger
+
+      # The generated docs are committed (Renovate's go mod tidy needs the
+      # package to exist), so they must match the code.
+      - name: Check committed swagger docs are up to date
+        run: |
+          cd backend
+          git diff --exit-code -- swagger || (echo "Swagger docs are stale: run 'swag init -d . -g cmd/main.go -o swagger' in backend/ and commit backend/swagger" && exit 1)
+
+      - name: Run golangci-lint
+        run: |
+          cd backend
+          golangci-lint run
+
+      - name: Verify go mod tidy
+        run: |
+          cd backend
+          go mod tidy
+          git diff --exit-code go.mod go.sum || (echo "go mod tidy made changes, please run 'go mod tidy' and commit the changes" && exit 1)
+
+  lint-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.13.0"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Check if prettier was run
+        run: |
+          cd frontend
+          npm run format
+          git diff --exit-code || (echo "Prettier made changes, please run 'npm run format' and commit the changes" && exit 1)
+
+      - name: Check if linter was run
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Unit tests
+        run: |
+          cd frontend
+          npm test
+
+      # The Kubernetes onboarding manifest is generated in the browser, so
+      # nothing else checks it: render its main shapes and validate them
+      # (strict: unknown fields fail), as helm.yml does for the charts.
+      - name: Validate the Kubernetes onboarding manifest
+        run: |
+          set -euo pipefail
+          out=$(mktemp -d)
+          cd frontend
+          K8S_MANIFEST_OUT="$out" npx vitest run src/features/projects/ui/kubernetesOtelConfig.test.ts
+          ls "$out"/*.yaml
+          docker run --rm -v "$out:/work" ghcr.io/yannh/kubeconform:v0.7.0 -strict -summary \
+            -kubernetes-version 1.31.0 /work
+
+  test-backend:
+    runs-on: ubuntu-latest
+    needs: [lint-backend]
+    env:
+      COMPOSE_PROJECT_NAME: obzly-ci-${{ github.run_id }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Clean up any existing test data
+        run: |
+          cd backend
+          sudo rm -rf pgdata valkey-data obzly-data .env || true
+          echo "Cleaned up any leftover test data from previous runs"
+
+      - name: Prepare container directories
+        run: |
+          cd backend
+          mkdir -p pgdata
+          chmod 777 pgdata
+          mkdir -p valkey-data
+          chmod 777 valkey-data
+          echo "Created fresh data directories with proper permissions"
+
+      # Split into a "base" file written before containers start and a
+      # port-dependent append written after: dev-db's `env_file: .env` in
+      # docker-compose.yml.example needs this file to already exist when
+      # `docker compose up` runs (for DEV_DB_NAME/USERNAME/PASSWORD), but
+      # the actual DATABASE_DSN/VALKEY_PORT etc. aren't known until after
+      # the containers start and their dynamically-assigned host ports
+      # are discovered (see the dynamic-port comment below) - writing the
+      # whole file in one step after startup, like before, left dev-db
+      # with no .env file to read at container-start time at all.
+      - name: Create base .env file for testing
+        run: |
+          cd backend
+          cat > .env << EOF
+          # docker-compose.yml
+          DEV_DB_NAME=obzly
+          DEV_DB_USERNAME=postgres
+          DEV_DB_PASSWORD=Q1234567
+          # app
+          ENV_MODE=development
+          BACKEND_ROOT_PATH=${{ github.workspace }}/backend
+          # migrations
+          GOOSE_DRIVER=postgres
+          GOOSE_MIGRATION_DIR=./migrations
+          # logs storage engine (GitHub-hosted runners can't write to /github)
+          LOGS_DATA_DIR=${{ github.workspace }}/obzly-data/segments
+          # valkey
+          VALKEY_HOST=localhost
+          VALKEY_USERNAME=
+          VALKEY_PASSWORD=
+          VALKEY_IS_SSL=false
+          # oauth - placeholder values, same as backend/.env in local dev.
+          # The GitHub/Google callback controllers answer 501 "not
+          # configured" before verifying anything when these are empty,
+          # which short-circuits the OAuth state-verification tests
+          # (Test_GitHubOAuthCallback_FixedLegacyStateString_Rejected)
+          # into a 501 instead of the 400 they assert. No real provider
+          # is ever contacted: every test fails state verification or
+          # supplies a bogus code before any outbound call.
+          GITHUB_CLIENT_ID=test
+          GITHUB_CLIENT_SECRET=test
+          GOOGLE_CLIENT_ID=test
+          GOOGLE_CLIENT_SECRET=test
+          EOF
+
+      - name: Start test containers
+        env:
+          DEV_DB_NAME: obzly
+          DEV_DB_USERNAME: postgres
+          DEV_DB_PASSWORD: Q1234567
+          # "0" = let Docker assign any free host port.
+          DEV_DB_HOST_PORT: "0"
+          DEV_VALKEY_HOST_PORT: "0"
+        run: |
+          cd backend
+          docker compose -f docker-compose.yml.example up -d
+
+      - name: Discover assigned container ports
+        run: |
+          cd backend
+          db_port=$(docker compose -f docker-compose.yml.example port dev-db 5437 | cut -d: -f2)
+          valkey_port=$(docker compose -f docker-compose.yml.example port dev-valkey 6379 | cut -d: -f2)
+          echo "Postgres assigned host port: $db_port"
+          echo "Valkey assigned host port: $valkey_port"
+          echo "DB_HOST_PORT=$db_port" >> "$GITHUB_ENV"
+          echo "VALKEY_HOST_PORT=$valkey_port" >> "$GITHUB_ENV"
+
+      - name: Append port-dependent values to .env
+        run: |
+          cd backend
+          cat >> .env << EOF
+          # db
+          DATABASE_DSN=host=localhost user=postgres password=Q1234567 dbname=obzly port=${DB_HOST_PORT} sslmode=disable
+          DATABASE_URL=postgres://postgres:Q1234567@localhost:${DB_HOST_PORT}/obzly?sslmode=disable
+          GOOSE_DBSTRING=postgres://postgres:Q1234567@localhost:${DB_HOST_PORT}/obzly?sslmode=disable
+          # valkey
+          VALKEY_PORT=${VALKEY_HOST_PORT}
+          VALKEY_URL=redis://localhost:${VALKEY_HOST_PORT}
+          EOF
+
+      - name: Check container status and logs
+        run: |
+          cd backend
+          echo "=== System Resources ==="
+          free -h
+          echo "=== Container Status ==="
+          docker ps -a
+          echo "=== PostgreSQL Logs ==="
+          docker compose -f docker-compose.yml.example logs dev-db --tail 20 || echo "Failed to get PostgreSQL logs"
+
+      - name: Wait for containers to be ready
+        run: |
+          cd backend
+          # Wait for main dev database (PostgreSQL) - checked via the
+          # container's own internal port (always 5437 regardless of the
+          # host-side port discovered above).
+          echo "Waiting for PostgreSQL to be ready..."
+          timeout 60 bash -c 'until docker compose -f docker-compose.yml.example exec -T dev-db pg_isready -h localhost -p 5437 -U postgres; do sleep 2; done'
+          echo "PostgreSQL is ready"
+
+          # Wait for Valkey - via the container directly rather than the
+          # discovered host port, so this step has no ordering dependency
+          # on the port-discovery step succeeding first.
+          echo "Waiting for Valkey to be ready..."
+          timeout 60 bash -c 'until docker compose -f docker-compose.yml.example exec -T dev-valkey valkey-cli ping; do sleep 2; done'
+          echo "Valkey is ready"
+
+          echo "All services are ready!"
+
+      - name: Create data and temp directories
+        run: |
+          # Create directories that are used for backups and restore
+          # These paths match what's configured in config.go
+          mkdir -p obzly-data/backups
+          mkdir -p obzly-data/temp
+
+      - name: Run database migrations
+        run: |
+          cd backend
+          go install github.com/pressly/goose/v3/cmd/goose@latest
+          goose up
+
+      - name: Run Go tests
+        env:
+          CGO_ENABLED: 1
+        run: |
+          cd backend
+          go test -failfast ./internal/...
+
+      - name: Stop test containers and clean up data
+        if: always()
+        run: |
+          cd backend
+          echo "Stopping containers..."
+          docker compose -f docker-compose.yml.example down -v
+          echo "Cleaning up backend data directories..."
+          sudo rm -rf pgdata valkey-data || true
+          cd ..
+          echo "Cleaning up application data directories..."
+          sudo rm -rf obzly-data || true
+          echo "Cleanup complete - all test data removed"

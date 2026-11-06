@@ -1,0 +1,171 @@
+# SERVICE_MODE=broker - the NATS JetStream ingest buffer (Phase 14 item 1,
+# ARCHITECTURE.md "Scale architecture"): three pods of the same obzly image
+# running only the embedded NATS server, R3 streams, one pod per zone.
+#
+# obzly-api, obzly-worker and obzly-querier connect to it with NATS_TOKEN
+# from obzly-secrets (see ../secret.yaml) at:
+#
+#   NATS_URL: "nats://obzly-broker.obzly.svc:4222"
+#
+# Stateful and on-demand only: it holds acked-but-unwritten batches, so its
+# pods keep their disks (PVC) and are never on Spot. Brokers roll one pod at
+# a time (PDB maxUnavailable 1); each goes lame-duck on SIGTERM.
+apiVersion: v1
+kind: Service
+metadata:
+  # Peer discovery for the StatefulSet: stable per-pod DNS names, published
+  # before a pod is ready so the cluster can form.
+  name: obzly-broker-headless
+  namespace: obzly
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: obzly-broker
+  ports:
+    - name: client
+      port: 4222
+    - name: cluster
+      port: 6222
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # What api and worker replicas connect to (NATS_URL).
+  name: obzly-broker
+  namespace: obzly
+spec:
+  selector:
+    app: obzly-broker
+  ports:
+    - name: client
+      port: 4222
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: obzly-broker
+  namespace: obzly
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: obzly-broker
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: obzly-broker
+  namespace: obzly
+  labels:
+    app: obzly-broker
+spec:
+  serviceName: obzly-broker-headless
+  replicas: 3
+  # Start all three together: a lone first pod can't reach quorum anyway.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: obzly-broker
+  template:
+    metadata:
+      labels:
+        app: obzly-broker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: obzly
+      # Above the 30s lame-duck period.
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        # Replace with your on-demand node label (e.g.
+        # karpenter.sh/capacity-type: on-demand). Never Spot.
+        eks.amazonaws.com/capacityType: ON_DEMAND
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: obzly-broker
+      containers:
+        - name: obzly
+          image: ghcr.io/obzly/obzly:latest
+          imagePullPolicy: Always
+          # Starts as root only to chown /obzly-data and write
+          # runtime-config.js, then drops to uid 1000 with no capabilities.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: SERVICE_MODE
+              value: "broker"
+            - name: NATS_SERVER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NATS_ROUTES
+              value: >-
+                nats-route://obzly-broker-0.obzly-broker-headless.obzly.svc:6222,
+                nats-route://obzly-broker-1.obzly-broker-headless.obzly.svc:6222,
+                nats-route://obzly-broker-2.obzly-broker-headless.obzly.svc:6222
+            - name: JETSTREAM_DIR
+              value: /jetstream
+          envFrom:
+            - configMapRef:
+                name: obzly-config
+            - secretRef:
+                name: obzly-secrets
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: cluster
+              containerPort: 6222
+            - name: monitor
+              containerPort: 8222
+            - name: metrics
+              containerPort: 9464
+          # NATS's own health endpoint on the monitoring port.
+          startupProbe:
+            httpGet:
+              path: /healthz?js-enabled-only=true
+              port: monitor
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz?js-enabled-only=true
+              port: monitor
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz?js-server-only=true
+              port: monitor
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - name: jetstream
+              mountPath: /jetstream
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: jetstream
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # Size to ingest rate x ~1 h lag budget (ARCHITECTURE.md "Compute
+        # by ingest tier"); INGEST_STREAM_MAX_BYTES must fit inside it.
+        resources:
+          requests:
+            storage: 50Gi

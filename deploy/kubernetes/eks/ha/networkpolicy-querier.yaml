@@ -1,0 +1,29 @@
+# An executor runs SQL over any project's segments, so its result listener
+# (:4319) accepts only obzly-api pods; QUERIER_TOKEN is the second check.
+# Metrics (:9464) stay open to scrapers in any namespace. Needs a CNI that
+# enforces NetworkPolicy (the VPC CNI with network policy enabled, Calico,
+# Cilium, ...); without one this has no effect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: obzly-querier
+  namespace: obzly
+spec:
+  podSelector:
+    matchLabels:
+      app: obzly-querier
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: obzly-api
+      ports:
+        - protocol: TCP
+          port: 4319
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9464

@@ -1,0 +1,108 @@
+# Production shape for a standalone control plane (ARCHITECTURE.md
+# "Multi-site: control plane and Sites") - the identity/UI layer that
+# fronts one or more independently-deployed Sites, each still deployed via
+# its own docker-compose.yml/docker-compose.ha.yml (with that file's own
+# commented multi-site env block uncommented). Unlike a Site, a control
+# plane needs no object storage, no OTLP listener, and no data volume
+# beyond its own Postgres/Valkey - it never stores a log/trace/metric
+# itself (ARCHITECTURE.md's non-goals: "persisting/caching proxied data
+# centrally").
+#
+# Usage:
+#   1. cp deploy/docker/docker-compose.control-plane.yml.example docker-compose.yml
+#   2. cp deploy/docker/.env.example .env, set POSTGRES_PASSWORD, and set
+#      PUBLIC_URL below to this control plane's real, browser-facing
+#      origin (behind your reverse proxy/ingress - see this repo's
+#      convention of leaving that to the deployer, ARCHITECTURE.md's
+#      "Deployment / networking convention" section).
+#   3. docker compose up -d --build
+#   4. Register each Site in Obzly settings → Sites once signed in - see
+#      docker-compose.multisite.yml.example's usage notes for the flow
+#      (connectivity check, granting yourself access).
+#
+# Run >= 2 replicas of the `control-plane` service in front of a shared
+# load balancer for high availability (ARCHITECTURE.md's High Availability
+# section) - it's stateless (Site tokens live in Valkey, not in-process)
+# and migrations are already leader-locked, so this is exactly the same
+# "same image, same config, different container" replica shape
+# docker-compose.ha.yml.example's obzly-api-a/obzly-api-b already use;
+# copy the `control-plane` service block the same way to add one.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: obzly-cp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: obzly
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env - see .env.example}
+    volumes:
+      - ./obzly-data/pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:9.2-alpine
+    container_name: obzly-cp-valkey
+    restart: unless-stopped
+    volumes:
+      - ./obzly-data/valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly-control-plane
+    restart: unless-stopped
+    ports:
+      - "4005:4005"
+    environment:
+      SERVICE_MODE: control-plane
+      ENV_MODE: production
+      DATABASE_DSN: "host=postgres user=postgres password=${POSTGRES_PASSWORD} dbname=obzly port=5432 sslmode=disable"
+      VALKEY_HOST: valkey
+      VALKEY_PORT: "6379"
+      VALKEY_IS_SSL: "false"
+      # REQUIRED - this control plane's real, public, browser-facing
+      # origin (scheme + host[:port], no path). Becomes the `iss` of every
+      # assertion it signs; every Site's own CONTROL_PLANE_ISSUER must
+      # match this exactly.
+      PUBLIC_URL: "https://control-plane.example.com"
+      # Comma-separated CIDRs this control plane restricts its own
+      # outbound calls to a Site to (token exchange + the proxy). Empty
+      # (default) = any non-loopback, non-link-local address - the SSRF
+      # floor that always applies regardless. Set it to your Sites' actual
+      # address ranges for defense in depth against a mis-registered
+      # api_url.
+      CONTROL_PLANE_EGRESS_ALLOWLIST: ""
+      # CIDR(s) of the reverse proxy / load balancer in front of this
+      # control plane (e.g. the Docker network it shares with Nginx Proxy
+      # Manager or Traefik, like "172.18.0.0/16"). Empty = nothing trusted:
+      # every client shows up as the proxy's IP in logs, the audit log and
+      # rate limiting. Never 0.0.0.0/0 - anyone could fake their IP.
+      TRUSTED_PROXIES: ""
+      # Unset = "superadmin" on a control plane (a Site's own root admin
+      # stays "admin"; the two must differ - see the README's multi-site
+      # section). Set a real address if you prefer; either way onboard
+      # everyone else from Users -> Invite user, or SSO.
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:$${HTTP_PORT:-4005}/api/v1/system/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s

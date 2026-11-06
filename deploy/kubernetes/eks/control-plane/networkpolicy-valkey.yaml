@@ -1,0 +1,22 @@
+# Only the control plane's own pods may reach its Valkey (Site tokens,
+# rate limits); VALKEY_PASSWORD is the second check. Needs a CNI that
+# enforces NetworkPolicy; without one this has no effect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: obzly-control-plane-valkey
+  namespace: obzly-control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: obzly-control-plane-valkey
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: obzly-control-plane
+      ports:
+        - protocol: TCP
+          port: 6379

@@ -1,0 +1,249 @@
+# What to deploy:
+#   ha            a Site: broker StatefulSet, api, worker and querier tiers (needs object storage)
+#   single        a Site in one pod (SERVICE_MODE=all) on a PersistentVolumeClaim
+#   control-plane the multi-site control plane (identity, Site registry, proxy)
+mode: ha
+
+image:
+  repository: ghcr.io/obzly/obzly
+  # Defaults to the chart's appVersion (as v<appVersion>).
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  # e.g. eks.amazonaws.com/role-arn for S3 access through IRSA.
+  annotations: {}
+
+# Credentials. Either name a Secret you manage (keys DATABASE_DSN, and in
+# ha mode NATS_TOKEN and QUERIER_TOKEN; optionally VALKEY_PASSWORD for an
+# external Valkey, GITHUB_*/GOOGLE_* OAuth client ids and secrets), or set
+# the values below and the chart creates one. Tokens left empty are
+# generated once and kept across upgrades. The bundled Valkey's password
+# lives in its own Secret (valkey.auth), so it works with existingSecret.
+secrets:
+  existingSecret: ""
+  databaseDsn: ""
+  natsToken: ""
+  querierToken: ""
+  valkeyPassword: ""
+  extra: {}
+
+# Non-secret settings shared by every pod (backend/.env.production.example).
+config:
+  # Required in ha mode: replicas read segments other replicas wrote.
+  # Real S3 needs only bucket and region; credentials come from the
+  # service account (IRSA) or the node role.
+  objectStorageUrl: ""
+  # CIDRs of the load balancer / ingress whose X-Forwarded-For is trusted.
+  trustedProxies: ""
+  adminEmail: admin
+  selfTracingSampleRate: "0.01"
+  websiteUrl: ""
+  # The browser-facing origin (https://obzly.example.com): MCP clients'
+  # OAuth in any mode; required in control-plane mode.
+  publicUrl: ""
+  # Anything else, as environment variables (e.g. QUERY_MAX_SCAN_GB,
+  # SITE_ID, CONTROL_PLANE_ISSUER to enroll a Site in a control plane).
+  extra: {}
+
+# Optional TLS from kubernetes.io/tls Secrets you manage (e.g. written by a
+# cert-manager Certificate). Off while secretName is empty. The Secret is
+# mounted as a directory, so a renewed certificate is picked up without a
+# restart.
+tls:
+  # OTLP/gRPC on 4317 (api pods, or the single pod). Turn it on whenever
+  # 4317 is reachable without a TLS-terminating proxy: API keys travel in
+  # its metadata.
+  otlpGrpc:
+    secretName: ""
+  # The querier result port 4319 (ha mode). The Secret needs tls.crt,
+  # tls.key and ca.crt; api pods mount only ca.crt. api pods dial querier
+  # pod IPs, so they verify the certificate against serverName, which must
+  # be one of its DNS names (default <fullname>-querier.<namespace>.svc).
+  queryResults:
+    secretName: ""
+    serverName: ""
+
+# In-cluster Valkey (caches, rate limits, leases; no durable data). Set
+# enabled: false and external.host to use your own (e.g. ElastiCache).
+# It holds the API-key cache, token revocations and Live Tail, so it gets a
+# password and only this release's pods may connect.
+valkey:
+  enabled: true
+  image: valkey/valkey:9.2-alpine
+  # --requirepass with a password generated once (kept across upgrades) in
+  # the <release>-valkey Secret; secrets.valkeyPassword sets it instead.
+  auth:
+    enabled: true
+  # Only this release's pods may reach 6379 (needs a CNI that enforces it).
+  networkPolicy: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 250m, memory: 256Mi}
+  external:
+    host: ""
+    port: 6379
+    ssl: false
+
+metrics:
+  enabled: true
+  port: 9464
+  # prometheus.io/* pod annotations for annotation-based scraping.
+  podAnnotations: true
+  # A Prometheus Operator ServiceMonitor per tier (needs its CRDs).
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+# Defaults for every pod; each tier below can override them.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+# fsGroup makes new volumes (broker JetStream, querier cache) writable by the
+# image's user; a fresh EBS volume is root-owned otherwise.
+podSecurityContext:
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+# The image starts as root only to chown the data volume and write
+# runtime-config.js, then drops to uid 1000 (setpriv): these four
+# capabilities are all that needs, and the app itself runs with none.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+    add: ["CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"]
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  # A wide search can take up to 170s, and the control plane waits
+  # 180s for a Site: give the load balancer in front of both an idle timeout
+  # of at least 180s, e.g. on an AWS ALB
+  #   alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=180
+  annotations: {}
+  hosts: []
+  #  - host: obzly.example.com
+  tls: []
+
+# ---- ha mode ----
+broker:
+  # 3 (R3 streams, one per zone) or 1 (R1, no failover). Never 2.
+  replicas: 3
+  # Each signal's ingest buffer; the three must fit in storage.size.
+  streamMaxBytes: ""
+  storage:
+    size: 50Gi
+    storageClass: ""
+  # Only this release's pods may reach the client (4222) and cluster (6222)
+  # ports; monitoring and metrics stay open (needs a CNI that enforces it).
+  networkPolicy: true
+  # Keep brokers off Spot: they hold acknowledged, unwritten batches.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  zoneSpread: true
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 2Gi}
+
+api:
+  replicas: 2
+  # Seconds a stopping pod keeps serving with readiness failing.
+  drainSeconds: 15
+  dataSizeLimit: 20Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # The HPA target is a share of the CPU request; at 250m it flapped
+  # between 2 and 5 pods, and each scale-down cut off running queries.
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+
+worker:
+  # More replicas share the 64 ingest/compaction shards per signal.
+  replicas: 1
+  dataSizeLimit: 10Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  resources:
+    requests: {cpu: 100m, memory: 1Gi}
+    limits: {cpu: "1", memory: 3Gi}
+
+querier:
+  # Query executors; without any, api pods run queries themselves.
+  enabled: true
+  replicas: 2
+  # Segment cache; most of dataSizeLimit (or persistence.size), leaving
+  # room for downloads in flight and DuckDB's spill files.
+  cacheSizeMB: 16384
+  dataSizeLimit: 20Gi
+  # On start each querier downloads its share of this many hours of data
+  # (up to half the cache); 0 turns it off. Match your usual widest search.
+  warmHours: 24
+  # A volume per querier, so the cache survives restarts: otherwise the
+  # first wide search after a rollout reads everything from object storage.
+  # Switching it on replaces the Deployment with a StatefulSet.
+  persistence:
+    enabled: false
+    size: 40Gi
+    storageClass: ""
+  # Only api pods may reach the result port (needs a CNI that enforces it).
+  networkPolicy: true
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {cpu: "2", memory: 2Gi}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+
+# ---- single mode ----
+single:
+  persistence:
+    size: 20Gi
+    storageClass: ""
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+
+# ---- control-plane mode ----
+controlPlane:
+  replicas: 2
+  drainSeconds: 15
+  resources:
+    requests: {cpu: 250m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  pdb:
+    enabled: true
+    maxUnavailable: 1

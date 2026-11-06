@@ -1,0 +1,32 @@
+# Clients (NATS_TOKEN is the second check) and peer routes from Obzly's own
+# pods only; probes and scrapers keep the monitor (:8222) and metrics
+# (:9464) ports. Needs a CNI that enforces NetworkPolicy; without one this
+# has no effect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: obzly-broker
+  namespace: obzly
+spec:
+  podSelector:
+    matchLabels:
+      app: obzly-broker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [obzly-api, obzly-worker, obzly-querier, obzly-broker]
+      ports:
+        - protocol: TCP
+          port: 4222
+        - protocol: TCP
+          port: 6222
+    - ports:
+        - protocol: TCP
+          port: 8222
+        - protocol: TCP
+          port: 9464

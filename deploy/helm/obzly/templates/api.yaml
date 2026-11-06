@@ -1,0 +1,114 @@
+{{- if eq .Values.mode "ha" }}
+{{- $fullname := include "obzly.fullname" . }}
+{{- $ctx := dict "root" . "component" "api" }}
+{{- $resultsTLS := and .Values.querier.enabled .Values.tls.queryResults.secretName }}
+# Request-serving tier: UI, REST, OTLP ingest, query coordination.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  {{- if not .Values.api.autoscaling.enabled }}
+  replicas: {{ .Values.api.replicas }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
+    spec:
+      {{- include "obzly.podSpec" (dict "root" . "tier" .Values.api) | nindent 6 }}
+      # Above the drain + HTTP/gRPC shutdown deadlines + the final flush.
+      terminationGracePeriodSeconds: {{ add .Values.api.drainSeconds 45 }}
+      containers:
+        - name: obzly
+          {{- include "obzly.containerBase" . | nindent 10 }}
+          env:
+            - name: SERVICE_MODE
+              value: "api"
+            - name: INGEST_BUFFER
+              value: "jetstream"
+            - name: SHUTDOWN_DRAIN_SECONDS
+              value: {{ .Values.api.drainSeconds | quote }}
+            {{- with include "obzly.otlpTlsEnv" . }}{{ . | nindent 12 }}{{ end }}
+            {{- if $resultsTLS }}
+            - name: QUERY_RESULTS_TLS_CA_FILE
+              value: /etc/obzly/query-results-tls/ca.crt
+            - name: QUERY_RESULTS_TLS_SERVER_NAME
+              value: {{ include "obzly.queryResultsServerName" . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 4005
+            - name: otlp-grpc
+              containerPort: 4317
+            {{- include "obzly.metricsPort" . | nindent 12 }}
+          {{- include "obzly.httpProbes" . | nindent 10 }}
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+            {{- with include "obzly.otlpTlsMount" . }}{{ . | nindent 12 }}{{ end }}
+            {{- if $resultsTLS }}
+            - name: query-results-tls
+              mountPath: /etc/obzly/query-results-tls
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: {{ .Values.api.dataSizeLimit }}
+        {{- with include "obzly.otlpTlsVolume" . }}{{ . | nindent 8 }}{{ end }}
+        {{- if $resultsTLS }}
+        # Only the CA: api pods dial querier result ports, they don't serve one.
+        - name: query-results-tls
+          secret:
+            secretName: {{ .Values.tls.queryResults.secretName }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+{{- if .Values.api.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.api.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+{{- end }}
+{{- if .Values.api.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullname }}-api
+  minReplicas: {{ .Values.api.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.api.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.api.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}

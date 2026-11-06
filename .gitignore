@@ -1,0 +1,9 @@
+.vscode/
+.env
+pgdata/
+/docker-compose.yml
+node_modules/
+.idea
+obzly-data/
+__pycache__/
+SECURITY_REVIEW.md

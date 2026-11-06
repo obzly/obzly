@@ -1,0 +1,87 @@
+# SERVICE_MODE=worker - writes ingested batches from the broker to Parquet
+# and runs compaction, retention, quotas, uploads, reconciliation, alert
+# evaluation and delivery, and the integrity audit; no
+# HTTP/gRPC serving at all - see ARCHITECTURE.md's "High availability" and
+# "Scale architecture" sections.
+#
+# Ingest and compaction are split into 64 shards per signal; each worker
+# claims its fair share through a lease (internal/util/leaderlock), so more
+# replicas mean more write and compaction throughput, and a lost worker's
+# shards move to the others after the lease expires.
+#
+# No Service, no ports, no HTTP probes: this pod serves nothing to check.
+# Kubernetes' own container-restart-on-crash behavior is the recovery
+# mechanism here, same as any non-HTTP background-job container.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obzly-worker
+  namespace: obzly
+  labels:
+    app: obzly-worker
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: obzly-worker
+  template:
+    metadata:
+      labels:
+        app: obzly-worker
+      # Prometheus scrapes METRICS_ADDR (:9464) on the pod directly; no
+      # Service exposes it, so it never reaches the load balancer.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: obzly
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: obzly
+          image: ghcr.io/obzly/obzly:latest
+          imagePullPolicy: Always
+          # Starts as root only to chown /obzly-data and write
+          # runtime-config.js, then drops to uid 1000 with no capabilities.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: SERVICE_MODE
+              value: "worker"
+            # Durable ingest through the broker (broker.yaml).
+            - name: INGEST_BUFFER
+              value: "jetstream"
+            - name: NATS_URL
+              value: "nats://obzly-broker.obzly.svc:4222"
+          ports:
+            - name: metrics
+              containerPort: 9464
+          envFrom:
+            - configMapRef:
+                name: obzly-config
+            - secretRef:
+                name: obzly-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+          # DuckDB is capped at 1 GB for compaction and 1 GB for searches
+          # (quota cutoffs, correlation), plus Go heap and ingest buffers.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 3Gi
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 10Gi

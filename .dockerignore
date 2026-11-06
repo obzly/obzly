@@ -1,0 +1,18 @@
+# A developer's local backend/.env (gitignored, never meant to leave their
+# machine) was getting silently baked into the "production" image via the
+# Dockerfile's `COPY backend/.env* /app/` glob, since nothing excluded it —
+# found while smoke-testing the Phase 2h Dockerfile rewrite. Only the
+# .example files should ever ship in the image; the real .env is provided at
+# container runtime (docker-compose environment:, -e flags, or a bind mount).
+backend/.env
+
+.git
+**/node_modules
+frontend/dist
+backend/obzly-data
+backend/pgdata
+backend/valkey-data
+obzly-data
+
+# Local tooling state (agent worktrees hold copies of backend/.env).
+.claude

@@ -1,0 +1,23 @@
+# obzly-probe: the synthetic monitoring agent (docs/SYNTHETICS.md). Static
+# Go, no CGO, cross-compiled on the build platform.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-bookworm AS build
+ARG TARGETOS
+ARG TARGETARCH
+ARG APP_VERSION=dev
+WORKDIR /src
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=${APP_VERSION}" -o /out/obzly-probe ./cmd/probe && \
+    mkdir -p /out/data
+
+# distroless/static: CA certificates and nothing else. ICMP checks use
+# unprivileged ping sockets (Docker's default net.ipv4.ping_group_range
+# allows them) or CAP_NET_RAW when it is granted.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/obzly-probe /usr/local/bin/obzly-probe
+COPY --from=build --chown=65532:65532 /out/data /var/lib/obzly-probe
+ENV OBZLY_PROBE_DATA_DIR=/var/lib/obzly-probe
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/obzly-probe"]

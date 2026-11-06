@@ -1,0 +1,2 @@
+# A byte-for-byte copy of docs/examples/synthetics-checks.yaml (a backend test checks it).
+src/features/synthetics/lib/synthetics-checks.sample.yaml

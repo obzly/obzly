@@ -1,0 +1,24 @@
+mode: ha
+config:
+  objectStorageUrl: s3://obzly-ci?region=eu-west-1
+  extra:
+    QUERY_MAX_SCAN_GB: "200"
+secrets:
+  databaseDsn: host=pg user=obzly password=x dbname=obzly port=5432 sslmode=require
+broker:
+  nodeSelector:
+    karpenter.sh/capacity-type: on-demand
+api:
+  autoscaling:
+    enabled: true
+querier:
+  autoscaling:
+    enabled: true
+metrics:
+  serviceMonitor:
+    enabled: true
+ingress:
+  enabled: true
+  className: alb
+  hosts:
+    - host: obzly.example.com

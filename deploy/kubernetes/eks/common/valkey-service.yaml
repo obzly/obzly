@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: obzly-valkey
+  namespace: obzly
+spec:
+  selector:
+    app: obzly-valkey
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: 6379

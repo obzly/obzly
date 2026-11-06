@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Obzly app icon">
+  <title>Obzly</title>
+  <!-- stroke added so the badge stays visible in dark mode: the app's dark
+       theme nav surfaces use #141b2d (MainScreenComponent.tsx), which is
+       nearly identical to this rect's own #14192B fill - without an edge,
+       the icon all but disappears against it. Light mode never needed
+       this (the badge already contrasts against a white page). -->
+  <rect x="0" y="0" width="200" height="200" rx="44" ry="44" fill="#14192B"
+        stroke="#3A4560" stroke-width="3"/>
+  <g transform="translate(100,100) scale(1.707) translate(-48,-48)">
+    <path d="M10,48 C22,18 74,18 86,48 C74,78 22,78 10,48 Z"
+          fill="none" stroke="#F3F4F6" stroke-width="6" stroke-linejoin="round"/>
+    <g stroke="#F2A73B" stroke-width="4.6" stroke-linecap="round">
+      <line x1="39" y1="44" x2="39" y2="52"/>
+      <line x1="48" y1="36" x2="48" y2="60"/>
+      <line x1="57" y1="44" x2="57" y2="52"/>
+    </g>
+  </g>
+</svg>

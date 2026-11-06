@@ -1,0 +1,155 @@
+# Obzly cloud connection: a read-only role in the account Obzly discovers
+# (docs/INFRASTRUCTURE.md "Cloud connections"). The connection wizard fills
+# these parameters in; deploy it yourself with:
+#
+#   aws cloudformation deploy --stack-name obzly-readonly \
+#     --template-file obzly-readonly-role.yaml --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides TrustMode=AssumeRole \
+#       TrustedPrincipalArn=arn:aws:iam::111122223333:role/obzly-probe ExternalId=<from the wizard>
+#
+# For a whole AWS Organization, deploy the same template as a service-managed
+# StackSet from the management account. Every permission is read-only.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Obzly read-only access (inventory, optionally cost and posture)
+
+Parameters:
+  RoleName:
+    Type: String
+    Default: obzly-readonly
+  TrustMode:
+    Type: String
+    AllowedValues: [AssumeRole, Federated]
+    Description: AssumeRole - the probe's IAM role assumes this one with an external ID. Federated - the Obzly control plane is the OIDC issuer (probes with no AWS identity).
+  TrustedPrincipalArn:
+    Type: String
+    Default: ''
+    Description: AssumeRole - the IAM role the probe runs with.
+  ExternalId:
+    Type: String
+    Default: ''
+    Description: AssumeRole - the external ID the wizard generated.
+  IssuerHost:
+    Type: String
+    Default: ''
+    Description: Federated - the control plane's host, e.g. obzly.example.com (served over HTTPS).
+  ProbeSubject:
+    Type: String
+    Default: ''
+    Description: Federated - probe:<probe group ID>.
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: Federated - false when the account already has an OIDC provider for this host.
+  Inventory:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  Cost:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+  Posture:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+Rules:
+  AssumeRoleNeedsPrincipalAndExternalId:
+    RuleCondition: !Equals [!Ref TrustMode, AssumeRole]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref TrustedPrincipalArn, '']]
+        AssertDescription: TrustedPrincipalArn is the probe's IAM role
+      - Assert: !Not [!Equals [!Ref ExternalId, '']]
+        AssertDescription: ExternalId comes from the wizard
+  FederatedNeedsIssuerAndSubject:
+    RuleCondition: !Equals [!Ref TrustMode, Federated]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref IssuerHost, '']]
+        AssertDescription: IssuerHost is the control plane's host
+      - Assert: !Not [!Equals [!Ref ProbeSubject, '']]
+        AssertDescription: ProbeSubject is probe:<probe group ID>
+
+Conditions:
+  IsAssumeRole: !Equals [!Ref TrustMode, AssumeRole]
+  IsFederated: !Equals [!Ref TrustMode, Federated]
+  MakeOidcProvider: !And [!Condition IsFederated, !Equals [!Ref CreateOidcProvider, 'true']]
+  WithInventory: !Equals [!Ref Inventory, 'true']
+  WithCost: !Equals [!Ref Cost, 'true']
+  WithPosture: !Equals [!Ref Posture, 'true']
+
+Resources:
+  ObzlyIssuer:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeOidcProvider
+    Properties:
+      Url: !Sub https://${IssuerHost}
+      ClientIdList: [sts.amazonaws.com]
+
+  ObzlyReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      MaxSessionDuration: 3600
+      # A JSON string, so the federated condition keys can carry the host
+      # (CloudFormation can't compute a map key).
+      AssumeRolePolicyDocument: !If
+        - IsAssumeRole
+        - !Sub '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"${TrustedPrincipalArn}"},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"sts:ExternalId":"${ExternalId}"}}}]}'
+        - !Sub '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}"},"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"StringEquals":{"${IssuerHost}:sub":"${ProbeSubject}","${IssuerHost}:aud":"sts.amazonaws.com"}}}]}'
+      ManagedPolicyArns: !If
+        - WithInventory
+        - !If
+          - WithPosture
+          - - !Sub 'arn:${AWS::Partition}:iam::aws:policy/job-function/ViewOnlyAccess'
+            - !Sub 'arn:${AWS::Partition}:iam::aws:policy/SecurityAudit'
+          - - !Sub 'arn:${AWS::Partition}:iam::aws:policy/job-function/ViewOnlyAccess'
+        - !If
+          - WithPosture
+          - - !Sub 'arn:${AWS::Partition}:iam::aws:policy/SecurityAudit'
+          - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: obzly-readonly-extra
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - !If
+                - WithInventory
+                - Sid: inventory
+                  Effect: Allow
+                  Action:
+                    - elasticloadbalancing:DescribeTargetHealth
+                    - tag:GetResources
+                    - eks:DescribeCluster
+                    - ec2:DescribeInstanceStatus
+                  Resource: '*'
+                - !Ref AWS::NoValue
+              - !If
+                - WithCost
+                - Sid: cost
+                  Effect: Allow
+                  Action:
+                    - ce:GetCostAndUsage
+                    - ce:GetCostForecast
+                    - ce:GetDimensionValues
+                    - ce:GetAnomalies
+                    - budgets:ViewBudget
+                    - cur:DescribeReportDefinitions
+                  Resource: '*'
+                - !Ref AWS::NoValue
+              - !If
+                - WithPosture
+                - Sid: posture
+                  Effect: Allow
+                  Action:
+                    - securityhub:Get*
+                    - securityhub:List*
+                    - guardduty:Get*
+                    - guardduty:List*
+                  Resource: '*'
+                - !Ref AWS::NoValue
+
+Outputs:
+  RoleArn:
+    Description: Paste into the wizard's "Role ARN".
+    Value: !GetAtt ObzlyReadOnlyRole.Arn

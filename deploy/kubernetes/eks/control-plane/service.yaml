@@ -1,0 +1,17 @@
+# ClusterIP - same "no Ingress/LoadBalancer here" convention as
+# ../service.yaml. The tail-path proxy route
+# (/sites/{id}/api/v1/logs/tail/...) needs its ingress configured for
+# long-lived streaming (proxy_buffering off, a generous proxy_read_timeout)
+# - see this directory's README.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: obzly-control-plane
+  namespace: obzly-control-plane
+spec:
+  selector:
+    app: obzly-control-plane
+  ports:
+    - name: http
+      port: 4005
+      targetPort: http

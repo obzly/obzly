@@ -1,0 +1,23 @@
+# OPTIONAL: application traces from OBI with no code changes. Not in
+# kustomization.yaml. OBI instruments nothing until told which workloads, so
+# edit the namespaces below (globs allowed), then:
+#   1. kubectl apply -f traces-config.yaml
+#   2. edit daemonset.yaml (see README "Optional: application traces"):
+#        - OTEL_EBPF_METRICS_FEATURES -> "application,network,network_flow_packets"
+#        - add env OTEL_EBPF_CONFIG_PATH=/config/obi-config.yml
+#        - mount the obi-config ConfigMap at /config
+#        - raise the container's permissions: one of the four options in
+#          daemonset.yaml's securityContext comment (on Bottlerocket at
+#          least the super_t SELinux label, or OBI silently instruments
+#          nothing)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obi-config
+  namespace: obzly-obi
+data:
+  obi-config.yml: |
+    discovery:
+      instrument:
+        - k8s_namespace: "*"
+      # System namespaces, OBI itself and the OTel Collector are excluded by default.

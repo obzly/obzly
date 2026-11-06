@@ -1,0 +1,183 @@
+# Obzly synthetic monitors - sample for bulk import (Synthetics → Import YAML).
+#
+# Monitors are matched by name: importing this file again updates them instead
+# of creating duplicates. The preview shows what will be created, updated or
+# left unchanged before anything is applied, and the file is applied all or
+# nothing.
+apiVersion: obzly.com/synthetics/v1
+kind: MonitorList
+
+# true deletes monitors that are not in this file (GitOps-style). Default false.
+prune: false
+
+# Applied to every monitor unless it sets its own value.
+defaults:
+  interval: 180s          # minimum 30s
+  timeout: 10s            # at most the interval
+  locations: [all]        # probe location labels, or [all]
+  destination: synthetics # a destination created in the UI (Site + project + API key)
+  down_locations: 2       # red once at least this many locations fail; fewer is amber
+  enabled: true
+
+monitors:
+  # HTTP API with assertions on status, latency, headers and the JSON body.
+  # folder groups monitors in the list; nest with /.
+  - name: Public API health
+    type: http
+    folder: Platform
+    request:
+      method: GET
+      url: https://api.example.com/health
+      headers:
+        Accept: application/json
+      follow_redirects: true
+    assertions:
+      - status: 200
+      - response_time_ms: {below: 800}
+      - response_time_ms: {below: 400, severity: warn}   # amber, not red
+      - header: {name: Content-Type, contains: application/json}
+      - json: {path: $.status, equals: ok}
+      - json: {path: $.checks.database, exists: true}
+    tls:
+      warn_days: 21           # amber when the certificate expires within 21 days
+    locations: [aws-ap-south-1, aws-eu-west-1, office-blr]
+
+  # Authenticated POST. Secrets are placeholders: the importer asks for the
+  # values once and stores them encrypted; exports never contain them.
+  # One left without a value is read from the probe's environment, but only
+  # for OBZLY_SECRET_* names and those the probe's OBZLY_PROBE_ENV_ALLOW lists.
+  #
+  # depends_on names its parents: while one is down this monitor shows
+  # Impacted and its alerts are muted, so one outage sends one alert.
+  # alerts send to channels from Obzly settings, by name (uncomment once
+  # the channel exists): notify down (default) or degraded, a certificate
+  # alert cert_days before expiry, and repeat while it stays down.
+  - name: Orders API - create quote
+    type: http
+    folder: Commerce/Orders
+    depends_on: [Public API health]
+    # alerts: {channels: ["#ops-alerts"], notify: down, cert_days: 14, repeat: 1h}
+    interval: 300s
+    request:
+      method: POST
+      url: https://api.example.com/v1/quotes
+      headers:
+        Authorization: "Bearer ${env:ORDERS_API_TOKEN}"
+        Content-Type: application/json
+      body: '{"sku": "SYNTHETIC-1", "qty": 1}'
+    assertions:
+      - status: {in: [200, 201]}
+      - body: {matches: '"quote_id":\s*"[a-z0-9-]+"'}
+      - response_time_ms: {below: 1500}
+
+  # Multi-step API: up to 10 requests in order, as one run. {{name}} uses a
+  # variable or a value an earlier step extracted (json, header, status,
+  # regex or body); secret: true keeps it out of results. Built-ins:
+  # {{$uuid}}, {{$timestamp}}, {{$isoTimestamp}}, {{$randomInt}}. Cookies
+  # carry between steps (cookies: false turns that off). The run stops at
+  # the first failed step; continue_on_failure runs a step anyway (clean-up).
+  # timeout is the whole run's (at most 120s); each step has its own
+  # (default 10s).
+  - name: Checkout API flow
+    type: multi
+    folder: Commerce/Orders
+    interval: 300s
+    timeout: 60s
+    variables:
+      user: synthetic@example.com
+      password: ${env:OBZLY_SECRET_CHECKOUT_PASSWORD}
+    steps:
+      - name: Sign in
+        request:
+          method: POST
+          url: https://api.example.com/auth/login
+          headers: { Content-Type: application/json }
+          body: '{"email":"{{user}}","password":"{{password}}"}'
+        assertions:
+          - status: 200
+        extract:
+          - { name: token, from: json, path: $.accessToken, secret: true }
+      - name: Create order
+        request:
+          method: POST
+          url: https://api.example.com/orders
+          headers: { Authorization: "Bearer {{token}}", Idempotency-Key: "{{$uuid}}" }
+          body: '{"sku":"TEST-1","qty":1}'
+        assertions:
+          - status: 201
+          - json: { path: $.state, equals: pending }
+        extract:
+          - { name: orderId, from: json, path: $.id }
+      - name: Cancel order
+        continue_on_failure: true
+        request:
+          method: DELETE
+          url: https://api.example.com/orders/{{orderId}}
+          headers: { Authorization: "Bearer {{token}}" }
+        assertions:
+          - status: 204
+
+  # Internal service with a self-signed certificate: TLS verification off.
+  # The run still reports issuer and expiry, labelled tls_verified=false.
+  - name: Internal admin portal
+    type: http
+    request:
+      method: GET
+      url: https://admin.internal.example:8443/login
+    tls:
+      verify: false
+    assertions:
+      - status: 200
+      - body: {contains: Sign in}
+    locations: [office-blr]
+    down_locations: 1
+
+  # Certificate-only check for any TLS endpoint (not just HTTPS sites).
+  - name: Mail server certificate
+    type: tls
+    target: mail.example.com:465
+    interval: 3600s
+    tls:
+      warn_days: 30
+      fail_days: 7            # red within 7 days of expiry
+      min_protocol: TLS1.2
+      verify_hostname: true
+
+  # TCP reachability.
+  - name: Postgres primary port
+    type: tcp
+    folder: Platform/Databases
+    target: db.internal.example:5432
+    timeout: 3s
+    locations: [aws-ap-south-1]
+    down_locations: 1
+
+  # DNS resolution, optionally against a specific resolver and expected answers.
+  - name: Apex A records
+    type: dns
+    target: example.com
+    dns:
+      record_type: A
+      resolver: 1.1.1.1:53
+      expect_any_of: [93.184.215.14]
+
+  # ICMP. Needs CAP_NET_RAW or unprivileged ping sockets on the probe host;
+  # without them the probe reports "unsupported" instead of failing silently.
+  - name: Branch office gateway
+    type: icmp
+    target: 10.20.0.1
+    icmp:
+      count: 5
+      max_loss_ratio: 0.2
+      rtt_warn_ms: 80
+    locations: [office-blr]
+    down_locations: 1
+
+  # Disabled monitors are kept but not run (blue bullet).
+  - name: Legacy status page
+    type: http
+    enabled: false
+    request:
+      url: https://status-old.example.com
+    assertions:
+      - status: 200

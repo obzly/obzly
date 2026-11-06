@@ -1,0 +1,112 @@
+# Single replica here, deliberately - not because the app can't run as N
+# replicas (it can, safely, once OBJECT_STORAGE_URL is set - see
+# ARCHITECTURE.md's "High availability" section and internal/util/
+# leaderlock), but because this base manifest uses a ReadWriteOnce PVC for
+# simplicity (see pvc.yaml), which a second replica couldn't even mount.
+# For real horizontal scaling (multiple request-serving replicas, a
+# separate background-worker replica) use ha/ in this same directory
+# instead - it splits into SERVICE_MODE=api/worker Deployments with
+# per-pod ephemeral local disk (object storage is the durability
+# backstop, not this PVC) rather than trying to share one PVC across
+# replicas. Scaling further with this single-replica manifest as-is is a
+# matter of vertical resources (below) only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obzly
+  namespace: obzly
+  labels:
+    app: obzly
+spec:
+  replicas: 1
+  strategy:
+    # Not RollingUpdate: two replicas briefly co-existing would both try
+    # to write to the same PVC (ReadWriteOnce, so the second pod couldn't
+    # even mount it) and run migrations concurrently against the same
+    # Postgres. Recreate accepts a short downtime window on deploy
+    # instead.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: obzly
+  template:
+    metadata:
+      labels:
+        app: obzly
+      # Prometheus scrapes METRICS_ADDR (:9464) on the pod directly; no
+      # Service exposes it, so it never reaches the load balancer.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: obzly
+      # Keeps the pod on the Graviton nodepool these manifests target.
+      # Releases from v0.47.0 are also published for linux/amd64; earlier
+      # ones are arm64 only, so remove this for amd64 nodes only with
+      # v0.47.0 or later.
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: obzly
+          # Pin an explicit version tag (ghcr.io/obzly/obzly:vX.Y.Z or the
+          # release SHA) once you've deployed this once and know it
+          # works - :latest is fine to get started but makes rollbacks
+          # and "what's actually running" harder to reason about.
+          image: ghcr.io/obzly/obzly:latest
+          imagePullPolicy: Always
+          # Starts as root only to chown /obzly-data and write
+          # runtime-config.js, then drops to uid 1000 with no capabilities.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 4005
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: metrics
+              containerPort: 9464
+          envFrom:
+            - configMapRef:
+                name: obzly-config
+            - secretRef:
+                name: obzly-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+          # Mirrors the Dockerfile's own HEALTHCHECK budget (60s start
+          # period, 5s interval, 30 retries) - migrations run on every
+          # startup and need to complete before the app is reachable.
+          startupProbe:
+            httpGet:
+              path: /api/v1/system/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 42
+          readinessProbe:
+            httpGet:
+              path: /api/v1/system/ready
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/system/live
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: obzly-data

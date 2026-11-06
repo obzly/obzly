@@ -1,0 +1,80 @@
+# Non-secret configuration - mirrors backend/.env.production.example.
+# DATABASE_DSN, VALKEY_PASSWORD and OAuth client secrets live in
+# secret.yaml instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obzly-config
+  namespace: obzly
+data:
+  ENV_MODE: "production"
+
+  # In-cluster Valkey - see valkey-service.yaml. Point these at an
+  # external instance (e.g. ElastiCache) instead if you move Valkey out
+  # of the cluster later.
+  VALKEY_HOST: "obzly-valkey"
+  VALKEY_PORT: "6379"
+  VALKEY_IS_SSL: "false"
+
+  # Hot-tier local Parquet segments - see pvc.yaml, mounted at /obzly-data
+  # on the Deployment.
+  LOGS_DATA_DIR: "/obzly-data/segments"
+
+  # Cold-tier object storage (ARCHITECTURE.md). Real AWS S3 needs only the
+  # bucket name and region - no endpoint/use_path_style/credentials (those
+  # are MinIO-specific, see config.go's doc comment). Credentials come
+  # from IRSA via the obzly ServiceAccount instead - do not add
+  # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY here or in secret.yaml.
+  OBJECT_STORAGE_URL: "s3://<BUCKET_NAME>?region=<AWS_REGION>"
+
+  # OTLP gRPC logs receiver port - matches the Service/containerPort below.
+  OTLP_GRPC_PORT: "4317"
+
+  # Prometheus /metrics listener - internal only (the pod annotations point
+  # the scraper at it; no Service exposes it). "off" disables it.
+  METRICS_ADDR: ":9464"
+
+  # Fraction of this Site's own requests and background passes recorded as
+  # traces in its "Obzly (system)" project (visible to global admins). "0"
+  # turns it off.
+  SELF_TRACING_SAMPLE_RATE: "0.01"
+
+  # Load balancer / ingress addresses whose X-Forwarded-For is trusted
+  # (comma-separated CIDRs). Behind an AWS ALB/NLB or an ingress
+  # controller, set this to your VPC CIDR (e.g. "10.0.0.0/16" - see
+  # `aws ec2 describe-vpcs`). Left empty, nothing is trusted and every
+  # request is logged, audited, rate-limited and IP-allow-listed as coming
+  # from the load balancer's own private IP instead of the real client.
+  # Don't use 0.0.0.0/0: anyone could then fake their IP with a header.
+  TRUSTED_PROXIES: ""
+
+  # Bootstrap super-admin account email - leave "admin" unless you want a
+  # real address from the start (changing it later just renames the
+  # account in place, see README.md).
+  ADMIN_EMAIL: "admin"
+
+  # Product website linked from the navbar/docs links in the UI.
+  WEBSITE_URL: ""
+
+  # Browser-facing origin, for MCP clients' OAuth (else taken from the
+  # request). Every other setting: docs/configuration.md.
+  # PUBLIC_URL: "https://obzly.example.com"
+
+  # Webhooks reach only public addresses unless ALERT_EGRESS_ALLOWLIST
+  # allows more; deny the cluster's service range. (Email is set up in
+  # Obzly settings.)
+  # ALERT_EGRESS_DENYLIST: "172.20.0.0/16"
+
+  # Integrity audit of uploaded segments (default weekly, 1% sampled).
+  # INTEGRITY_AUDIT_HOURS: "168"
+
+  # --- Multi-site (ARCHITECTURE.md "Multi-site: control plane and
+  # Sites") - all optional. Uncomment to enroll this cluster's obzly
+  # install as a "Site" behind a separately-deployed control plane (see
+  # README.md's "Enroll as a Site" section) - leave commented out and
+  # this manifest deploys exactly the single-site install it always has.
+  # SITE_ID: "eks-us-east-1"
+  # SITE_NAME: "EKS us-east-1"
+  # CONTROL_PLANE_ISSUER: "https://control-plane.example.com"
+  # CONTROL_PLANE_JWKS_URL: ""
+  # CONTROL_PLANE_EGRESS_CIDRS: ""

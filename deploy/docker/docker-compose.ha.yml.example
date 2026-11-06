@@ -1,0 +1,319 @@
+# HA (multi-replica) variant of docker-compose.yml.example - see
+# ARCHITECTURE.md's "High availability" section for the full design. Same
+# setup steps as the standalone example, but:
+#   1. cp deploy/docker/docker-compose.ha.yml.example docker-compose.yml
+#   2. cp deploy/docker/.env.example .env, set POSTGRES_PASSWORD,
+#      MINIO_ROOT_USER/MINIO_ROOT_PASSWORD (object storage is REQUIRED
+#      here, not optional - see the comment on OBJECT_STORAGE_URL below),
+#      NATS_TOKEN and QUERIER_TOKEN
+#   3. docker compose up -d --build
+#
+# What makes this "HA" rather than just "more containers": five pieces,
+# each solved a different way.
+#
+# 1) Postgres/Valkey/MinIO are the only STATEFUL services, each a single
+#    shared instance every obzly process talks to - that's the actual
+#    high-availability boundary (make THOSE highly available with your
+#    usual Postgres/Valkey/object-storage HA setup; that's infrastructure
+#    this compose file intentionally doesn't attempt to replace).
+#
+# 2) obzly-api-a/obzly-api-b are two REPLICAS of the request-serving tier -
+#    same image, same config, each with its own local disk
+#    (./obzly-data/api-a, ./obzly-data/api-b - deliberately NOT shared,
+#    mirroring how Kubernetes pods each get their own ephemeral/PVC
+#    storage, not a shared filesystem). The replicas hold no ingested data
+#    of their own: a batch is acknowledged once the broker (point 4) holds
+#    it, and obzly-worker writes it to Parquet and uploads it to MinIO, so a
+#    query on either replica downloads segments on demand - see
+#    segments.ResolveFiles.
+#    Running N local-disk-only replicas with no object storage configured
+#    is NOT safe (each replica's local Parquet files are its own,
+#    invisible to the others) - single-node mode only in that case, see
+#    docker-compose.yml.example instead. Point your own reverse proxy/load
+#    balancer at both obzly-api-a:4005 and obzly-api-b:4005 (round-robin
+#    or your LB's usual algorithm) - this file doesn't include one,
+#    matching this repo's convention of leaving ingress to whatever the
+#    deployer already runs (see ARCHITECTURE.md's "Deployment / networking
+#    convention" section for this host's own Nginx Proxy Manager setup,
+#    which generalizes the same way: point it at both container names
+#    instead of one). Add a third/fourth replica the same way: copy the
+#    obzly-api-a block, rename it and its volume path, add it to your load
+#    balancer - no code changes needed.
+#
+# 3) obzly-worker writes the broker's batches to Parquet and runs the
+#    background work (quota/retention/compaction/reconciliation for
+#    logs/spans/metrics, alert evaluation and delivery, the integrity
+#    audit) - SERVICE_MODE=worker, no HTTP/gRPC serving at
+#    all, so it needs no ports/healthcheck/load-balancer entry. The api
+#    replicas scale purely on request load because that work doesn't run
+#    there at all. More obzly-worker replicas share the ingest and
+#    compaction shards through leases (internal/util/leaderlock), adding
+#    throughput and failover - one is enough for most deployments.
+#
+# 4) broker is the NATS JetStream ingest buffer (SERVICE_MODE=broker): the
+#    api replicas publish accepted batches to it and obzly-worker consumes
+#    them, so killing an api replica or the worker loses no acknowledged
+#    batch. One broker is one copy; the Kubernetes ha/ manifests run three.
+#
+# 5) obzly-querier-a/-b are query executors (SERVICE_MODE=querier): the api
+#    replicas split each query into fragments for them, and run queries
+#    themselves when none are up.
+#
+# None of the obzly processes need any "which one am I" identity
+# configuration beyond SERVICE_MODE - same image, same env vars otherwise,
+# same code path; leaderlock (internal/util/leaderlock) handles migration/
+# admin-bootstrap/worker-pass coordination across all of them at runtime.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: obzly-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: obzly
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env - see .env.example}
+    volumes:
+      - ./obzly-data/pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:9.2-alpine
+    container_name: obzly-valkey
+    restart: unless-stopped
+    volumes:
+      - ./obzly-data/valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Object storage is REQUIRED for HA mode (see point 2 above) - unlike
+  # docker-compose.yml.example, this isn't commented out. Point
+  # OBJECT_STORAGE_URL at real AWS S3/GCS/Azure instead of this bundled
+  # MinIO for an actual production HA deployment; MinIO here is enough to
+  # run and test this compose file locally end-to-end.
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: obzly-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - ./obzly-data/minio:/data
+    # 127.0.0.1-only, not "9001:9001" - unlike Postgres/Valkey above (which
+    # publish no host port at all, only reachable over the compose
+    # network), MinIO's admin CONSOLE (full read/write/delete over the
+    # bucket, using MINIO_ROOT_USER/PASSWORD) is genuinely useful to open
+    # from a browser while setting up/debugging a deployment, so this
+    # binds it to loopback only instead of dropping it entirely - reach it
+    # remotely via an SSH tunnel (ssh -L 9001:localhost:9001 <host>), never
+    # by widening this to 0.0.0.0. The S3 API itself (port 9000) is never
+    # published here at all - every obzly process talks to it over the
+    # compose network via OBJECT_STORAGE_URL's "endpoint=minio:9000", so it
+    # doesn't need to be.
+    ports:
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: quay.io/minio/minio:latest # ships mc; the standalone mc image may not be pullable
+    container_name: obzly-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing local/obzly-segments
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+
+  obzly-api-a: &obzly-api-replica
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly-api-a
+    restart: unless-stopped
+    ports:
+      - "4005:4005"
+      - "4317:4317"
+    volumes:
+      - ./obzly-data/api-a:/obzly-data
+    environment: &obzly-replica-env
+      SERVICE_MODE: api
+      ENV_MODE: production
+      DATABASE_DSN: "host=postgres user=postgres password=${POSTGRES_PASSWORD} dbname=obzly port=5432 sslmode=disable"
+      VALKEY_HOST: valkey
+      VALKEY_PORT: "6379"
+      VALKEY_IS_SSL: "false"
+      LOGS_DATA_DIR: /obzly-data/segments
+      # Required in HA mode - see point 2 in the top-of-file comment.
+      # Query param names matter here: these are s3blob's (gocloud.dev,
+      # AWS SDK v2-based) own option names, NOT the older AWS SDK v1 names
+      # (disableSSL/s3ForcePathStyle) some older docs/examples use - v2
+      # silently ignores an unrecognized param instead of erroring, so a
+      # wrong name here fails quietly (a real connection attempt to AWS's
+      # actual endpoint, TLS and all, instead of MinIO) rather than with a
+      # clear error at startup. Matches config.go's own ObjectStorageURL
+      # doc comment exactly - see it for the parameter-by-parameter
+      # explanation.
+      OBJECT_STORAGE_URL: "s3://obzly-segments?endpoint=http://minio:9000&region=us-east-1&use_path_style=true&disable_https=true&hostname_immutable=true"
+      AWS_ACCESS_KEY_ID: "${MINIO_ROOT_USER}"
+      AWS_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD}"
+      OTLP_GRPC_PORT: "4317"
+      WEBSITE_URL: ""
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+      # Durable ingest through the broker below: the api replicas ack a
+      # batch once the broker holds it and obzly-worker writes it. One
+      # broker is one copy of each batch - the Kubernetes ha/ manifests run
+      # three.
+      INGEST_BUFFER: jetstream
+      NATS_URL: "nats://broker:4222"
+      NATS_TOKEN: "${NATS_TOKEN:?set NATS_TOKEN in .env}"
+      JETSTREAM_REPLICAS: "1"
+      # The api replicas send query fragments to obzly-querier-*.
+      QUERIER_TOKEN: "${QUERIER_TOKEN:?set QUERIER_TOKEN in .env}"
+      # --- Multi-site (ARCHITECTURE.md "Multi-site: control plane and
+      # Sites") - optional, same shape as docker-compose.yml.example's own
+      # commented block. Only needed on the obzly-api-* replicas: they're
+      # the ones that ever serve POST /api/v1/auth/site/exchange and the
+      # proxied query surface - obzly-worker never does, so there's no
+      # reason to set it there too. If you enroll this HA deployment as a
+      # Site, also set TRUSTED_PROXIES to include the control plane's own
+      # egress address alongside your load balancer's - otherwise every
+      # proxied request's audit log entry and rate-limit bucket key off
+      # the control plane's IP instead of the real end user's (see
+      # config.go's TrustedProxies doc comment).
+      # SITE_ID: "site-a"
+      # SITE_NAME: "Site A"
+      # CONTROL_PLANE_ISSUER: "https://control-plane.example.com"
+      # CONTROL_PLANE_JWKS_URL: ""
+      # CONTROL_PLANE_EGRESS_CIDRS: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:$${HTTP_PORT:-4005}/api/v1/system/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # Same image, same config, different container/volume/port - see point 2
+  # in the top-of-file comment. Add obzly-api-c/obzly-api-d the same way
+  # for more replicas.
+  obzly-api-b:
+    <<: *obzly-api-replica
+    container_name: obzly-api-b
+    ports:
+      - "4006:4005"
+      - "4318:4317"
+    volumes:
+      - ./obzly-data/api-b:/obzly-data
+    environment:
+      <<: *obzly-replica-env
+
+  # SERVICE_MODE=worker - no ports, no HTTP healthcheck (there's no HTTP
+  # server to check) - see point 3 in the top-of-file comment. Everything
+  # else is identical to the api replicas' env, since the only thing that
+  # actually changes behavior is SERVICE_MODE itself.
+  obzly-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly-worker
+    restart: unless-stopped
+    volumes:
+      - ./obzly-data/worker:/obzly-data
+    # DuckDB is capped at 1 GB for compaction and 1 GB for searches.
+    mem_limit: 3g
+    environment:
+      <<: *obzly-replica-env
+      SERVICE_MODE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+
+  # SERVICE_MODE=broker - the NATS JetStream ingest buffer. Keeps batches
+  # acknowledged but not yet written in ./obzly-data/broker.
+  broker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly-broker
+    restart: unless-stopped
+    volumes:
+      - ./obzly-data/broker:/broker-data
+    environment:
+      SERVICE_MODE: broker
+      NATS_TOKEN: "${NATS_TOKEN:?set NATS_TOKEN in .env}"
+      NATS_SERVER_NAME: obzly-broker
+      LOGS_DATA_DIR: /broker-data/segments
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8222/healthz?js-enabled-only=true"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # SERVICE_MODE=querier - query executors. The api replicas find them
+  # through the broker, send each the fragments for the segments it owns
+  # and fetch results from :4319 (never published to the host: it needs
+  # QUERIER_TOKEN and reads any project's data). Without them the api
+  # replicas run queries themselves. Add obzly-querier-c the same way.
+  obzly-querier-a: &obzly-querier
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly-querier-a
+    restart: unless-stopped
+    mem_limit: 2g
+    volumes:
+      - ./obzly-data/querier-a:/obzly-data
+    environment:
+      <<: *obzly-replica-env
+      SERVICE_MODE: querier
+      QUERIER_ADVERTISE_ADDR: "obzly-querier-a:4319"
+      COLD_CACHE_MAX_SIZE_MB: "4096"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+
+  obzly-querier-b:
+    <<: *obzly-querier
+    container_name: obzly-querier-b
+    volumes:
+      - ./obzly-data/querier-b:/obzly-data
+    environment:
+      <<: *obzly-replica-env
+      SERVICE_MODE: querier
+      QUERIER_ADVERTISE_ADDR: "obzly-querier-b:4319"
+      COLD_CACHE_MAX_SIZE_MB: "4096"

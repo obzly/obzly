@@ -1,0 +1,92 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "UTC",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "minimumReleaseAge": "3 days",
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "schedule": [
+      "at any time"
+    ],
+    "minimumReleaseAge": null,
+    "labels": [
+      "security"
+    ]
+  },
+  "customManagers": [
+    {
+      "description": "Go tools installed with `go install <module>[/cmd/<tool>]@<version>` in CI and the Dockerfile, so both move together",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "go install (?<depName>[^@\\s]+?)(?:/cmd/[^@\\s]+)?@(?<currentValue>v[\\w.+-]+)"
+      ],
+      "datasourceTemplate": "go"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Batch routine updates into one weekly PR to keep the CI queue short",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pin"
+      ],
+      "groupName": "non-major dependencies",
+      "groupSlug": "non-major"
+    },
+    {
+      "description": "Major versions only on request from the Dependency Dashboard",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Go / Node toolchains move together: Dockerfile base images, CI, go.mod",
+      "matchDepNames": [
+        "go",
+        "golang",
+        "node"
+      ],
+      "groupName": "Go and Node toolchains",
+      "groupSlug": "toolchains"
+    },
+    {
+      "description": "gRPC 1.84.0 still has GO-2026-6443 (server panic on missing authority/Host headers), fixed in 1.82.2 / 1.83.2 but no 1.84.x yet - hold it",
+      "matchPackageNames": [
+        "google.golang.org/grpc"
+      ],
+      "allowedVersions": "!/^v?1\\.84\\.0$/"
+    },
+    {
+      "description": "otlp 1.11.1 and grpc-gateway 2.31 require gRPC 1.84.0 (GO-2026-6443 above) - hold them until gRPC 1.85 is released",
+      "matchPackageNames": [
+        "go.opentelemetry.io/proto/otlp",
+        "github.com/grpc-ecosystem/grpc-gateway/v2"
+      ],
+      "allowedVersions": "/^v?1\\.11\\.0$|^v?2\\.30\\./"
+    },
+    {
+      "description": "Floating tags in local/demo compose files are intentional",
+      "matchCurrentValue": "/^(latest|main)$/",
+      "enabled": false
+    }
+  ]
+}

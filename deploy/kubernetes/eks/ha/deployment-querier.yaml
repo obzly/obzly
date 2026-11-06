@@ -1,0 +1,108 @@
+# SERVICE_MODE=querier - distributed query executors (Phase 14 item 4,
+# ARCHITECTURE.md "Distributed query"). obzly-api replicas find them through
+# the broker (NATS service discovery), send each one the fragments for the
+# segments it owns (rendezvous hashing, so a segment keeps hitting the same
+# executor's cache) and fetch results from its gRPC listener on :4319.
+# Without any running, obzly-api runs queries itself.
+#
+# Stateless: the cache is an emptyDir, so these suit Spot nodes - losing a
+# pod only re-sends its fragments to the next-ranked executor and leaves
+# about 1/N of segments to re-download. :4319 is closed to everything but
+# obzly-api by networkpolicy-querier.yaml and needs QUERIER_TOKEN.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obzly-querier
+  namespace: obzly
+  labels:
+    app: obzly-querier
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: obzly-querier
+  template:
+    metadata:
+      labels:
+        app: obzly-querier
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: obzly
+      # Above the 30s a stopping executor lets running fragments finish.
+      terminationGracePeriodSeconds: 45
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: obzly-querier
+      containers:
+        - name: obzly
+          image: ghcr.io/obzly/obzly:latest
+          imagePullPolicy: Always
+          # Starts as root only to chown /obzly-data and write
+          # runtime-config.js, then drops to uid 1000 with no capabilities.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: SERVICE_MODE
+              value: "querier"
+            - name: NATS_URL
+              value: "nats://obzly-broker.obzly.svc:4222"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # How obzly-api reaches this pod's result listener.
+            - name: QUERIER_ADVERTISE_ADDR
+              value: "$(POD_IP):4319"
+            # Most of the emptyDir below; least recently used segments go first.
+            - name: COLD_CACHE_MAX_SIZE_MB
+              value: "16384"
+          envFrom:
+            - configMapRef:
+                name: obzly-config
+            - secretRef:
+                name: obzly-secrets
+          ports:
+            - name: results
+              containerPort: 4319
+            - name: metrics
+              containerPort: 9464
+          readinessProbe:
+            tcpSocket:
+              port: results
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: results
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+          # One DuckDB handle, capped at 60% of the memory limit (spills to /obzly-data).
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 20Gi

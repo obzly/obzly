@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+  namespace: obzly-obi
+spec:
+  selector:
+    matchLabels:
+      app: obi
+  template:
+    metadata:
+      labels:
+        app: obi
+    spec:
+      serviceAccountName: obi
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: obi
+          image: otel/ebpf-instrument:v0.14.0
+          env:
+            - name: OTEL_EBPF_METRICS_FEATURES
+              value: "network,network_flow_packets"
+            - name: OTEL_EBPF_KUBE_METADATA_ENABLE
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "https://REPLACE_WITH_OBZLY_URL"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            # Optional: - name: OTEL_EBPF_KUBE_CLUSTER_NAME
+            # Optional, with k8s-cache.yaml: - name: OTEL_EBPF_KUBE_META_CACHE_ADDRESS
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: obzly-api-key
+                  key: OTEL_EXPORTER_OTLP_HEADERS
+          # Narrow capability set first; if eBPF programs fail to load on
+          # your kernel, replace with "privileged: true".
+          #
+          # Application traces (see traces-config.yaml/README) need more;
+          # pick one:
+          #   1. capabilities: add DAC_OVERRIDE (tracefs uprobe fallback).
+          #      Hangs at "attaching uprobes" on SELinux nodes (Bottlerocket).
+          #   2. selinux: 1 + seLinuxOptions: {type: super_t}. Traces work on
+          #      Bottlerocket; no Node.js runtime metrics.
+          #   3. selinux-sysadmin: 2 + SYS_ADMIN. Node.js injector works too.
+          #   4. privileged: true. Everything works, full host access.
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            capabilities:
+              add: [BPF, PERFMON, NET_ADMIN, NET_RAW, SYS_PTRACE, CHECKPOINT_RESTORE, DAC_READ_SEARCH]
+              drop: [ALL]
+          volumeMounts:
+            - name: tracefs
+              mountPath: /sys/kernel/tracing
+            - name: var-run-obi
+              mountPath: /var/run/obi
+      volumes:
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing
+            type: Directory
+        - name: var-run-obi
+          emptyDir: {}

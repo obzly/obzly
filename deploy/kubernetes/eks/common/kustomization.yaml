@@ -1,0 +1,14 @@
+# Resources every Site manifest shares: the namespace, the service account
+# (IRSA for S3), the configmap and the in-cluster Valkey. Both ../ (single
+# replica) and ../ha/ include this directory; kustomize only lets a
+# kustomization reference files outside its own directory through another
+# kustomization like this one.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - valkey-deployment.yaml
+  - valkey-service.yaml
+  - networkpolicy-valkey.yaml

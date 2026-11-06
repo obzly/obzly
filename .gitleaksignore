@@ -1,0 +1,4 @@
+# Placeholder credentials in docs and onboarding snippets (not secrets).
+README.md:curl-auth-header:34
+frontend/src/features/query/ui/CodeUsageComponent.tsx:curl-auth-header:124
+frontend/src/features/query/ui/CodeUsageComponent.tsx:curl-auth-header:144

@@ -1,0 +1,18 @@
+Obzly ({{ .Values.mode }}) is deploying as {{ include "obzly.fullname" . }} in {{ .Release.Namespace }}.
+
+UI and API:  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "obzly.fullname" . }} 4005:4005
+             then open http://localhost:4005
+{{- if ne .Values.mode "control-plane" }}
+OTLP:        {{ include "obzly.fullname" . }}.{{ .Release.Namespace }}.svc:4317 (gRPC), :4005/v1/{logs,traces,metrics} (HTTP)
+{{- end }}
+
+The first start creates the bootstrap admin ({{ .Values.config.adminEmail }}) and logs a one-time
+bootstrap token for setting its password - find it with:
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} --tail=-1 | grep bootstrapToken
+If that pod is gone, print a new token (only while the admin has no password):
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "obzly.fullname" . }}{{ if eq .Values.mode "ha" }}-api{{ end }} -- /app/main --reset-bootstrap-token
+{{- if eq .Values.mode "ha" }}
+
+Brokers ({{ .Values.broker.replicas }}) hold acknowledged batches until a worker writes them: keep
+them on on-demand nodes (broker.nodeSelector) and their PVCs sized for ~1 h of ingest.
+{{- end }}

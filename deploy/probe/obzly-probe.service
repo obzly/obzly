@@ -1,0 +1,35 @@
+# obzly-probe as a systemd service. install.sh puts this in
+# /etc/systemd/system and the settings in /etc/obzly-probe.env.
+[Unit]
+Description=Obzly synthetic monitoring probe
+Documentation=https://obzly.com
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+EnvironmentFile=/etc/obzly-probe.env
+Environment=OBZLY_PROBE_DATA_DIR=/var/lib/obzly-probe
+ExecStart=/usr/local/bin/obzly-probe
+User=obzly-probe
+Group=obzly-probe
+StateDirectory=obzly-probe
+StateDirectoryMode=0700
+Restart=always
+RestartSec=5
+# CAP_NET_RAW only for ICMP checks.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,64 @@
+# In-cluster Valkey for the control plane - caches Site tokens
+# (SiteTokenService) and backs rate limiting/replay guards, not durable
+# application data (that's Postgres) - no PersistentVolumeClaim, same
+# reasoning as ../valkey-deployment.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obzly-control-plane-valkey
+  namespace: obzly-control-plane
+  labels:
+    app: obzly-control-plane-valkey
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: obzly-control-plane-valkey
+  template:
+    metadata:
+      labels:
+        app: obzly-control-plane-valkey
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: valkey
+          image: valkey/valkey:9.2-alpine
+          # Valkey holds the API-key cache, token revocations and Live Tail,
+          # so it needs a password (VALKEY_PASSWORD in obzly-control-plane-secrets; the app
+          # reads the same key). The image's entrypoint prepends
+          # valkey-server to "--" args.
+          args: ["--requirepass", "$(VALKEY_PASSWORD)"]
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: obzly-control-plane-secrets
+                  key: VALKEY_PASSWORD
+            # valkey-cli (the probes) authenticates from these.
+            - name: VALKEYCLI_AUTH
+              value: "$(VALKEY_PASSWORD)"
+            - name: REDISCLI_AUTH
+              value: "$(VALKEY_PASSWORD)"
+          ports:
+            - name: valkey
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

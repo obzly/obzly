@@ -1,0 +1,29 @@
+# Hot-tier local Parquet segments (ARCHITECTURE.md) - ReadWriteOnce is
+# fine since deployment.yaml runs a single replica here (see that file's
+# comment - this is a manifest-simplicity choice, not a hard limitation of
+# the app itself; see ha/ in this directory for a real multi-replica
+# deployment, which uses per-pod ephemeral disk instead of a shared PVC).
+# Not committed/archived elsewhere: not-yet-compacted-and-uploaded rows
+# are only as durable as this volume until the next flush/compaction/
+# upload cycle reaches S3 - OBJECT_STORAGE_URL (common/configmap.yaml) is what
+# makes that durable copy exist at all; without it, this PVC IS the only
+# copy of the data.
+#
+# storageClassName: adjust to whatever your cluster's EBS-backed class is
+# named if it isn't "gp3" (e.g. a cluster still on the EKS default before
+# gp3 became standard would use "gp2").
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: obzly-data
+  namespace: obzly
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      # Tune to your ingestion volume/retention settings - this is local
+      # hot-tier headroom, not total retained data (older segments get
+      # compacted and offloaded to S3).
+      storage: 20Gi

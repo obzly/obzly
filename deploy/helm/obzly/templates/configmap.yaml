@@ -1,0 +1,55 @@
+{{- $fullname := include "obzly.fullname" . -}}
+{{- if and (eq .Values.mode "ha") (not .Values.config.objectStorageUrl) }}
+{{- fail "config.objectStorageUrl is required in ha mode: replicas read segments other replicas wrote" }}
+{{- end }}
+{{- if not (has .Values.mode (list "ha" "single" "control-plane")) }}
+{{- fail "mode must be ha, single or control-plane" }}
+{{- end }}
+{{- if and (eq .Values.mode "control-plane") (not .Values.config.publicUrl) }}
+{{- fail "config.publicUrl is required in control-plane mode" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-config
+  labels:
+    {{- include "obzly.labels" (dict "root" . "component" "obzly") | nindent 4 }}
+data:
+  ENV_MODE: "production"
+  {{- if .Values.valkey.enabled }}
+  VALKEY_HOST: {{ printf "%s-valkey" $fullname | quote }}
+  VALKEY_PORT: "6379"
+  VALKEY_IS_SSL: "false"
+  {{- else }}
+  VALKEY_HOST: {{ required "valkey.external.host is required when valkey.enabled is false" .Values.valkey.external.host | quote }}
+  VALKEY_PORT: {{ .Values.valkey.external.port | quote }}
+  VALKEY_IS_SSL: {{ .Values.valkey.external.ssl | quote }}
+  {{- end }}
+  LOGS_DATA_DIR: "/obzly-data/segments"
+  OTLP_GRPC_PORT: "4317"
+  METRICS_ADDR: {{ ternary (printf ":%v" .Values.metrics.port) "off" .Values.metrics.enabled | quote }}
+  ADMIN_EMAIL: {{ .Values.config.adminEmail | quote }}
+  TRUSTED_PROXIES: {{ .Values.config.trustedProxies | quote }}
+  WEBSITE_URL: {{ .Values.config.websiteUrl | quote }}
+  {{- with .Values.config.publicUrl }}
+  PUBLIC_URL: {{ . | quote }}
+  {{- end }}
+  {{- if eq .Values.mode "control-plane" }}
+  SERVICE_MODE: "control-plane"
+  SHUTDOWN_DRAIN_SECONDS: {{ .Values.controlPlane.drainSeconds | quote }}
+  {{- else }}
+  SELF_TRACING_SAMPLE_RATE: {{ .Values.config.selfTracingSampleRate | quote }}
+  {{- with .Values.config.objectStorageUrl }}
+  OBJECT_STORAGE_URL: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if eq .Values.mode "ha" }}
+  NATS_URL: {{ include "obzly.natsUrl" . | quote }}
+  JETSTREAM_REPLICAS: {{ include "obzly.jetstreamReplicas" . | quote }}
+  {{- with .Values.broker.streamMaxBytes }}
+  INGEST_STREAM_MAX_BYTES: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- range $key, $value := .Values.config.extra }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

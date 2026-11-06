@@ -1,0 +1,25 @@
+# Valkey holds the API-key cache, token revocations and Live Tail: only
+# Obzly's own pods may connect (VALKEY_PASSWORD is the second check). Needs
+# a CNI that enforces NetworkPolicy (the VPC CNI with network policy
+# enabled, Calico, Cilium, ...); without one this has no effect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: obzly-valkey
+  namespace: obzly
+spec:
+  podSelector:
+    matchLabels:
+      app: obzly-valkey
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [obzly, obzly-api, obzly-worker, obzly-querier]
+      ports:
+        - protocol: TCP
+          port: 6379

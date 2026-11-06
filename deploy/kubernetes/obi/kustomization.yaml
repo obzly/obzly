@@ -1,0 +1,8 @@
+# Optional and deliberately NOT referenced from ../eks/kustomization.yaml.
+# secret.yaml is not listed: fill it in and apply it separately.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - daemonset.yaml

@@ -1,0 +1,60 @@
+image:
+  repository: ghcr.io/obzly/obzly-probe
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The control plane as this cluster reaches it, e.g. https://obzly.example.com
+controlPlaneUrl: ""
+# The token shown when the probe was added (Synthetics -> Probes). Or keep
+# it in a Secret of your own with key OBZLY_PROBE_TOKEN.
+token: ""
+existingSecret: ""
+
+# Instances of the probe group (one location). They share its monitors,
+# each run on one live instance, and take over within a minute when one
+# stops; the token is the group's.
+replicas: 3
+# Keep all but one running through node drains.
+podDisruptionBudget:
+  enabled: true
+maxConcurrency: 256
+# Long-poll for editor Test runs; keep it under any proxy's read timeout
+# between the probe and the control plane (CloudFront's default is 30 s).
+taskWait: 25s
+# Comma-separated CIDRs checks must never reach (loopback and link-local,
+# including cloud metadata, are always refused).
+denyCidrs: ""
+# ICMP checks use ping sockets when the node allows them
+# (net.ipv4.ping_group_range); netRaw adds CAP_NET_RAW instead.
+netRaw: false
+# Extra environment, e.g. values for ${env:NAME} placeholders in monitors.
+# A probe fills a placeholder from its environment only for OBZLY_SECRET_*
+# names and those envAllow lists; never OBZLY_PROBE_*, AWS_*, AZURE_* or
+# GOOGLE_*.
+env: []
+# Comma-separated names (a trailing * is a prefix) monitors may read with
+# ${env:NAME} besides OBZLY_SECRET_*, e.g. "ORDERS_API_TOKEN,TEAM_A_*".
+envAllow: ""
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {memory: 512Mi}
+nodeSelector: {}
+tolerations: []
+# Empty: prefer spreading the instances across nodes and zones.
+affinity: {}
+podAnnotations: {}
+# e.g. azure.workload.identity/use: "true" for Azure workload identity.
+podLabels: {}
+
+# The probe group's own identity, for cloud connections that use it:
+# annotate for IRSA (eks.amazonaws.com/role-arn: <role ARN>) or Azure
+# workload identity (azure.workload.identity/client-id: <client ID>). EKS Pod
+# Identity needs no annotation, only an association with this account.
+serviceAccount:
+  create: true
+  # Default: the release's full name.
+  name: ""
+  annotations: {}

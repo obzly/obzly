@@ -1,0 +1,3 @@
+ci/
+*.md.tmp
+.DS_Store

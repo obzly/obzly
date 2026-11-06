@@ -1,0 +1,67 @@
+# In-cluster Valkey - caches, rate limits and leases only (no ingest data
+# since Phase 14 step 1e), so no PersistentVolumeClaim: a restart just
+# resets caches and limits.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obzly-valkey
+  namespace: obzly
+  labels:
+    app: obzly-valkey
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: obzly-valkey
+  template:
+    metadata:
+      labels:
+        app: obzly-valkey
+    spec:
+      # Matches the Graviton (arm64) nodepool this is meant to run on -
+      # official valkey images publish arm64 builds. Remove this
+      # nodeSelector if your cluster also has amd64 nodes and you don't
+      # need to pin it.
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: valkey
+          image: valkey/valkey:9.2-alpine
+          # Valkey holds the API-key cache, token revocations and Live Tail,
+          # so it needs a password (VALKEY_PASSWORD in obzly-secrets; the app
+          # reads the same key). The image's entrypoint prepends
+          # valkey-server to "--" args.
+          args: ["--requirepass", "$(VALKEY_PASSWORD)"]
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: obzly-secrets
+                  key: VALKEY_PASSWORD
+            # valkey-cli (the probes) authenticates from these.
+            - name: VALKEYCLI_AUTH
+              value: "$(VALKEY_PASSWORD)"
+            - name: REDISCLI_AUTH
+              value: "$(VALKEY_PASSWORD)"
+          ports:
+            - name: valkey
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security problems go to SECURITY.md, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. ...\n2. ..."
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings → Upgrade status, or the image tag (e.g. v0.48.3)
+    validations:
+      required: true
+  - type: dropdown
+    id: shape
+    attributes:
+      label: Deployment
+      options:
+        - Single container (install script or Docker Compose)
+        - Docker Compose HA
+        - Kubernetes (Helm)
+        - Kubernetes (manifests)
+        - Control plane + Sites
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant server log lines (remove secrets)
+      render: text

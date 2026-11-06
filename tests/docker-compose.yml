@@ -1,0 +1,44 @@
+# Fake log generators for testing Obzly's Nginx/MongoDB/MySQL/PostgreSQL
+# data sources without running the real services. Each container just
+# writes synthetic log lines, in the exact format that data source's
+# generated OTel Collector config expects to tail, onto a named volume -
+# see README.md for how to point an otel-collector container (generated
+# from Obzly's Data Sources page) at these same volumes.
+#
+# Usage:
+#   docker compose up -d --build
+
+services:
+  nginx-fake-logs:
+    build: ./nginx
+    container_name: obzly-test-nginx-logs
+    restart: unless-stopped
+    volumes:
+      - nginx-logs:/var/log/nginx
+
+  mongodb-fake-logs:
+    build: ./mongodb
+    container_name: obzly-test-mongodb-logs
+    restart: unless-stopped
+    volumes:
+      - mongodb-logs:/var/log/mongodb
+
+  mysql-fake-logs:
+    build: ./mysql
+    container_name: obzly-test-mysql-logs
+    restart: unless-stopped
+    volumes:
+      - mysql-logs:/var/log/mysql
+
+  postgresql-fake-logs:
+    build: ./postgresql
+    container_name: obzly-test-postgresql-logs
+    restart: unless-stopped
+    volumes:
+      - postgresql-logs:/var/log/postgresql
+
+volumes:
+  nginx-logs:
+  mongodb-logs:
+  mysql-logs:
+  postgresql-logs:

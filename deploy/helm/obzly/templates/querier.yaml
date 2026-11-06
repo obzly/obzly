@@ -1,0 +1,206 @@
+{{- if and (eq .Values.mode "ha") .Values.querier.enabled }}
+{{- $fullname := include "obzly.fullname" . }}
+{{- $ctx := dict "root" . "component" "querier" }}
+{{- $persistent := .Values.querier.persistence.enabled }}
+{{- $resultsTLS := .Values.tls.queryResults.secretName }}
+{{- if $persistent }}
+# Only the StatefulSet's required serviceName; nothing connects through it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-querier-headless
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "obzly.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: results
+      port: 4319
+---
+{{- end }}
+# Query executors: api pods find them through the broker and send each the
+# fragments for the segments it owns. With an emptyDir cache they are
+# stateless and suit Spot nodes, but every restart starts with a cold cache;
+# querier.persistence keeps it (a StatefulSet, one volume per pod).
+apiVersion: apps/v1
+kind: {{ ternary "StatefulSet" "Deployment" $persistent }}
+metadata:
+  name: {{ $fullname }}-querier
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  {{- if not .Values.querier.autoscaling.enabled }}
+  replicas: {{ .Values.querier.replicas }}
+  {{- end }}
+  {{- if $persistent }}
+  serviceName: {{ $fullname }}-querier-headless
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
+    spec:
+      {{- include "obzly.podSpec" (dict "root" . "tier" .Values.querier) | nindent 6 }}
+      # Above the 30 s a stopping executor lets running fragments finish.
+      terminationGracePeriodSeconds: 45
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "obzly.selectorLabels" $ctx | nindent 14 }}
+      containers:
+        - name: obzly
+          {{- include "obzly.containerBase" . | nindent 10 }}
+          env:
+            - name: SERVICE_MODE
+              value: "querier"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # How api pods reach this pod's result listener.
+            - name: QUERIER_ADVERTISE_ADDR
+              value: "$(POD_IP):4319"
+            - name: COLD_CACHE_MAX_SIZE_MB
+              value: {{ .Values.querier.cacheSizeMB | quote }}
+            - name: QUERIER_WARM_HOURS
+              value: {{ .Values.querier.warmHours | quote }}
+            {{- if $resultsTLS }}
+            - name: QUERY_RESULTS_TLS_CERT_FILE
+              value: /etc/obzly/query-results-tls/tls.crt
+            - name: QUERY_RESULTS_TLS_KEY_FILE
+              value: /etc/obzly/query-results-tls/tls.key
+            {{- end }}
+          ports:
+            - name: results
+              containerPort: 4319
+            {{- include "obzly.metricsPort" . | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: results
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: results
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+            {{- if $resultsTLS }}
+            # A directory mount, so a renewed certificate is picked up live.
+            - name: query-results-tls
+              mountPath: /etc/obzly/query-results-tls
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.querier.resources | nindent 12 }}
+      {{- if or (not $persistent) $resultsTLS }}
+      volumes:
+        {{- if not $persistent }}
+        - name: data
+          emptyDir:
+            sizeLimit: {{ .Values.querier.dataSizeLimit }}
+        {{- end }}
+        {{- if $resultsTLS }}
+        - name: query-results-tls
+          secret:
+            secretName: {{ $resultsTLS }}
+        {{- end }}
+      {{- end }}
+  {{- if $persistent }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.querier.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.querier.persistence.size }}
+  {{- end }}
+{{- if .Values.querier.networkPolicy }}
+---
+# An executor runs SQL over any project's segments: only api pods may
+# reach its results port (QUERIER_TOKEN is the second check). Metrics stay
+# open to scrapers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-querier
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "obzly.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 4319
+    {{- if .Values.metrics.enabled }}
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+    {{- end }}
+{{- end }}
+{{- if .Values.querier.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-querier
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.querier.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+{{- end }}
+{{- if .Values.querier.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullname }}-querier
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ ternary "StatefulSet" "Deployment" $persistent }}
+    name: {{ $fullname }}-querier
+  minReplicas: {{ .Values.querier.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.querier.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.querier.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}

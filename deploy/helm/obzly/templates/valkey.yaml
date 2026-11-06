@@ -1,0 +1,115 @@
+{{- if .Values.valkey.enabled }}
+{{- $fullname := include "obzly.fullname" . }}
+{{- $auth := include "obzly.valkeyAuth" . }}
+{{- if $auth }}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-valkey" $fullname)) | default dict }}
+{{- $data := (get $existing "data") | default dict }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-valkey
+  labels:
+    {{- include "obzly.labels" (dict "root" . "component" "valkey") | nindent 4 }}
+type: Opaque
+data:
+  {{- /* Generated once, then read back from the cluster on upgrades. */}}
+  VALKEY_PASSWORD: {{ .Values.secrets.valkeyPassword | default (get $data "VALKEY_PASSWORD" | default "" | b64dec) | default (randAlphaNum 48) | b64enc | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-valkey
+  labels:
+    {{- include "obzly.labels" (dict "root" . "component" "valkey") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" (dict "root" . "component" "valkey") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "obzly.selectorLabels" (dict "root" . "component" "valkey") | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: valkey
+          image: {{ .Values.valkey.image }}
+          {{- if $auth }}
+          # The image's entrypoint prepends valkey-server to "--" args.
+          args: ["--requirepass", "$(VALKEY_PASSWORD)"]
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}-valkey
+                  key: VALKEY_PASSWORD
+            # valkey-cli (the probes) authenticates from these.
+            - name: VALKEYCLI_AUTH
+              value: "$(VALKEY_PASSWORD)"
+            - name: REDISCLI_AUTH
+              value: "$(VALKEY_PASSWORD)"
+          {{- end }}
+          ports:
+            - name: valkey
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.valkey.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-valkey
+  labels:
+    {{- include "obzly.labels" (dict "root" . "component" "valkey") | nindent 4 }}
+spec:
+  selector:
+    {{- include "obzly.selectorLabels" (dict "root" . "component" "valkey") | nindent 4 }}
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey
+{{- if .Values.valkey.networkPolicy }}
+---
+# Valkey holds the API-key cache, token revocations and Live Tail: only
+# this release's pods may connect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-valkey
+  labels:
+    {{- include "obzly.labels" (dict "root" . "component" "valkey") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" (dict "root" . "component" "valkey") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "obzly.releasePods" . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+{{- end }}
+{{- end }}

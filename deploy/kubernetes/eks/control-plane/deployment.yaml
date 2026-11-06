@@ -1,0 +1,91 @@
+# >= 2 replicas here, unlike ../deployment.yaml's single replica: a
+# control plane is stateless (no PVC, no local disk it depends on - Site
+# tokens live in Valkey, not in-process) and migrations are already
+# leader-locked, so it's safe to run N of these behind a shared load
+# balancer for real availability (ARCHITECTURE.md's High Availability
+# section notes a control-plane outage blocks every Site's queries, so
+# this is the one thing running just one replica of would be a real
+# regression, not merely "not yet scaled"). RollingUpdate is fine (unlike
+# ../deployment.yaml's Recreate) for the same reason - no shared PVC for
+# two replicas to fight over.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obzly-control-plane
+  namespace: obzly-control-plane
+  labels:
+    app: obzly-control-plane
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: obzly-control-plane
+  template:
+    metadata:
+      labels:
+        app: obzly-control-plane
+      # Prometheus scrapes METRICS_ADDR (:9464) on the pod directly; no
+      # Service exposes it, so it never reaches the load balancer.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+    spec:
+      # Above SHUTDOWN_DRAIN_SECONDS + the 10s HTTP shutdown deadline.
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: obzly-control-plane
+          image: ghcr.io/obzly/obzly:latest
+          imagePullPolicy: Always
+          # Starts as root only to chown /obzly-data and write
+          # runtime-config.js, then drops to uid 1000 with no capabilities.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 4005
+            - name: metrics
+              containerPort: 9464
+          # No otlp-grpc port: SERVICE_MODE=control-plane never starts
+          # the OTLP gRPC listener (mode.RunsSignalStorage() == false) -
+          # see cmd/main.go's setUpRoutes/main().
+          envFrom:
+            - configMapRef:
+                name: obzly-control-plane-config
+            - secretRef:
+                name: obzly-control-plane-secrets
+          # No volumeMounts/volumes: a control plane has no PVC (see this
+          # file's own doc comment).
+          startupProbe:
+            httpGet:
+              path: /api/v1/system/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 42
+          readinessProbe:
+            httpGet:
+              path: /api/v1/system/ready
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/system/live
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

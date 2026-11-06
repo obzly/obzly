@@ -1,0 +1,194 @@
+# Local end-to-end reference for ARCHITECTURE.md's "Multi-site: control
+# plane and Sites": one control plane fronting an independent Site (add
+# more by copying the site-a block), each with its own Postgres+Valkey (a Site never shares any database with the
+# control plane or with another Site - see the architecture doc's identity
+# model section). Meant for trying the feature out locally, not as a
+# production shape - see docker-compose.control-plane.yml.example for
+# that, and enroll your EXISTING docker-compose.yml/docker-compose.ha.yml
+# install as a Site by uncommenting its own multi-site env block instead
+# of replacing it with this file.
+#
+# Usage:
+#   1. cp deploy/docker/docker-compose.multisite.yml.example docker-compose.yml
+#   2. cp deploy/docker/.env.example .env, set POSTGRES_PASSWORD
+#   3. docker compose up -d --build
+#   4. Sign in at http://localhost:4005 (control plane) as `superadmin` (the control plane's bootstrap
+#      admin (see the "Password reset" section of the main README for how
+#      to find/set it), open Obzly settings → Sites, register site-a (and any
+#      copies) (api_url http://site-a:4005 - SITE_ALLOW_
+#      INSECURE_URLS below permits http:// for this local, internal-
+#      network-only example), "check connection" on each, then grant
+#      yourself ADMIN on each Site.
+#   5. Pick a Site in the top bar and use it exactly as a single-site
+#      install - ingest logs/traces/metrics into each Site directly
+#      (they each still receive ingest on their own port, unproxied - see
+#      ARCHITECTURE.md's non-goals: ingest never goes through the control
+#      plane) using that Site's own API key.
+#
+# Every service below shares one Postgres/Valkey PER ROLE (control plane,
+# each Site) rather than one shared pair for all - a Site's
+# identity/projects/plans/API keys/audit log are its own, never the
+# control plane's, so sharing a database between them would be actively
+# wrong, not just wasteful.
+
+services:
+  # ---------------------------------------------------------------------
+  # Control plane
+  # ---------------------------------------------------------------------
+  cp-postgres:
+    image: postgres:18-alpine
+    container_name: obzly-cp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: obzly
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env - see .env.example}
+    volumes:
+      - ./obzly-data/cp-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  cp-valkey:
+    image: valkey/valkey:9.2-alpine
+    container_name: obzly-cp-valkey
+    restart: unless-stopped
+    volumes:
+      - ./obzly-data/cp-valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly-control-plane
+    restart: unless-stopped
+    ports:
+      - "4005:4005"
+    volumes:
+      - ./obzly-data/control-plane:/obzly-data
+    environment:
+      SERVICE_MODE: control-plane
+      ENV_MODE: production
+      DATABASE_DSN: "host=cp-postgres user=postgres password=${POSTGRES_PASSWORD} dbname=obzly port=5432 sslmode=disable"
+      VALKEY_HOST: cp-valkey
+      VALKEY_PORT: "6379"
+      VALKEY_IS_SSL: "false"
+      # PUBLIC_URL is this control plane's own browser-facing origin - it
+      # becomes the `iss` of every assertion it signs, which each Site
+      # verifies against ITS OWN CONTROL_PLANE_ISSUER below (they must
+      # match character for character). http://localhost:4005 only works
+      # because this is a local, single-host example reached via
+      # localhost - a real deployment's PUBLIC_URL is wherever the
+      # browser actually reaches it (its own domain behind your reverse
+      # proxy/ingress).
+      PUBLIC_URL: "http://localhost:4005"
+      # Lets Sites be registered with http:// api_urls - fine on this
+      # compose's internal network, never in a real deployment reachable
+      # from the internet.
+      SITE_ALLOW_INSECURE_URLS: "true"
+      # Left unset on purpose: a control plane's bootstrap admin defaults
+      # to "superadmin" (a Site's stays "admin"), so the two break-glass
+      # accounts can't shadow each other - a central account is matched to
+      # a Site's local account by email, and a Site's root admin is never
+      # linkable. Set its password from the bootstrap token in this
+      # container's logs.
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+    depends_on:
+      cp-postgres:
+        condition: service_healthy
+      cp-valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:$${HTTP_PORT:-4005}/api/v1/system/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # ---------------------------------------------------------------------
+  # site-a - add site-b (and more) by copying this whole block, its own
+  # postgres/valkey pair, and a unique container_name/SITE_ID/volume path.
+  # ---------------------------------------------------------------------
+  site-a-postgres:
+    image: postgres:18-alpine
+    container_name: obzly-site-a-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: obzly
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env - see .env.example}
+    volumes:
+      - ./obzly-data/site-a-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  site-a-valkey:
+    image: valkey/valkey:9.2-alpine
+    container_name: obzly-site-a-valkey
+    restart: unless-stopped
+    volumes:
+      - ./obzly-data/site-a-valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  site-a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly-site-a
+    restart: unless-stopped
+    # No `ports:` - a Site's query/admin API is reached only through the
+    # control plane's reverse proxy on the internal compose network
+    # (ARCHITECTURE.md: "the query/admin surface" is what the proxy
+    # hides). `expose:` publishes the ingest ports to other containers on
+    # this network without publishing them to the host - a real
+    # deployment instead publishes them on the host/ingress the same way
+    # docker-compose.yml.example's obzly service always has, since ingest
+    # stays regional and reachable by collectors regardless.
+    expose:
+      - "4005"
+      - "4317"
+    volumes:
+      - ./obzly-data/site-a:/obzly-data
+    environment:
+      ENV_MODE: production
+      DATABASE_DSN: "host=site-a-postgres user=postgres password=${POSTGRES_PASSWORD} dbname=obzly port=5432 sslmode=disable"
+      VALKEY_HOST: site-a-valkey
+      VALKEY_PORT: "6379"
+      VALKEY_IS_SSL: "false"
+      LOGS_DATA_DIR: /obzly-data/segments
+      OTLP_GRPC_PORT: "4317"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+      # --- Multi-site: enrolls this Site with the control plane above. ---
+      SITE_ID: "site-a"
+      SITE_NAME: "Site A"
+      CONTROL_PLANE_ISSUER: "http://localhost:4005"
+      # The control plane's JWKS is reached over the internal network
+      # (its own container/service name), NOT the public-facing issuer
+      # string above - the two are allowed to differ, and normally will
+      # in a real deployment.
+      CONTROL_PLANE_JWKS_URL: "http://control-plane:4005/.well-known/jwks.json"
+    depends_on:
+      site-a-postgres:
+        condition: service_healthy
+      site-a-valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:$${HTTP_PORT:-4005}/api/v1/system/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s

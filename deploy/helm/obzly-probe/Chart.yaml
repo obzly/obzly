@@ -1,0 +1,9 @@
+apiVersion: v2
+name: obzly-probe
+description: Obzly synthetic monitoring probe - runs the control plane's monitors from this cluster and sends results to a Site.
+type: application
+# The chart's own version; appVersion is the image tag it deploys by default.
+version: 0.2.2
+appVersion: "0.57.0"
+home: https://obzly.com
+keywords: [observability, synthetic-monitoring, uptime, opentelemetry]

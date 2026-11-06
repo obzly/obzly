@@ -1,0 +1,175 @@
+# Standalone-VM setup (build from source) - run these from the repo root,
+# not from inside deploy/docker/: docker compose needs its build context
+# (context: . below) to be the repo root, where the Dockerfile lives.
+#   1. cp deploy/docker/docker-compose.yml.example docker-compose.yml
+#   2. cp deploy/docker/.env.example .env   (then set a real
+#      POSTGRES_PASSWORD - see that file; `openssl rand -hex 16` is a good
+#      way to generate one)
+#   3. docker compose up -d --build
+#
+# Postgres and Valkey run as their own containers — see ARCHITECTURE.md for
+# why (short version: OpenSearch/JVM is gone, and Postgres+Valkey are
+# lightweight enough that bundling them into the app image stopped being
+# worth the tradeoffs).
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: obzly-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: obzly
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env - see .env.example}
+    volumes:
+      # Postgres 18+ images store data one level up from older 17-and-earlier
+      # images (they manage a version-specific subdirectory internally, to
+      # support in-place major-version upgrades) - mounting at the old
+      # .../data path makes the container refuse to start.
+      - ./obzly-data/pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:9.2-alpine
+    container_name: obzly-valkey
+    restart: unless-stopped
+    volumes:
+      - ./obzly-data/valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional cold-tier object storage (ARCHITECTURE.md) - MinIO here as a
+  # self-hosted S3-compatible target for local/test use; point
+  # OBJECT_STORAGE_URL at real AWS S3 (or GCS/Azure) instead for
+  # production. Uncomment this service, minio-init below, and the
+  # OBJECT_STORAGE_URL/AWS_* lines in the obzly service's environment to
+  # enable it - local-disk-only (the default) works fine without any of
+  # this.
+  # minio:
+  #   image: quay.io/minio/minio:latest
+  #   container_name: obzly-minio
+  #   restart: unless-stopped
+  #   command: server /data --console-address ":9001"
+  #   environment:
+  #     MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+  #   volumes:
+  #     - ./obzly-data/minio:/data
+  #   ports:
+  #     - "127.0.0.1:9001:9001" # MinIO console, loopback-only - see the HA
+  #       # compose example's own minio service for why not 0.0.0.0; reach
+  #       # it remotely via an SSH tunnel if needed.
+  #   healthcheck:
+  #     test: ["CMD", "mc", "ready", "local"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #
+  # # s3blob (the gocloud.dev driver obzly uses for OBJECT_STORAGE_URL) never
+  # # creates the bucket itself - it has to already exist. This runs once,
+  # # creates it if missing, and exits; obzly's own depends_on below just
+  # # waits for MinIO itself, not this container, since a completed
+  # # (non-restarting) container never reports "healthy".
+  # minio-init:
+  #   image: quay.io/minio/minio:latest # ships mc; the standalone mc image may not be pullable
+  #   container_name: obzly-minio-init
+  #   depends_on:
+  #     minio:
+  #       condition: service_healthy
+  #   entrypoint: >
+  #     /bin/sh -c "
+  #     mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+  #     mc mb --ignore-existing local/obzly-segments
+  #     "
+  #   environment:
+  #     MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+
+  obzly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obzly
+    restart: unless-stopped
+    ports:
+      - "4005:4005"
+      # OTLP gRPC logs receiver (ARCHITECTURE.md, Phase 3). OTLP/HTTP needs
+      # no separate port - it shares 4005 above (POST /v1/logs).
+      - "4317:4317"
+    volumes:
+      - ./obzly-data:/obzly-data
+    environment:
+      ENV_MODE: production
+      DATABASE_DSN: "host=postgres user=postgres password=${POSTGRES_PASSWORD} dbname=obzly port=5432 sslmode=disable"
+      VALKEY_HOST: valkey
+      VALKEY_PORT: "6379"
+      VALKEY_IS_SSL: "false"
+      LOGS_DATA_DIR: /obzly-data/segments
+      # Leave unset for local-disk-only. See backend/internal/config/config.go's
+      # ObjectStorageURL doc comment for the URL format (including the MinIO
+      # example) and what else enabling it needs - uncomment the minio/
+      # minio-init services above too if using them.
+      OBJECT_STORAGE_URL: ""
+      # Only read if OBJECT_STORAGE_URL is set - uncomment along with it.
+      # For the bundled MinIO service above: reuse MINIO_ROOT_USER/PASSWORD
+      # from .env as these too (MinIO's root user works like an AWS access
+      # key/secret pair for this purpose).
+      # AWS_ACCESS_KEY_ID: "${MINIO_ROOT_USER}"
+      # AWS_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD}"
+      OTLP_GRPC_PORT: "4317"
+      # CIDR(s) of a reverse proxy / load balancer in front of obzly (e.g.
+      # the Docker network it shares with Nginx Proxy Manager or Traefik,
+      # like "172.18.0.0/16"). Unset = nothing trusted: every client shows
+      # up as the proxy's IP in logs, the audit log, rate limiting and
+      # project IP allow-lists. Never 0.0.0.0/0 - anyone could fake their IP.
+      # TRUSTED_PROXIES: "172.18.0.0/16"
+      # Product website linked from the navbar/docs links in the UI. Leave
+      # unset to keep the built-in default; set it to point those links at
+      # your own site/fork instead.
+      WEBSITE_URL: ""
+      # Email for the bootstrap super-admin account. Leave unset to keep
+      # the historical default "admin"; set it (in .env) to use a real
+      # email instead - changing it later renames the existing account,
+      # it doesn't create a second admin.
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+      # --- Multi-site (ARCHITECTURE.md "Multi-site: control plane and
+      # Sites") - all optional. Uncomment to enroll THIS install as a
+      # "Site" behind a separately-deployed control plane; leave
+      # commented out and this install behaves exactly as a standalone
+      # single-site instance always has. See
+      # docker-compose.multisite.yml.example for a full local
+      # control-plane + Sites reference setup, and
+      # docker-compose.control-plane.yml.example for the control plane's
+      # own compose file.
+      # SITE_ID: "site-a"
+      # SITE_NAME: "Site A"
+      # CONTROL_PLANE_ISSUER: "https://control-plane.example.com"
+      # Only needed if the control plane's JWKS is reachable at a
+      # different address than CONTROL_PLANE_ISSUER (e.g. this Site talks
+      # to it over an internal network while the issuer string above is
+      # the control plane's public origin). Defaults to
+      # "<CONTROL_PLANE_ISSUER>/.well-known/jwks.json".
+      # CONTROL_PLANE_JWKS_URL: ""
+      # Comma-separated CIDRs the control plane's outbound calls arrive
+      # from - restricts POST /api/v1/auth/site/exchange to just that
+      # source. Optional; the assertion's own signature/aud/exp checks
+      # always apply regardless.
+      # CONTROL_PLANE_EGRESS_CIDRS: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:$${HTTP_PORT:-4005}/api/v1/system/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s

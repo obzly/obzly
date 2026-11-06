@@ -1,0 +1,116 @@
+# SERVICE_MODE=api - request-serving tier (REST, OTLP, UI). Safe to run as
+# N replicas and to RollingUpdate, unlike ../deployment.yaml's single
+# replica - see ARCHITECTURE.md's "High availability" section. This is
+# the tier an HPA should target.
+#
+# No PersistentVolumeClaim: ingested batches are acknowledged once the
+# broker (broker.yaml) holds them and obzly-worker writes them, so this pod
+# keeps nothing that isn't elsewhere. Its emptyDir holds the query-time tail
+# and its cache of segments downloaded from object storage (OBJECT_STORAGE_URL
+# in ../common/configmap.yaml - REQUIRED here). It coordinates queries: with
+# obzly-querier running it sends them the reading, otherwise it reads itself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obzly-api
+  namespace: obzly
+  labels:
+    app: obzly-api
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: obzly-api
+  template:
+    metadata:
+      labels:
+        app: obzly-api
+      # Prometheus scrapes METRICS_ADDR (:9464) on the pod directly; no
+      # Service exposes it, so it never reaches the load balancer.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: obzly
+      # Above SHUTDOWN_DRAIN_SECONDS + the HTTP (10s) and gRPC (10s)
+      # shutdown deadlines + the final segment flush.
+      terminationGracePeriodSeconds: 60
+      # See ../deployment.yaml's comment on this pin.
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: obzly
+          image: ghcr.io/obzly/obzly:latest
+          imagePullPolicy: Always
+          # Starts as root only to chown /obzly-data and write
+          # runtime-config.js, then drops to uid 1000 with no capabilities.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: SERVICE_MODE
+              value: "api"
+            # Durable ingest through the broker (broker.yaml).
+            - name: INGEST_BUFFER
+              value: "jetstream"
+            - name: NATS_URL
+              value: "nats://obzly-broker.obzly.svc:4222"
+            # Keep serving for 15s after SIGTERM with /system/ready failing,
+            # so the Service/LB stops routing here before connections close.
+            - name: SHUTDOWN_DRAIN_SECONDS
+              value: "15"
+          ports:
+            - name: http
+              containerPort: 4005
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: metrics
+              containerPort: 9464
+          envFrom:
+            - configMapRef:
+                name: obzly-config
+            - secretRef:
+                name: obzly-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /obzly-data
+          # Mirrors ../deployment.yaml's probe budget - migrations run on
+          # every startup (leader-locked across every replica of every
+          # SERVICE_MODE, api and worker alike - see
+          # internal/util/leaderlock) and need to complete before any
+          # replica is reachable.
+          startupProbe:
+            httpGet:
+              path: /api/v1/system/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 42
+          readinessProbe:
+            httpGet:
+              path: /api/v1/system/ready
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/system/live
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 20Gi

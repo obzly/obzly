@@ -1,0 +1,47 @@
+{{- if eq .Values.mode "control-plane" }}
+{{- $fullname := include "obzly.fullname" . }}
+{{- $ctx := dict "root" . "component" "control-plane" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
+    spec:
+      {{- include "obzly.podSpec" (dict "root" . "tier" .Values.controlPlane) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ add .Values.controlPlane.drainSeconds 45 }}
+      containers:
+        - name: obzly
+          {{- include "obzly.containerBase" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 4005
+            {{- include "obzly.metricsPort" . | nindent 12 }}
+          {{- include "obzly.httpProbes" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+{{- if .Values.controlPlane.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "obzly.labels" $ctx | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.controlPlane.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "obzly.selectorLabels" $ctx | nindent 6 }}
+{{- end }}
+{{- end }}

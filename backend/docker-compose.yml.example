@@ -1,0 +1,72 @@
+version: "3.8"
+
+services:
+  # For development only, because this DB
+  # exposes it's port to the public.
+  #
+  # Host ports are overridable (DEV_DB_HOST_PORT/DEV_VALKEY_HOST_PORT below) -
+  # local dev keeps the fixed, memorable defaults, but CI (a shared
+  # self-hosted runner, not a fresh VM per run) sets these to "0" so Docker
+  # picks any free host port instead of colliding with whatever else
+  # happens to be running on the same host. See ci-release.yml's
+  # test-backend job for how the actually-assigned port then gets read
+  # back for the test run's own DATABASE_DSN/VALKEY_PORT.
+  dev-db:
+    env_file:
+      - .env
+    image: postgres:18-alpine
+    ports:
+      - "${DEV_DB_HOST_PORT:-5437}:5437"
+    environment:
+      - POSTGRES_DB=${DEV_DB_NAME}
+      - POSTGRES_USER=${DEV_DB_USERNAME}
+      - POSTGRES_PASSWORD=${DEV_DB_PASSWORD}
+    volumes:
+      # Postgres 18+ images store data one level up from older 17-and-earlier
+      # images - mounting at the old .../data path makes the container
+      # refuse to start (see deploy/docker/docker-compose.yml.example's
+      # identical comment).
+      # A named volume, not ./pgdata: Postgres makes its data dir 0700/
+      # postgres-owned, and a bind mount inside this Go module tree makes
+      # every `go list ./...` (go mod tidy, golangci-lint, the pre-push
+      # hook) fail with "permission denied" walking into it.
+      - dev-pgdata:/var/lib/postgresql
+    # No fixed container_name: it would collide the same way the old fixed
+    # host ports did if two runs ever overlap on the same shared
+    # self-hosted CI host (a literal name, unlike ports, isn't fixable via
+    # an env var override - Compose always honors it exactly). Use
+    # `docker compose -f docker-compose.yml.example exec/logs dev-db`
+    # instead of bare `docker exec/logs dev-db` - that resolves by service
+    # name within whatever project this compose file is running as,
+    # regardless of the container's actual generated name.
+    command: -p 5437
+    shm_size: 10gb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DEV_DB_USERNAME} -p 5437"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Valkey for caching and rate limiting
+  dev-valkey:
+    image: valkey/valkey:9.2-alpine
+    ports:
+      - "${DEV_VALKEY_HOST_PORT:-6379}:6379"
+    volumes:
+      - dev-valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # OpenSearch used to run here too. It's gone along with the OpenSearch
+  # backend itself — logs now live in local Parquet files (see
+  # internal/storage/segments), so there's no separate search service to
+  # run for tests.
+
+volumes:
+  dev-pgdata:
+  dev-valkey-data:

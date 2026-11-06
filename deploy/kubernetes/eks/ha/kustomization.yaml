@@ -1,0 +1,21 @@
+# HA variant of ../kustomization.yaml - shares the same namespace/
+# serviceaccount/configmap/valkey resources from the parent directory, but
+# swaps the single-replica ../deployment.yaml + ../pvc.yaml + ../service.yaml
+# for this directory's roles: the obzly-broker StatefulSet (JetStream ingest
+# buffer) and the obzly-api, obzly-worker and obzly-querier Deployments. Don't
+# apply this alongside the parent kustomization against the same
+# namespace - pick one or the other (see ../README.md and this
+# directory's README.md).
+#
+# secret.yaml is still applied separately - see ../README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../common
+  - broker.yaml
+  - deployment-api.yaml
+  - deployment-worker.yaml
+  - deployment-querier.yaml
+  - networkpolicy-querier.yaml
+  - networkpolicy-broker.yaml
+  - service.yaml

@@ -1,0 +1,8 @@
+mode: single
+secrets:
+  existingSecret: obzly-secrets
+valkey:
+  enabled: false
+  external:
+    host: valkey.example.internal
+    ssl: true

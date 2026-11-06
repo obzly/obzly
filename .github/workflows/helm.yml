@@ -1,0 +1,56 @@
+name: Helm chart
+
+# ci-release.yml ignores deploy/**, so the chart has its own check.
+on:
+  push:
+    branches: ["main"]
+    paths: ["deploy/helm/**", ".github/workflows/helm.yml"]
+  pull_request:
+    paths: ["deploy/helm/**", ".github/workflows/helm.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-helm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Every mode renders, passes helm lint and validates against the
+      # Kubernetes schemas (strict: unknown fields fail), the PodMonitor
+      # against its CRD.
+      - name: Lint, render and validate each mode
+        run: |
+          set -euo pipefail
+          out=$(mktemp -d)
+          for chart in obzly obzly-probe; do
+            for values in deploy/helm/$chart/ci/*-values.yaml; do
+              mode=$(basename "$values" -values.yaml)
+              docker run --rm -v "$PWD/deploy/helm:/charts" -w /charts alpine/helm:3.19.0 \
+                lint "$chart" -f "$chart/ci/$mode-values.yaml"
+              docker run --rm -v "$PWD/deploy/helm:/charts" -w /charts alpine/helm:3.19.0 \
+                template "$chart" "$chart" -n obzly -f "$chart/ci/$mode-values.yaml" > "$out/$chart-$mode.yaml"
+            done
+          done
+          docker run --rm -v "$out:/work" ghcr.io/yannh/kubeconform:v0.7.0 -strict -summary \
+            -kubernetes-version 1.31.0 -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            /work
+
+      # The chart's guards: each of these must fail to render.
+      - name: Refuse invalid values
+        run: |
+          set -uo pipefail
+          refuse() {
+            if docker run --rm -v "$PWD/deploy/helm:/charts" -w /charts alpine/helm:3.19.0 \
+              template obzly obzly "$@" > /dev/null 2>&1; then
+              echo "rendered but should have failed: $*"; exit 1
+            fi
+          }
+          refuse --set secrets.databaseDsn=x
+          refuse -f obzly/ci/ha-values.yaml --set broker.replicas=2
+          refuse --set mode=control-plane --set secrets.databaseDsn=x
+          refuse -f obzly/ci/ha-values.yaml --set secrets.databaseDsn=

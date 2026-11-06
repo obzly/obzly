@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: obzly-control-plane-valkey
+  namespace: obzly-control-plane
+spec:
+  selector:
+    app: obzly-control-plane-valkey
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: 6379

@@ -1,0 +1,19 @@
+# ClusterIP - no Ingress/LoadBalancer here, wire this up to your own
+# ingress controller (e.g. AWS Load Balancer Controller + ALB) separately,
+# same reasoning as the "no host ports" convention elsewhere in this
+# project: this repo doesn't know your domain/TLS/controller setup.
+apiVersion: v1
+kind: Service
+metadata:
+  name: obzly
+  namespace: obzly
+spec:
+  selector:
+    app: obzly
+  ports:
+    - name: http
+      port: 4005
+      targetPort: http
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc

@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "obzly-probe.fullname" . }}
+  labels:
+    {{- include "obzly-probe.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  # Instances share the group's monitors, so a rolling update is safe.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "obzly-probe.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "obzly-probe.serviceAccountName" . }}
+      # The cloud identity webhooks (IRSA, Azure workload identity) mount their
+      # own tokens; the Kubernetes API token isn't needed.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: probe
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: OBZLY_CONTROL_PLANE_URL
+              value: {{ required "controlPlaneUrl is required" .Values.controlPlaneUrl | quote }}
+            - name: OBZLY_PROBE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "obzly-probe.secretName" . }}
+                  key: OBZLY_PROBE_TOKEN
+            - name: OBZLY_PROBE_MAX_CONCURRENCY
+              value: {{ .Values.maxConcurrency | quote }}
+            - name: OBZLY_PROBE_TASK_WAIT
+              value: {{ .Values.taskWait | quote }}
+            - name: OBZLY_PROBE_HEALTH_ADDR
+              value: ":8080"
+            # The instance's name in its probe group.
+            - name: OBZLY_PROBE_INSTANCE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with .Values.denyCidrs }}
+            - name: OBZLY_PROBE_DENY_CIDRS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.envAllow }}
+            - name: OBZLY_PROBE_ENV_ALLOW
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              {{- if .Values.netRaw }}
+              add: ["NET_RAW"]
+              {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/obzly-probe
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        {{- if .Values.affinity }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: topology.kubernetes.io/zone
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ .Chart.Name }}
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+            - weight: 50
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ .Chart.Name }}
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- end }}

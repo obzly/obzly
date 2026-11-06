@@ -1,0 +1,203 @@
+# Obzly self-observability: recording rules and alerts for the SLOs in
+# ARCHITECTURE.md "Scale architecture" (Phase 14 item 7). Plain Prometheus
+# rule-file format: load it with `rule_files:`, or wrap the `groups:` list in
+# a PrometheusRule resource for the Prometheus Operator.
+#
+# Scrape every Obzly pod on METRICS_ADDR (:9464, /metrics); the Kubernetes
+# manifests in deploy/kubernetes/eks carry prometheus.io/* annotations for it.
+# Cluster-wide gauges (obzly_catalog_*, obzly_jetstream_*) are reported by
+# every sampling replica, so they aggregate with max(), never sum().
+#
+# Ingest-to-queryable is measured on the replica that flushed the segment.
+groups:
+  - name: obzly-slo-recording
+    interval: 30s
+    rules:
+      - record: obzly:ingest_ack_latency_seconds:p99_5m
+        expr: |
+          histogram_quantile(0.99, sum by (le) (
+            rate(obzly_http_request_duration_seconds_bucket{method="POST",route=~"/api/v1/logs/receiving/:projectId|/v1/(logs|traces|metrics)|/api/v1/write"}[5m])
+            or
+            rate(obzly_grpc_request_duration_seconds_bucket{method=~"/opentelemetry.proto.collector.*"}[5m])
+          ))
+      - record: obzly:ingest_to_queryable_seconds:p95_15m
+        expr: histogram_quantile(0.95, sum by (le) (rate(obzly_segment_flush_lag_seconds_bucket[15m])))
+      - record: obzly:query_latency_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95, sum by (le) (
+            rate(obzly_http_request_duration_seconds_bucket{route=~"/api/v1/logs/query/(execute|execute-sql|patterns)/:projectId|/api/v1/traces/query/(list/:projectId|get/:projectId/:traceId)|/api/v1/metrics/query/promql/:projectId|/api/v1/metrics/:projectId/api/v1/query(_range)?"}[5m])
+          ))
+      - record: obzly:ingest_accepted_rows:rate5m
+        expr: sum by (signal) (rate(obzly_ingest_accepted_rows_total[5m]))
+      - record: obzly:object_store_requests:rate5m
+        expr: sum by (op, result) (rate(obzly_object_store_requests_total[5m]))
+
+  - name: obzly-slo-alerts
+    rules:
+      - alert: ObzlyIngestAckLatencyHigh
+        expr: obzly:ingest_ack_latency_seconds:p99_5m > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ingest ack p99 is above the 500 ms SLO
+          description: p99 over 5m is {{ $value | humanizeDuration }} across REST, OTLP and remote-write receivers.
+
+      - alert: ObzlyIngestServerErrors
+        expr: |
+          sum(rate(obzly_http_request_duration_seconds_count{route=~"/api/v1/logs/receiving/:projectId|/v1/(logs|traces|metrics)|/api/v1/write",status=~"5.."}[5m]))
+            / sum(rate(obzly_http_request_duration_seconds_count{route=~"/api/v1/logs/receiving/:projectId|/v1/(logs|traces|metrics)|/api/v1/write"}[5m]))
+            > 0.01
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than 1% of ingest requests fail with 5xx
+
+      - alert: ObzlyIngestToQueryableSlow
+        expr: obzly:ingest_to_queryable_seconds:p95_15m > 120
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ingested rows take more than 2 minutes (p95) to become queryable
+
+      - alert: ObzlySegmentFlushFailing
+        expr: sum by (stream) (increase(obzly_segment_flush_rows_total{result="error"}[10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Segment flushes are failing for {{ $labels.stream }}; the rows in a failed flush are lost
+          description: "{{ $value }} rows dropped in the last 10 minutes. Check disk space and the writer logs."
+
+      - alert: ObzlyIngestBufferFilling
+        expr: |
+          max by (stream) (obzly_jetstream_stream_bytes)
+            / max by (stream) (obzly_jetstream_stream_max_bytes > 0) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The {{ $labels.stream }} ingest buffer is over 80% full
+          description: At 100% new batches are rejected until segment writers catch up; add workers or check them.
+
+      - alert: ObzlyIngestBufferReplicaLagging
+        expr: max by (stream) (obzly_jetstream_stream_replicas_lagging) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: A replica of the {{ $labels.stream }} ingest buffer is offline or behind
+          description: With R3, losing one more broker would stop the stream accepting batches.
+
+      - alert: ObzlyQueryLatencyHigh
+        expr: obzly:query_latency_seconds:p95_5m > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Query p95 is above the 5 s SLO
+
+      - alert: ObzlyQueryFragmentsFailing
+        expr: |
+          sum(rate(obzly_query_fragments_total{result="error"}[10m]))
+            / sum(rate(obzly_query_fragments_total[10m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Over 5% of query fragments are failing
+          description: Remote failures are retried elsewhere, then in-process; local ones fail the query. Check the querier and api logs.
+
+      - alert: ObzlyQueryExecutorsFailing
+        expr: sum by (instance) (rate(obzly_query_executor_fragments_total{result="error"}[10m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Query executor {{ $labels.instance }} is failing fragments"
+          description: Coordinators retry its fragments elsewhere, so queries slow down rather than fail.
+
+      - alert: ObzlyCompactionStalled
+        expr: |
+          time() - max by (task) (obzly_leader_task_last_success_timestamp_seconds{task=~".*-compaction"}) > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.task }} has not completed for over 15 minutes (runs every 5)"
+
+      - alert: ObzlyCompactionBacklogGrowing
+        expr: |
+          max by (stream) (obzly_catalog_small_segments) > 1000
+            and max by (stream) (deriv(obzly_catalog_small_segments[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Small-segment backlog for {{ $labels.stream }} is above 1000 and growing
+
+      - alert: ObzlyUploadLagHigh
+        expr: max by (stream) (obzly_catalog_oldest_pending_upload_age_seconds) > 900
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The oldest {{ $labels.stream }} segment has waited over 15 minutes for upload to object storage
+          description: A segment not yet uploaded exists only on one replica's local disk.
+
+      - alert: ObzlyObjectStoreErrors
+        expr: |
+          sum by (op) (rate(obzly_object_store_requests_total{result="error"}[5m]))
+            / sum by (op) (rate(obzly_object_store_requests_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5% of object storage {{ $labels.op }} requests fail
+
+      - alert: ObzlyPostgresPoolSaturated
+        expr: |
+          max by (instance) (go_sql_in_use_connections{db_name="postgres"})
+            / max by (instance) (go_sql_max_open_connections{db_name="postgres"} > 0) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} uses over 90% of its Postgres connection pool"
+
+      - alert: ObzlyTargetDown
+        expr: up{job=~".*obzly.*"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus cannot scrape {{ $labels.instance }}
+
+      - alert: ObzlyAlertNotificationsFailing
+        expr: sum(increase(obzly_alert_notifications_total{result="failed"}[30m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Alert notifications were given up on after every retry
+          description: A channel kept failing (8 attempts with backoff). Check the rule's channel in the Alerts tab and the worker log.
+
+      - alert: ObzlyIntegrityAuditFailures
+        expr: max(obzly_integrity_audit_failures) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The integrity audit found {{ $value }} sampled segments missing, resized or unreadable in object storage
+          description: See Settings > Upgrade status for which, then run `obzly reconcile` (docs/runbooks/backup-restore.md).
+
+      - alert: ObzlyIntegrityAuditStale
+        # Only once an audit has run: installs without object storage never do.
+        expr: |
+          max(obzly_integrity_audit_last_run_timestamp_seconds) > 0
+            and time() - max(obzly_integrity_audit_last_run_timestamp_seconds) > 8 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: No integrity audit has finished in over 8 days
