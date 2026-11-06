@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1573,7 +1572,7 @@ func mountFrontend(ginApp *gin.Engine) {
 func frontendFallback(staticDir string, isControlPlane bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Cleaned against "/" so ".." can't climb out of staticDir.
-		requestPath := path.Clean("/" + c.Request.URL.Path)
+		requestPath := filepath.Clean("/" + c.Request.URL.Path)
 		c.Request.URL.Path = requestPath
 		isPageRequest := c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead
 		if strings.HasPrefix(requestPath, "/v1/") && isControlPlane {
