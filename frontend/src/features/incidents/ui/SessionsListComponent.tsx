@@ -62,7 +62,7 @@ export const SessionsListComponent = ({ projectId, contentHeight }: Props): Reac
       title: 'Service',
       dataIndex: 'serviceName',
       render: (value: string) => (
-        <Tag color={colorForService(value)} className="!text-white">
+        <Tag color={colorForService(value)} variant="solid">
           {value}
         </Tag>
       ),

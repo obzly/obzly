@@ -29,6 +29,26 @@ npm run lint && npm run format && npm test && npm run build
   and `OBZLY_PASSWORD` (a non-admin account - admins need MFA); skipped when unset. Browsers come
   from `npx playwright install`, or run it in `mcr.microsoft.com/playwright:v1.63.0-noble`.
 
+## Live demo
+
+`npm run dev:demo` runs the UI with no backend at all, and `npm run build:demo` builds the live demo
+published at [demo.obzly.com](https://demo.obzly.com) by `.github/workflows/demo.yml` (on every
+release tag, or by hand). In demo mode `src/demo/` patches `fetch` and answers every `/api/v1` call
+in the browser:
+
+- Sample data for a fictional shop, Harborline (`src/demo/world.ts`), is generated from the time
+  range by a seeded PRNG, so any range has consistent logs, traces and metrics, with a recurring
+  incident every six hours.
+- What a visitor creates or changes is kept in their browser's localStorage (`obzly_demo_v1`);
+  "Reset demo" clears it. Nothing is sent anywhere.
+- SQL mode runs a real DuckDB (WebAssembly, loaded on first use); PromQL is a built-in subset.
+- Each area's routes live in `src/demo/handlers/<area>.ts`. `src/demo/coverage.test.ts` fails when
+  an `entity/*/api` module calls a URL with no demo handler: add one (or a `notInDemo()` stub) when
+  you add an API call.
+
+Production builds don't contain any of it: `main.tsx` imports `src/demo` only when the build-time
+constant `__OBZLY_DEMO__` is true (`vite --mode demo`).
+
 ## Layout (Feature-Sliced Design)
 
 - `src/entity/<name>/` - API modules (`api/*Api.ts`) and types (`model/*.ts`).

@@ -16,8 +16,16 @@ dayjs.extend(relativeTime);
 
 migrateStoredQueryNames();
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const render = () =>
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+
+// The live demo answers API calls in the browser; production builds drop this.
+if (__OBZLY_DEMO__) {
+  import('./demo/install').then(render);
+} else {
+  render();
+}
