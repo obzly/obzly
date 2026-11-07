@@ -10,6 +10,8 @@
   [![Self Hosted](https://img.shields.io/badge/self--hosted-yes-brightgreen)](#)
   [![Open Source](https://img.shields.io/badge/open%20source-❤️-red)](#)
 
+  <p><b><a href="https://demo.obzly.com">Try the live demo</a></b>: the real UI with sample data, running in your browser</p>
+
   <p>
     <a href="#-features">Features</a> •
     <a href="#-enterprise-grade-logging-and-monitoring">Enterprise</a> •

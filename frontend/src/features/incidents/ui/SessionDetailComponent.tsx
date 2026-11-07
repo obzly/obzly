@@ -93,7 +93,7 @@ const SignalRow = ({ signal }: { signal: SignalDetail }): React.JSX.Element => {
               {span?.name ?? 'Unnamed span'}
             </span>
             {span && (
-              <Tag color={colorForService(span.serviceName)} className="!text-white">
+              <Tag color={colorForService(span.serviceName)} variant="solid">
                 {span.serviceName}
               </Tag>
             )}
@@ -175,7 +175,7 @@ export const SessionDetailComponent = ({
         <>
           <div className="mb-4 rounded border border-gray-200 p-4 dark:border-gray-700">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <Tag color={colorForService(session.serviceName)} className="!text-white">
+              <Tag color={colorForService(session.serviceName)} variant="solid">
                 {session.serviceName}
               </Tag>
               <Tag color={triggerTypeColor(session.triggerType)}>
