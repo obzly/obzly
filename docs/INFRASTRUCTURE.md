@@ -2,7 +2,8 @@
 
 Status: approved 2026-10-25 with its UI mock. The **basic inventory** ships in v0.55.0 with the
 pending fixes, Synthetics and shared notification channels. **Cloud connections** and the cloud
-inventory follow in v0.56.0; cost and posture uses reuse the same connections later.
+inventory follow in v0.56.0; cost and posture uses reuse the same connections later - see
+[`CLOUD_COST_POSTURE.md`](CLOUD_COST_POSTURE.md).
 
 Icons: the UI uses the official Kubernetes community icons (CC BY 4.0), AWS Architecture Icons and
 Azure public service icons, credited in `NOTICE`.
@@ -247,8 +248,7 @@ that provider's options, names and templates.
 | Use | AWS | Azure |
 | --- | --- | --- |
 | Inventory | `ViewOnlyAccess`, plus `elasticloadbalancing:DescribeTargetHealth`, `tag:GetResources`, `eks:DescribeCluster`, `ec2:DescribeInstanceStatus` | `Reader` |
-| Cost and billing | `ce:GetCostAndUsage`, `ce:GetCostForecast`, `ce:GetDimensionValues`, `ce:GetAnomalies`, `budgets:ViewBudget`, `cur:DescribeReportDefinitions`, plus read on the Data Exports bucket if one is used | `Cost Management Reader` (plus `Billing Reader` at billing-account scope) |
-| Security posture | `SecurityAudit`, plus `securityhub:Get*` / `List*` and `guardduty:Get*` / `List*` when those services are on | `Security Reader` |
+| Cost and billing, security posture | See [Permissions per use](CLOUD_COST_POSTURE.md#permissions-per-use) in `CLOUD_COST_POSTURE.md` | Same |
 
 Every permission is read-only. Nothing in a template lets Obzly change a resource or read data in
 buckets, databases or secrets, apart from the billing export bucket when one is chosen.
