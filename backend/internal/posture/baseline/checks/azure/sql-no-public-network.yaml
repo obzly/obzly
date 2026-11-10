@@ -1,0 +1,19 @@
+id: azure-sql-no-public-network
+provider: azure
+resource: azure_sql_server
+title: Azure SQL servers should disable public network access
+severity: high
+control: azure-sql-no-public-network
+standards:
+  - {standard: mcsb, control: NS-2}
+pass: r.public_network_access == "Disabled"
+evidence: [public_network_access]
+remediation:
+  cli: az sql server update --name {name} --resource-group {resourceGroup} --enable-public-network false
+  iac: |
+    // Bicep, on the Microsoft.Sql/servers resource (use private endpoints)
+    properties: { publicNetworkAccess: 'Disabled' }
+  console: SQL server → Security → Networking → Public access → Disable, and connect through private endpoints.
+fixtures:
+  pass: [{public_network_access: Disabled}]
+  fail: [{public_network_access: Enabled}]

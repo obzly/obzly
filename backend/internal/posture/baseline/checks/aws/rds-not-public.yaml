@@ -1,0 +1,20 @@
+id: aws-rds-not-public
+provider: aws
+resource: aws_rds_instance
+title: RDS instances should not be publicly accessible
+severity: critical
+control: RDS.2
+standards:
+  - {standard: aws-fsbp, control: RDS.2}
+  - {standard: cis-aws, control: 2.3.3}
+pass: "!r.publicly_accessible"
+evidence: [publicly_accessible]
+remediation:
+  cli: aws rds modify-db-instance --region {region} --db-instance-identifier {name} --no-publicly-accessible --apply-immediately
+  iac: |
+    # CloudFormation, on the AWS::RDS::DBInstance
+    PubliclyAccessible: false
+  console: RDS → Databases → the instance → Modify → Connectivity → Additional configuration → Not publicly accessible.
+fixtures:
+  pass: [{publicly_accessible: false}]
+  fail: [{publicly_accessible: true}]

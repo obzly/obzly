@@ -1,0 +1,26 @@
+id: aws-rds-encrypted
+provider: aws
+resource: aws_rds_instance
+title: RDS instance storage should be encrypted
+severity: medium
+control: RDS.3
+standards:
+  - {standard: aws-fsbp, control: RDS.3}
+  - {standard: cis-aws, control: 2.3.1}
+pass: r.storage_encrypted
+evidence: [storage_encrypted]
+remediation:
+  cli: |
+    # Encryption can't be turned on in place: snapshot, copy the snapshot encrypted, restore.
+    aws rds create-db-snapshot --region {region} --db-instance-identifier {name} --db-snapshot-identifier {name}-plain
+    aws rds copy-db-snapshot --region {region} --source-db-snapshot-identifier {name}-plain \
+      --target-db-snapshot-identifier {name}-encrypted --kms-key-id alias/aws/rds
+    aws rds restore-db-instance-from-db-snapshot --region {region} \
+      --db-instance-identifier {name}-new --db-snapshot-identifier {name}-encrypted
+  iac: |
+    # CloudFormation, on a new AWS::RDS::DBInstance (replacement)
+    StorageEncrypted: true
+  console: RDS → Snapshots → take a snapshot → Copy snapshot with encryption on → Restore it, then switch clients to the new instance.
+fixtures:
+  pass: [{storage_encrypted: true}]
+  fail: [{storage_encrypted: false}]

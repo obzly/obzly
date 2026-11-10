@@ -1,0 +1,20 @@
+id: aws-ebs-default-encryption
+provider: aws
+resource: aws_ebs_settings
+title: EBS encryption by default should be on in every region
+severity: medium
+control: EC2.7
+standards:
+  - {standard: aws-fsbp, control: EC2.7}
+  - {standard: cis-aws, control: 2.2.1}
+pass: r.default_encryption
+evidence: [default_encryption]
+remediation:
+  cli: aws ec2 enable-ebs-encryption-by-default --region {region}
+  iac: |
+    # Not a CloudFormation resource: run the CLI command once per region, or use an
+    # AWS Config remediation for ec2-ebs-encryption-by-default.
+  console: EC2 → Settings (Data protection and security) → EBS encryption → Manage → Always encrypt new EBS volumes.
+fixtures:
+  pass: [{default_encryption: true}]
+  fail: [{default_encryption: false}]

@@ -264,12 +264,16 @@ func (s *Service) buildProbeConfig(probe *Probe) (*spec.ProbeConfig, string, err
 	if err != nil {
 		return nil, "", err
 	}
+	tags, err := trackedCostTags()
+	if err != nil {
+		return nil, "", err
+	}
 	for _, connection := range connections {
 		destination, ok := destinations[connection.DestinationID]
 		if !ok {
 			continue
 		}
-		config.Cloud = append(config.Cloud, connection.wire())
+		config.Cloud = append(config.Cloud, withTrackedTags(connection.wire(), tags))
 		if err := use(destination); err != nil {
 			return nil, "", err
 		}

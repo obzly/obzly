@@ -44,12 +44,16 @@ type CloudConnectionView struct {
 	ResourceTypes   []string       `json:"resourceTypes"`
 	IntervalSeconds int            `json:"intervalSeconds"`
 	// HealthIntervalSeconds between health scans of what discovery found.
-	HealthIntervalSeconds int        `json:"healthIntervalSeconds"`
-	Enabled               bool       `json:"enabled"`
-	Status                CloudState `json:"status"`
-	Version               int        `json:"version"`
-	CreatedAt             time.Time  `json:"createdAt"`
-	UpdatedAt             time.Time  `json:"updatedAt"`
+	HealthIntervalSeconds int `json:"healthIntervalSeconds"`
+	// Cost: the cost use's settings, when the connection has that use.
+	Cost *spec.CostSettings `json:"cost,omitempty"`
+	// Posture: the posture use's settings, when the connection has that use.
+	Posture   *spec.PostureSettings `json:"posture,omitempty"`
+	Enabled   bool                  `json:"enabled"`
+	Status    CloudState            `json:"status"`
+	Version   int                   `json:"version"`
+	CreatedAt time.Time             `json:"createdAt"`
+	UpdatedAt time.Time             `json:"updatedAt"`
 }
 
 type ProbeRef struct {
@@ -74,9 +78,13 @@ type CloudConnectionRequest struct {
 	ResourceTypes   []string  `json:"resourceTypes"`
 	IntervalSeconds int       `json:"intervalSeconds"`
 	// HealthIntervalSeconds: 0 is the default, 15 minutes.
-	HealthIntervalSeconds int   `json:"healthIntervalSeconds"`
-	Enabled               *bool `json:"enabled"`
-	Version               int   `json:"version"`
+	HealthIntervalSeconds int `json:"healthIntervalSeconds"`
+	// Cost: settings for the cost use (tracked tags are set for all connections).
+	Cost *spec.CostSettings `json:"cost"`
+	// Posture: settings for the posture use.
+	Posture *spec.PostureSettings `json:"posture"`
+	Enabled *bool                 `json:"enabled"`
+	Version int                   `json:"version"`
 }
 
 // CloudSetup is what the wizard fills templates with.
@@ -261,6 +269,13 @@ func (s *Service) DeleteCloudConnection(user *users_models.User, id uuid.UUID) e
 	if err != nil {
 		return err
 	}
+	readers, err := costReaders(id)
+	if err != nil {
+		return err
+	}
+	if len(readers) > 0 {
+		return fmt.Errorf("%w: %s", ErrCostReadThrough, strings.Join(readers, ", "))
+	}
 	if err := storage.GetDb().Where("id = ?", id).Delete(&CloudConnection{}).Error; err != nil {
 		return err
 	}
@@ -428,9 +443,14 @@ func (s *Service) ReportCloudScan(probe *Probe, id uuid.UUID, scan spec.CloudSca
 	now := s.now()
 	state := connection.Status
 	state.ReportedAt = &now
-	if scan.Kind == spec.ScanHealth {
+	switch scan.Kind {
+	case spec.ScanHealth:
 		state.LastHealth = &scan
-	} else {
+	case spec.ScanCost:
+		state.LastCost = &scan
+	case spec.ScanPosture:
+		state.LastPosture = &scan
+	default:
 		state.LastScan = &scan
 	}
 	return storage.GetDb().Model(&CloudConnection{}).Where("id = ?", id).Update("status", state).Error
@@ -513,11 +533,27 @@ func (s *Service) cloudViews(connections []*CloudConnection) ([]CloudConnectionV
 	views := make([]CloudConnectionView, 0, len(connections))
 	for _, c := range connections {
 		view := CloudConnectionView{
-			ID: c.ID, Name: c.Name, Provider: c.Provider, Scope: c.Scope, ScopeID: c.ScopeID, Access: c.Access,
-			Identity: c.Identity, ExternalID: c.ExternalID, TenantID: c.TenantID,
-			ScanTypes: orEmpty(c.ScanTypes), Regions: orEmpty(c.Regions), ResourceTypes: orEmpty(c.ResourceTypes),
-			IntervalSeconds: c.IntervalSeconds, HealthIntervalSeconds: c.HealthIntervalSeconds,
-			Enabled: c.Enabled, Status: c.Status, Version: c.Version, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+			ID:                    c.ID,
+			Name:                  c.Name,
+			Provider:              c.Provider,
+			Scope:                 c.Scope,
+			ScopeID:               c.ScopeID,
+			Access:                c.Access,
+			Identity:              c.Identity,
+			ExternalID:            c.ExternalID,
+			TenantID:              c.TenantID,
+			ScanTypes:             orEmpty(c.ScanTypes),
+			Regions:               orEmpty(c.Regions),
+			ResourceTypes:         orEmpty(c.ResourceTypes),
+			IntervalSeconds:       c.IntervalSeconds,
+			HealthIntervalSeconds: c.HealthIntervalSeconds,
+			Cost:                  c.Cost.Settings,
+			Posture:               c.Posture.Settings,
+			Enabled:               c.Enabled,
+			Status:                c.Status,
+			Version:               c.Version,
+			CreatedAt:             c.CreatedAt,
+			UpdatedAt:             c.UpdatedAt,
 		}
 		if probe, ok := probesByID[c.ProbeID]; ok {
 			view.Probe = ProbeRef{ID: probe.ID, Name: probe.Name, Location: probe.Location}
@@ -599,6 +635,12 @@ func (s *Service) cloudConnectionFrom(
 		return nil, err
 	}
 	if c.ResourceTypes, err = cloudTypes(c.Provider, request.ResourceTypes); err != nil {
+		return nil, err
+	}
+	if c.Cost.Settings, err = s.costSettingsFrom(c, request.Cost); err != nil {
+		return nil, err
+	}
+	if c.Posture.Settings, err = postureSettingsFrom(c, request.Posture); err != nil {
 		return nil, err
 	}
 	if _, err := s.repository.probe(c.ProbeID); err != nil {
@@ -690,9 +732,7 @@ func cloudUses(requested []string) (Locations, error) {
 	uses := Locations{}
 	for _, use := range requested {
 		switch use {
-		case spec.UseInventory:
-		case "cost", "posture":
-			return nil, fmt.Errorf("the %s scan comes in a later release", use)
+		case spec.UseInventory, spec.UseCost, spec.UsePosture:
 		default:
 			return nil, fmt.Errorf("unknown scan type %q", use)
 		}
@@ -832,6 +872,14 @@ func boundedScan(scan spec.CloudScan) spec.CloudScan {
 	if len(scan.Probe) > maxScanProbeLength {
 		scan.Probe = scan.Probe[:maxScanProbeLength]
 	}
+	if scan.Cost != nil {
+		cost := *scan.Cost
+		cost.LastFile, cost.Source, cost.From, cost.To = clip(cost.LastFile), clip(cost.Source), clip(cost.From),
+			clip(cost.To)
+		cost.FinalThrough = clip(cost.FinalThrough)
+		scan.Cost = &cost
+	}
+	scan.Posture = boundedPosture(scan.Posture)
 	return scan
 }
 

@@ -317,6 +317,37 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
   add a header. The Helm charts, the Kubernetes manifests in `deploy/kubernetes` (until now
   `:latest`) and `install-obzly.sh` deploy `v1.0.0` by default, and the probe installer downloads
   from github.com/obzly/obzly releases.
+- **v1.1.0** (cloud cost, security posture and recommendations - see
+  [CLOUD_COST_POSTURE.md](../CLOUD_COST_POSTURE.md) and [the release notes](../releases/v1.1.0.md)).
+  Upgrade the Sites, the control plane, **then the probes**: a probe older than v1.1.0 ignores the
+  Cost and Security posture uses, so their sections stay empty until it's upgraded.
+  - **Migrations:** three, all additive (cost, posture, recommendations), on Sites and the control
+    plane. Rolling back to v1.0.0 works; until you upgrade again, the cost and posture alert rules a
+    project turned on show "unknown rule source" in Alerts and don't fire.
+  - **Network:** probes post to the destination Site's `/v1/cloud/cost`, `/v1/cloud/posture` and
+    `/v1/cloud/advice`, beside `/v1/metrics`. If the Site's ingress only admits the control plane
+    apart from ingest paths ([eks/README.md](../../deploy/kubernetes/eks/README.md)), add these.
+  - **Permissions:** nothing changes for inventory-only connections. To turn on Cost or Security
+    posture, edit the connection, tick the use and run the CloudFormation stack update, Bicep
+    deployment or CLI script the wizard writes; **Test access** checks each use.
+    - AWS cost: Cost Explorer, Compute Optimizer and EC2 describe calls, plus read access to the
+      export prefix when you use an export. Compute Optimizer needs a one-time opt-in (free) for
+      rightsizing; until then that part says "not enabled".
+    - AWS posture: `SecurityAudit`, and `securityhub:DescribeHub`, `GetEnabledStandards` and
+      `GetFindings`.
+    - Azure cost: Cost Management Reader (and Storage Blob Data Reader on the export container).
+      Existing reservations and savings plans also need **Reservations Reader** at
+      `/providers/Microsoft.Capacity`, which only a tenant-level admin can assign; the script prints
+      the command, and until then that part says "needs permission".
+    - Azure posture: Security Reader, and Reader for the baseline checks.
+  - **Charges in your cloud account:** recommendations make about 75 Cost Explorer calls a week
+    (about $3.20 a month) per AWS billing connection, whatever the cost source; the API source adds
+    its own calls (the wizard shows both). Security Hub and Defender CSPM bill as usual where you
+    choose them; the Obzly baseline makes read-only calls only.
+  - **Fixes:** `./main --email ...`, `--reset-mfa` and `--reset-bootstrap-token` now work in a
+    running container (they used to exit because the server already held the metrics port). SSO
+    connectors that share an identity provider discover it once. Incidents' service tags are
+    readable.
 
 ## Order
 

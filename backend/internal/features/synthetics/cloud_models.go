@@ -36,6 +36,10 @@ type CloudConnection struct {
 	UpdatedAt       time.Time  `gorm:"column:updated_at"`
 	// HealthIntervalSeconds between health scans of what discovery found.
 	HealthIntervalSeconds int `gorm:"column:health_interval_seconds"`
+	// Cost: the cost use's settings (nil without the use).
+	Cost CostConfig `gorm:"column:cost_settings"`
+	// Posture: the posture use's settings (nil without the use).
+	Posture PostureConfig `gorm:"column:posture_settings"`
 }
 
 func (CloudConnection) TableName() string { return "cloud_connections" }
@@ -45,7 +49,11 @@ func (CloudConnection) TableName() string { return "cloud_connections" }
 type CloudState struct {
 	LastScan   *spec.CloudScan `json:"scan,omitempty"`
 	LastHealth *spec.CloudScan `json:"health,omitempty"`
-	ReportedAt *time.Time      `json:"reportedAt,omitempty"`
+	// LastCost: the latest cost refresh.
+	LastCost *spec.CloudScan `json:"cost,omitempty"`
+	// LastPosture: the latest posture refresh.
+	LastPosture *spec.CloudScan `json:"posture,omitempty"`
+	ReportedAt  *time.Time      `json:"reportedAt,omitempty"`
 }
 
 func (c CloudState) Value() (driver.Value, error) { return jsonValue(c) }
@@ -58,6 +66,6 @@ func (c *CloudConnection) wire() spec.CloudConnection {
 		Uses: append([]string{}, c.ScanTypes...), Regions: append([]string{}, c.Regions...),
 		ResourceTypes:   append([]string{}, c.ResourceTypes...),
 		IntervalSeconds: c.IntervalSeconds, HealthIntervalSeconds: c.HealthIntervalSeconds,
-		DestinationID: c.DestinationID.String(),
+		DestinationID: c.DestinationID.String(), Cost: c.Cost.Settings, Posture: c.Posture.Settings,
 	}
 }

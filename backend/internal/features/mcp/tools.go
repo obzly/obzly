@@ -204,6 +204,7 @@ func (t *toolSet) register(server *mcp.Server) {
 		wrap("list_correlation_sessions", t.listCorrelationSessions))
 	mcp.AddTool(server, add("get_correlation_session", "Everything linked to one correlated session."),
 		wrap("get_correlation_session", t.getCorrelationSession))
+	t.registerCloud(server, add)
 }
 
 func (t *toolSet) listSites(ctx context.Context, user *users_models.User, _ siteArg) (any, error) {

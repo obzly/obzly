@@ -1,0 +1,33 @@
+id: aws-sg-no-world-ssh
+provider: aws
+resource: aws_security_group
+title: Security groups should not allow SSH (22) from anywhere
+severity: high
+control: EC2.13
+standards:
+  - {standard: aws-fsbp, control: EC2.13}
+  - {standard: cis-aws, control: "5.2"}
+pass: "!(22 in r.world_ports) && !r.world_all_traffic"
+evidence: [world_ports, world_all_traffic]
+remediation:
+  cli: |
+    aws ec2 revoke-security-group-ingress --region {region} --group-id {name} \
+      --protocol tcp --port 22 --cidr 0.0.0.0/0
+    # and for IPv6:
+    aws ec2 revoke-security-group-ingress --region {region} --group-id {name} \
+      --ip-permissions 'IpProtocol=tcp,FromPort=22,ToPort=22,Ipv6Ranges=[{CidrIpv6=::/0}]'
+  iac: |
+    # CloudFormation: replace the 0.0.0.0/0 rule with your admin network or remove it
+    SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 10.0.0.0/8
+  console: EC2 → Security groups → the group → Inbound rules → Edit → remove or narrow the rule for port 22 from 0.0.0.0/0 or ::/0. Prefer Session Manager over SSH.
+fixtures:
+  pass:
+    - {world_ports: [443], world_all_traffic: false}
+    - {world_ports: [], world_all_traffic: false}
+  fail:
+    - {world_ports: [22], world_all_traffic: false}
+    - {world_ports: [], world_all_traffic: true}

@@ -248,6 +248,26 @@ export const apiHelper = {
     return response.json();
   },
 
+  fetchPatchJson: async <T>(
+    url: string,
+    requestOptions?: RequestOptions,
+    isRetryOnError = false,
+  ): Promise<T> => {
+    const optionsWrapper = (requestOptions ?? new RequestOptions())
+      .setMethod('PATCH')
+      .addHeader('Content-Type', 'application/json')
+      .addHeader('Accept', 'application/json')
+      .addHeader('Authorization', accessTokenHelper.getAccessToken());
+
+    const response = await makeRequest(
+      url,
+      optionsWrapper,
+      isRetryOnError ? 0 : REPEAT_TRIES_COUNT,
+    );
+
+    return response.json();
+  },
+
   fetchDeleteJson: async <T>(
     url: string,
     requestOptions?: RequestOptions,

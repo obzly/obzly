@@ -11,9 +11,10 @@ import (
 // ship with the frontend build, which can't read deploy/.
 func Test_CloudTemplates_TheFrontendCopies_MatchDeploy(t *testing.T) {
 	for source, copied := range map[string]string{
-		"aws/obzly-readonly-role.yaml": "obzly-readonly-role.yaml",
-		"azure/obzly-reader.bicep":     "obzly-reader.bicep",
-		"azure/obzly-identity.bicep":   "obzly-identity.bicep",
+		"aws/obzly-readonly-role.yaml":  "obzly-readonly-role.yaml",
+		"azure/obzly-reader.bicep":      "obzly-reader.bicep",
+		"azure/obzly-identity.bicep":    "obzly-identity.bicep",
+		"azure/obzly-cost-export.bicep": "obzly-cost-export.bicep",
 	} {
 		want, err := os.ReadFile("../../../../deploy/cloud/" + source)
 		require.NoError(t, err)

@@ -119,6 +119,19 @@ no agent - load balancers, databases, buckets, functions, scaling groups - from 
 Azure subscriptions, scanned by a probe group with read-only access (a guided wizard writes the
 CloudFormation, Bicep or CLI); Obzly stores only identifiers, never cloud keys.
 
+### 💰 **Cloud Cost and Security Posture**
+
+The same cloud connections can also read **cost** - from a FOCUS export, the billing API, or both
+with the export taking over day by day - and **security posture**, from Security Hub or Defender
+for Cloud where they're on and Obzly's own baseline checks elsewhere. Explore cost by account,
+service, region, resource or tag with saved views, set budgets, and get anomalies; follow each
+standard's score, findings with fix steps, and which regions are covered and why. Recommendations
+cover both: rightsizing, idle resources and a commitment planner for Savings Plans and
+reservations, with realized savings measured afterwards, and posture actions and guardrails with
+each standard's score shown as it would be with your plan done. Amounts are never added across
+currencies, unknown is never shown as zero, and Obzly never changes anything in your clouds - see
+[docs/CLOUD_COST_POSTURE.md](docs/CLOUD_COST_POSTURE.md).
+
 ### 🏢 **Enterprise-Grade Logging and Monitoring**
 
 The single container is the smallest shape of one architecture. The same image runs each role

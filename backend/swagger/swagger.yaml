@@ -747,8 +747,18 @@ definitions:
       baselineSeconds:
         type: integer
       budgetId:
-        description: BudgetID is the AI budget an ai_cost rule watches.
+        description: BudgetID is the AI budget an ai_cost rule watches, or the cost
+          budget a cloud_cost rule does.
         type: string
+      costAnomalies:
+        description: 'CostAnomalies: a cloud_cost rule that fires for each new cost
+          anomaly.'
+        type: boolean
+      costCommitments:
+        description: |-
+          CostCommitments: a cloud_cost rule whose series are the days left on each commitment
+          ending soon.
+        type: boolean
       groupBy:
         type: string
       logs:
@@ -757,6 +767,10 @@ definitions:
         type: string
       minCount:
         type: integer
+      minSeverity:
+        description: 'MinSeverity: a cloud_posture rule fires for new or reopened
+          findings this severe or more.'
+        type: string
       operationName:
         type: string
       promql:
@@ -999,6 +1013,668 @@ definitions:
         type: integer
       total:
         type: integer
+    type: object
+  baseline.Remediation:
+    properties:
+      cli:
+        type: string
+      console:
+        type: string
+      iac:
+        type: string
+    type: object
+  cloudcost.AdviceSectionDTO:
+    properties:
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      projectId:
+        type: string
+      reason:
+        type: string
+      refreshedAt:
+        type: string
+      section:
+        type: string
+      state:
+        type: string
+    type: object
+  cloudcost.AlertSettingsDTO:
+    properties:
+      anomalyChannelIds:
+        items:
+          type: string
+        type: array
+    type: object
+  cloudcost.Anomaly:
+    properties:
+      actual:
+        type: number
+      connectionId:
+        type: string
+      currency:
+        type: string
+      day:
+        type: string
+      detectedAt:
+        type: string
+      expected:
+        type: number
+      id:
+        type: string
+      note:
+        type: string
+      projectId:
+        type: string
+      score:
+        type: number
+      service:
+        type: string
+      status:
+        type: string
+      subAccount:
+        type: string
+    type: object
+  cloudcost.AnomalyDTO:
+    properties:
+      actual:
+        type: number
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      currency:
+        type: string
+      day:
+        type: string
+      detectedAt:
+        type: string
+      expected:
+        type: number
+      id:
+        type: string
+      note:
+        type: string
+      projectId:
+        type: string
+      score:
+        type: number
+      service:
+        type: string
+      status:
+        type: string
+      subAccount:
+        type: string
+      subAccountName:
+        type: string
+    type: object
+  cloudcost.AnomalyUpdate:
+    properties:
+      note:
+        type: string
+      status:
+        type: string
+    type: object
+  cloudcost.BudgetDTO:
+    properties:
+      amount:
+        type: number
+      channelIds:
+        items:
+          type: string
+        type: array
+      createdAt:
+        type: string
+      currency:
+        type: string
+      filters:
+        $ref: '#/definitions/cloudcost.Filters'
+      id:
+        type: string
+      method:
+        description: 'Method: forecast (the provider''s, for an unfiltered budget)
+          or run-rate (the last days'' average).'
+        type: string
+      name:
+        type: string
+      percent:
+        type: number
+      projectId:
+        type: string
+      projected:
+        type: number
+      spent:
+        type: number
+      status:
+        type: string
+      thresholdPercent:
+        type: integer
+      updatedAt:
+        type: string
+    type: object
+  cloudcost.BudgetRequest:
+    properties:
+      amount:
+        type: number
+      channelIds:
+        items:
+          type: string
+        type: array
+      currency:
+        type: string
+      filters:
+        $ref: '#/definitions/cloudcost.Filters'
+      name:
+        type: string
+      thresholdPercent:
+        type: integer
+    type: object
+  cloudcost.CommitmentDTO:
+    properties:
+      account:
+        type: string
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      currency:
+        type: string
+      description:
+        type: string
+      endingSoon:
+        type: boolean
+      endsAt:
+        type: string
+      endsInDays:
+        type: integer
+      id:
+        type: string
+      monthlyCost:
+        type: number
+      payment:
+        type: string
+      projectId:
+        type: string
+      provider:
+        type: string
+      region:
+        type: string
+      startsAt:
+        type: string
+      term:
+        type: string
+      type:
+        type: string
+      unused:
+        type: boolean
+      unusedMonthly:
+        type: number
+      utilization:
+        type: number
+    type: object
+  cloudcost.CommitmentsDTO:
+    properties:
+      commitments:
+        items:
+          $ref: '#/definitions/cloudcost.CommitmentDTO'
+        type: array
+      coverage:
+        items:
+          $ref: '#/definitions/cloudcost.CoverageDTO'
+        type: array
+      sections:
+        items:
+          $ref: '#/definitions/cloudcost.AdviceSectionDTO'
+        type: array
+    type: object
+  cloudcost.CoverageDTO:
+    properties:
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      coveredPercent:
+        type: number
+      currency:
+        type: string
+      onDemandMonthly:
+        type: number
+      type:
+        type: string
+    type: object
+  cloudcost.CurrencyBlock:
+    properties:
+      currency:
+        type: string
+      other:
+        allOf:
+        - $ref: '#/definitions/cloudcost.ExploreRow'
+        description: 'Other: the groups past the first maxExploreRows, added up.'
+      rows:
+        items:
+          $ref: '#/definitions/cloudcost.ExploreRow'
+        type: array
+      total:
+        type: number
+      totals:
+        items:
+          type: number
+        type: array
+    type: object
+  cloudcost.CurrencySummary:
+    properties:
+      currency:
+        type: string
+      daily:
+        items:
+          $ref: '#/definitions/cloudcost.DailyPoint'
+        type: array
+      forecast:
+        description: 'Forecast: month to date plus the providers'' forecast for the
+          rest (nil without one).'
+        type: number
+      lastMonth:
+        type: number
+      lastMonthSameDays:
+        type: number
+      monthToDate:
+        type: number
+    type: object
+  cloudcost.DailyPoint:
+    properties:
+      amount:
+        type: number
+      day:
+        type: string
+      estimated:
+        type: boolean
+    type: object
+  cloudcost.ExploreRequest:
+    properties:
+      filters:
+        $ref: '#/definitions/cloudcost.Filters'
+      from:
+        type: string
+      granularity:
+        type: string
+      groupBy:
+        type: string
+      metric:
+        type: string
+      projectId:
+        description: ProjectID narrows to one project (else every project the user
+          can read).
+        type: string
+      to:
+        type: string
+    type: object
+  cloudcost.ExploreResponse:
+    properties:
+      currencies:
+        items:
+          $ref: '#/definitions/cloudcost.CurrencyBlock'
+        type: array
+      periods:
+        items:
+          $ref: '#/definitions/cloudcost.PeriodDTO'
+        type: array
+    type: object
+  cloudcost.ExploreRow:
+    properties:
+      key:
+        type: string
+      label:
+        type: string
+      total:
+        type: number
+      values:
+        items:
+          type: number
+        type: array
+    type: object
+  cloudcost.FacetValue:
+    properties:
+      amounts:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+      label:
+        type: string
+      value:
+        type: string
+    type: object
+  cloudcost.FacetsResponse:
+    properties:
+      dimensions:
+        additionalProperties:
+          items:
+            $ref: '#/definitions/cloudcost.FacetValue'
+          type: array
+        type: object
+    type: object
+  cloudcost.Filters:
+    properties:
+      account:
+        items:
+          type: string
+        type: array
+      charge:
+        items:
+          type: string
+        type: array
+      provider:
+        items:
+          type: string
+        type: array
+      region:
+        items:
+          type: string
+        type: array
+      resource:
+        items:
+          type: string
+        type: array
+      service:
+        items:
+          type: string
+        type: array
+      tags:
+        additionalProperties:
+          items:
+            type: string
+          type: array
+        type: object
+    type: object
+  cloudcost.PeriodDTO:
+    properties:
+      coverage:
+        type: string
+      from:
+        type: string
+      key:
+        type: string
+      to:
+        type: string
+    type: object
+  cloudcost.PlanDTO:
+    properties:
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      currency:
+        type: string
+      factor:
+        type: number
+      lookbackDays:
+        type: integer
+      onDemandMonthly:
+        type: number
+      options:
+        items:
+          $ref: '#/definitions/cloudcost.PurchaseOptionDTO'
+        type: array
+      provider:
+        type: string
+      refreshedAt:
+        type: string
+      rightsizingMonthly:
+        description: |-
+          RightsizingMonthly: open rightsizing and idle savings on the usage this type covers;
+          Factor is what the plan was scaled by so the two never count the same saving.
+        type: number
+      type:
+        type: string
+      usage:
+        items:
+          $ref: '#/definitions/cloudcost.UsagePoint'
+        type: array
+    type: object
+  cloudcost.PlannerDTO:
+    properties:
+      plans:
+        items:
+          $ref: '#/definitions/cloudcost.PlanDTO'
+        type: array
+      sections:
+        items:
+          $ref: '#/definitions/cloudcost.AdviceSectionDTO'
+        type: array
+    type: object
+  cloudcost.PurchaseLineDTO:
+    properties:
+      account:
+        type: string
+      description:
+        type: string
+      monthlySavings:
+        type: number
+      quantity:
+        type: string
+      region:
+        type: string
+      upfront:
+        type: number
+    type: object
+  cloudcost.PurchaseOptionDTO:
+    properties:
+      averageUtilization:
+        type: number
+      breakEvenMonths:
+        type: number
+      commitment:
+        type: string
+      coveragePercent:
+        type: number
+      hourlyCommitment:
+        type: number
+      labels:
+        items:
+          type: string
+        type: array
+      lines:
+        items:
+          $ref: '#/definitions/cloudcost.PurchaseLineDTO'
+        type: array
+      monthlyRecurring:
+        type: number
+      monthlySavings:
+        type: number
+      offered:
+        type: boolean
+      payment:
+        type: string
+      reason:
+        type: string
+      savingsPercent:
+        type: number
+      term:
+        type: string
+      upfront:
+        type: number
+    type: object
+  cloudcost.RecommendationDTO:
+    properties:
+      account:
+        type: string
+      action:
+        type: string
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      currency:
+        type: string
+      current:
+        type: string
+      doneAt:
+        type: string
+      doneBy:
+        type: string
+      dueDate:
+        type: string
+      effort:
+        type: string
+      evidence:
+        additionalProperties:
+          type: string
+        type: object
+      expectedMonthly:
+        type: number
+      key:
+        type: string
+      kind:
+        type: string
+      measuredAt:
+        type: string
+      monthlySavings:
+        type: number
+      owner:
+        type: string
+      projectId:
+        type: string
+      provider:
+        type: string
+      realizedMonthly:
+        type: number
+      reason:
+        type: string
+      refreshedAt:
+        type: string
+      region:
+        type: string
+      resourceKey:
+        type: string
+      resourceName:
+        type: string
+      resourceType:
+        type: string
+      risk:
+        type: string
+      savingsBasis:
+        type: string
+      source:
+        type: string
+      status:
+        type: string
+      target:
+        type: string
+    type: object
+  cloudcost.RecommendationUpdate:
+    properties:
+      dueDate:
+        type: string
+      key:
+        type: string
+      owner:
+        type: string
+      projectId:
+        type: string
+      reason:
+        type: string
+      status:
+        type: string
+    required:
+    - key
+    - projectId
+    - status
+    type: object
+  cloudcost.RecommendationsDTO:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/cloudcost.RecommendationDTO'
+        type: array
+      sections:
+        items:
+          $ref: '#/definitions/cloudcost.AdviceSectionDTO'
+        type: array
+    type: object
+  cloudcost.ResourceCost:
+    properties:
+      byCharge:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+      currency:
+        type: string
+      days:
+        items:
+          $ref: '#/definitions/cloudcost.DailyPoint'
+        type: array
+      total:
+        type: number
+    type: object
+  cloudcost.ResourceCostDTO:
+    properties:
+      covered:
+        description: 'Covered: some export delivered these days for a connection of
+          these projects.'
+        type: boolean
+      currencies:
+        items:
+          $ref: '#/definitions/cloudcost.ResourceCost'
+        type: array
+      keys:
+        items:
+          type: string
+        type: array
+    type: object
+  cloudcost.SourceStatus:
+    properties:
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      coveredFrom:
+        type: string
+      coveredTo:
+        type: string
+      deliveredAt:
+        type: string
+      finalThrough:
+        type: string
+      forecastAt:
+        type: string
+      from:
+        type: string
+      projectId:
+        type: string
+      provider:
+        type: string
+      rows:
+        type: integer
+      source:
+        type: string
+      to:
+        type: string
+    type: object
+  cloudcost.SummaryDTO:
+    properties:
+      currencies:
+        items:
+          $ref: '#/definitions/cloudcost.CurrencySummary'
+        type: array
+      openAnomalies:
+        type: integer
+      sources:
+        items:
+          $ref: '#/definitions/cloudcost.SourceStatus'
+        type: array
+      today:
+        type: string
+    type: object
+  cloudcost.UsagePoint:
+    properties:
+      committed:
+        type: number
+      day:
+        type: string
+      onDemand:
+        type: number
     type: object
   control_plane_dto.CreateGrantRequestDTO:
     properties:
@@ -3003,6 +3679,519 @@ definitions:
       updatedBy:
         type: string
     type: object
+  posture.Action:
+    properties:
+      account:
+        type: string
+      connectionName:
+        type: string
+      costLinks:
+        items:
+          $ref: '#/definitions/posture.CostLink'
+        type: array
+      detail:
+        type: string
+      dismissReason:
+        type: string
+      dismissed:
+        type: boolean
+      effort:
+        type: string
+      findings:
+        items:
+          $ref: '#/definitions/posture.ActionFinding'
+        type: array
+      key:
+        type: string
+      kind:
+        type: string
+      planned:
+        type: boolean
+      prevents:
+        items:
+          type: string
+        type: array
+      projectId:
+        type: string
+      provider:
+        type: string
+      rank:
+        type: number
+      region:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      severity:
+        type: string
+      status:
+        type: string
+      steps:
+        items:
+          type: string
+        type: array
+      title:
+        type: string
+    type: object
+  posture.ActionFinding:
+    properties:
+      control:
+        type: string
+      id:
+        type: string
+      resourceKey:
+        type: string
+      severity:
+        type: string
+      status:
+        type: string
+      suppressed:
+        type: boolean
+      title:
+        type: string
+    type: object
+  posture.ActionUpdate:
+    properties:
+      dismissed:
+        type: boolean
+      key:
+        type: string
+      planned:
+        type: boolean
+      projectId:
+        type: string
+      reason:
+        type: string
+    required:
+    - key
+    - projectId
+    type: object
+  posture.ActionsDTO:
+    properties:
+      actions:
+        items:
+          $ref: '#/definitions/posture.Action'
+        type: array
+      standards:
+        items:
+          $ref: '#/definitions/posture.SimulatedScore'
+        type: array
+    type: object
+  posture.AlertSettingsDTO:
+    properties:
+      channelIds:
+        items:
+          type: string
+        type: array
+      minSeverity:
+        type: string
+    type: object
+  posture.CostLink:
+    properties:
+      action:
+        type: string
+      currency:
+        type: string
+      key:
+        type: string
+      monthlySavings:
+        type: number
+    type: object
+  posture.CoverageCounts:
+    properties:
+      baseline:
+        type: integer
+      fallback:
+        type: integer
+      native:
+        type: integer
+      notCovered:
+        type: integer
+      stale:
+        type: integer
+    type: object
+  posture.CoverageRow:
+    properties:
+      account:
+        type: string
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      provider:
+        type: string
+      reason:
+        type: string
+      region:
+        type: string
+      runs:
+        items:
+          $ref: '#/definitions/posture.CoverageRun'
+        type: array
+      scannedAt:
+        type: string
+      status:
+        type: string
+    type: object
+  posture.CoverageRun:
+    properties:
+      failed:
+        type: integer
+      passed:
+        type: integer
+      reason:
+        type: string
+      result:
+        type: string
+      source:
+        type: string
+      standard:
+        type: string
+    type: object
+  posture.Event:
+    properties:
+      at:
+        type: string
+      by:
+        type: string
+      kind:
+        type: string
+      note:
+        type: string
+      severity:
+        type: string
+    type: object
+  posture.FacetValue:
+    properties:
+      count:
+        type: integer
+      label:
+        type: string
+      value:
+        type: string
+    type: object
+  posture.FacetsResponse:
+    properties:
+      dimensions:
+        additionalProperties:
+          items:
+            $ref: '#/definitions/posture.FacetValue'
+          type: array
+        type: object
+    type: object
+  posture.Filters:
+    properties:
+      account:
+        items:
+          type: string
+        type: array
+      connection:
+        items:
+          type: string
+        type: array
+      control:
+        items:
+          type: string
+        type: array
+      provider:
+        items:
+          type: string
+        type: array
+      region:
+        items:
+          type: string
+        type: array
+      resource:
+        items:
+          type: string
+        type: array
+      search:
+        description: Search matches the title, control or resource.
+        type: string
+      severity:
+        items:
+          type: string
+        type: array
+      source:
+        items:
+          type: string
+        type: array
+      standard:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+    type: object
+  posture.Finding:
+    properties:
+      account:
+        type: string
+      check:
+        type: string
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      control:
+        type: string
+      evidence:
+        $ref: '#/definitions/posture.stringMap'
+      firstSeen:
+        type: string
+      id:
+        type: string
+      lastSeen:
+        type: string
+      projectId:
+        type: string
+      provider:
+        type: string
+      region:
+        type: string
+      remediationUrl:
+        type: string
+      resolvedAt:
+        type: string
+      resourceKey:
+        type: string
+      resourceType:
+        type: string
+      severity:
+        type: string
+      source:
+        type: string
+      standards:
+        items:
+          $ref: '#/definitions/spec.StandardRef'
+        type: array
+      status:
+        type: string
+      suppressReason:
+        type: string
+      suppressed:
+        type: boolean
+      suppressedBy:
+        type: string
+      suppressedUntil:
+        type: string
+      title:
+        type: string
+    type: object
+  posture.FindingDetail:
+    properties:
+      account:
+        type: string
+      check:
+        type: string
+      connectionId:
+        type: string
+      connectionName:
+        type: string
+      control:
+        type: string
+      events:
+        items:
+          $ref: '#/definitions/posture.Event'
+        type: array
+      evidence:
+        $ref: '#/definitions/posture.stringMap'
+      firstSeen:
+        type: string
+      id:
+        type: string
+      lastSeen:
+        type: string
+      projectId:
+        type: string
+      provider:
+        type: string
+      region:
+        type: string
+      remediation:
+        $ref: '#/definitions/baseline.Remediation'
+      remediationUrl:
+        type: string
+      resolvedAt:
+        type: string
+      resourceKey:
+        type: string
+      resourceType:
+        type: string
+      severity:
+        type: string
+      source:
+        type: string
+      standardNames:
+        additionalProperties:
+          type: string
+        type: object
+      standards:
+        items:
+          $ref: '#/definitions/spec.StandardRef'
+        type: array
+      status:
+        type: string
+      suppressReason:
+        type: string
+      suppressed:
+        type: boolean
+      suppressedBy:
+        type: string
+      suppressedUntil:
+        type: string
+      title:
+        type: string
+    type: object
+  posture.FindingUpdate:
+    properties:
+      reason:
+        type: string
+      suppressed:
+        type: boolean
+      until:
+        description: 'Until: when the suppression ends and the finding counts again
+          (RFC 3339); empty is never.'
+        type: string
+    type: object
+  posture.FindingsRequest:
+    properties:
+      desc:
+        type: boolean
+      filters:
+        $ref: '#/definitions/posture.Filters'
+      limit:
+        type: integer
+      offset:
+        type: integer
+      sort:
+        description: 'Sort: severity (default), firstSeen, lastSeen or title; Desc
+          reverses it.'
+        type: string
+    type: object
+  posture.FindingsResponse:
+    properties:
+      findings:
+        items:
+          $ref: '#/definitions/posture.Finding'
+        type: array
+      total:
+        type: integer
+    type: object
+  posture.ScorePoint:
+    properties:
+      day:
+        type: string
+      percent:
+        type: number
+    type: object
+  posture.SimulatedScore:
+    properties:
+      current:
+        type: number
+      evaluated:
+        type: integer
+      name:
+        type: string
+      standard:
+        type: string
+      withAll:
+        type: number
+      withPlan:
+        type: number
+    type: object
+  posture.StandardScore:
+    properties:
+      evaluated:
+        type: integer
+      failed:
+        type: integer
+      name:
+        type: string
+      passed:
+        type: integer
+      percent:
+        type: number
+      sources:
+        items:
+          type: string
+        type: array
+      standard:
+        type: string
+      trend:
+        items:
+          $ref: '#/definitions/posture.ScorePoint'
+        type: array
+    type: object
+  posture.SummaryDTO:
+    properties:
+      coverage:
+        $ref: '#/definitions/posture.CoverageCounts'
+      lastScanAt:
+        type: string
+      open:
+        additionalProperties:
+          type: integer
+        description: 'Open: open findings that aren''t suppressed, by severity.'
+        type: object
+      resolved30d:
+        description: 'Resolved30d: findings resolved in the last 30 days.'
+        type: integer
+      standards:
+        items:
+          $ref: '#/definitions/posture.StandardScore'
+        type: array
+      suppressed:
+        type: integer
+    type: object
+  posture.TrendPeriod:
+    properties:
+      from:
+        type: string
+      key:
+        type: string
+      open:
+        additionalProperties:
+          type: integer
+        description: 'Open: findings open at the period''s end, by severity.'
+        type: object
+      opened:
+        type: integer
+      resolved:
+        type: integer
+      scores:
+        additionalProperties:
+          format: float64
+          type: number
+        description: 'Scores: each standard''s percent at the period''s end; absent
+          before it was evaluated.'
+        type: object
+      to:
+        type: string
+    type: object
+  posture.TrendsRequest:
+    properties:
+      filters:
+        $ref: '#/definitions/posture.Filters'
+      from:
+        type: string
+      granularity:
+        type: string
+      to:
+        type: string
+    type: object
+  posture.TrendsResponse:
+    properties:
+      periods:
+        items:
+          $ref: '#/definitions/posture.TrendPeriod'
+        type: array
+    type: object
+  posture.stringMap:
+    additionalProperties:
+      type: string
+    type: object
   projects_controllers.PromoteFieldRequest:
     properties:
       field:
@@ -3227,6 +4416,53 @@ definitions:
         type: integer
       updatedAt:
         type: string
+    type: object
+  savedviews.DefaultRequest:
+    properties:
+      kind:
+        type: string
+      viewId:
+        description: ViewID nil clears the default.
+        type: string
+    type: object
+  savedviews.ViewDTO:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      mine:
+        type: boolean
+      name:
+        type: string
+      owner:
+        type: string
+      shared:
+        type: boolean
+      state:
+        type: object
+      updatedAt:
+        type: string
+    type: object
+  savedviews.ViewList:
+    properties:
+      defaultId:
+        type: string
+      views:
+        items:
+          $ref: '#/definitions/savedviews.ViewDTO'
+        type: array
+    type: object
+  savedviews.ViewRequest:
+    properties:
+      kind:
+        type: string
+      name:
+        type: string
+      shared:
+        type: boolean
+      state:
+        type: object
     type: object
   segments.AuditFailure:
     properties:
@@ -3567,6 +4803,28 @@ definitions:
       traceId:
         type: string
     type: object
+  spec.AdviceScanInfo:
+    properties:
+      commitments:
+        type: integer
+      options:
+        type: integer
+      recommendations:
+        type: integer
+      sections:
+        items:
+          $ref: '#/definitions/spec.AdviceSection'
+        type: array
+    type: object
+  spec.AdviceSection:
+    properties:
+      reason:
+        type: string
+      section:
+        type: string
+      state:
+        type: string
+    type: object
   spec.Assertion:
     properties:
       kind:
@@ -3603,6 +4861,10 @@ definitions:
     properties:
       access:
         type: string
+      cost:
+        allOf:
+        - $ref: '#/definitions/spec.CostSettings'
+        description: Cost is set when Uses has UseCost.
       destinationId:
         type: string
       externalId:
@@ -3622,6 +4884,10 @@ definitions:
         type: integer
       name:
         type: string
+      posture:
+        allOf:
+        - $ref: '#/definitions/spec.PostureSettings'
+        description: Posture is set when Uses has UsePosture.
       provider:
         type: string
       regions:
@@ -3648,6 +4914,10 @@ definitions:
     type: object
   spec.CloudScan:
     properties:
+      cost:
+        allOf:
+        - $ref: '#/definitions/spec.CostScanInfo'
+        description: Cost is set on ScanCost reports.
       durationSeconds:
         type: number
       errors:
@@ -3661,6 +4931,10 @@ definitions:
         description: 'Partial: the scan hit its time limit; what it found was still
           sent.'
         type: boolean
+      posture:
+        allOf:
+        - $ref: '#/definitions/spec.PostureScanInfo'
+        description: Posture is set on ScanPosture reports.
       probe:
         type: string
       regions:
@@ -3693,6 +4967,68 @@ definitions:
       expiresAt:
         type: string
       token:
+        type: string
+    type: object
+  spec.CostExport:
+    properties:
+      bucket:
+        type: string
+      container:
+        type: string
+      prefix:
+        type: string
+      region:
+        type: string
+      storageAccount:
+        type: string
+    type: object
+  spec.CostScanInfo:
+    properties:
+      advice:
+        allOf:
+        - $ref: '#/definitions/spec.AdviceScanInfo'
+        description: Advice is set when this refresh also read recommendations (weekly).
+      finalThrough:
+        description: 'FinalThrough: the last day the provider has finalised (YYYY-MM-DD).'
+        type: string
+      from:
+        type: string
+      lastFile:
+        description: 'LastFile and LastFileAt: the newest export file read.'
+        type: string
+      lastFileAt:
+        type: string
+      requests:
+        description: Requests counts billing API calls (Cost Explorer charges per
+          call).
+        type: integer
+      rows:
+        type: integer
+      source:
+        description: 'Source is what this refresh read: export or api.'
+        type: string
+      to:
+        type: string
+    type: object
+  spec.CostSettings:
+    properties:
+      export:
+        $ref: '#/definitions/spec.CostExport'
+      refreshHours:
+        type: integer
+      scope:
+        type: string
+      source:
+        type: string
+      trackedTags:
+        description: 'TrackedTags: tag keys kept on cost rows (all others are dropped).'
+        items:
+          type: string
+        type: array
+      viaConnectionId:
+        description: |-
+          ViaConnectionID: with CostScopeVia, the connection that reads this
+          one's cost.
         type: string
     type: object
   spec.DNSOptions:
@@ -3857,6 +5193,32 @@ definitions:
       start:
         type: string
     type: object
+  spec.PostureScanInfo:
+    properties:
+      baseline:
+        items:
+          type: string
+        type: array
+      findings:
+        type: integer
+      native:
+        description: 'Native and Baseline: the regions each source covered; NotCovered:
+          neither did.'
+        items:
+          type: string
+        type: array
+      notCovered:
+        items:
+          type: string
+        type: array
+    type: object
+  spec.PostureSettings:
+    properties:
+      refreshHours:
+        type: integer
+      source:
+        type: string
+    type: object
   spec.ProbeCheck:
     properties:
       definition:
@@ -3983,6 +5345,13 @@ definitions:
           Unsupported: the probe can't run this type here (ICMP without
           CAP_NET_RAW or ping sockets).
         type: boolean
+    type: object
+  spec.StandardRef:
+    properties:
+      control:
+        type: string
+      standard:
+        type: string
     type: object
   spec.Step:
     properties:
@@ -4415,6 +5784,11 @@ definitions:
     properties:
       access:
         type: string
+      cost:
+        allOf:
+        - $ref: '#/definitions/spec.CostSettings'
+        description: 'Cost: settings for the cost use (tracked tags are set for all
+          connections).'
       destinationId:
         type: string
       enabled:
@@ -4430,6 +5804,10 @@ definitions:
         type: integer
       name:
         type: string
+      posture:
+        allOf:
+        - $ref: '#/definitions/spec.PostureSettings'
+        description: 'Posture: settings for the posture use.'
       probeId:
         type: string
       provider:
@@ -4459,6 +5837,11 @@ definitions:
     properties:
       access:
         type: string
+      cost:
+        allOf:
+        - $ref: '#/definitions/spec.CostSettings'
+        description: 'Cost: the cost use''s settings, when the connection has that
+          use.'
       createdAt:
         type: string
       destination:
@@ -4479,6 +5862,11 @@ definitions:
         type: integer
       name:
         type: string
+      posture:
+        allOf:
+        - $ref: '#/definitions/spec.PostureSettings'
+        description: 'Posture: the posture use''s settings, when the connection has
+          that use.'
       probe:
         $ref: '#/definitions/synthetics.ProbeRef'
       provider:
@@ -4508,6 +5896,15 @@ definitions:
       version:
         type: integer
     type: object
+  synthetics.CloudCostSettings:
+    properties:
+      trackedTags:
+        description: 'TrackedTags: the tag keys kept on cost rows, to group and budget
+          by.'
+        items:
+          type: string
+        type: array
+    type: object
   synthetics.CloudSetup:
     properties:
       audiences:
@@ -4525,8 +5922,16 @@ definitions:
     type: object
   synthetics.CloudState:
     properties:
+      cost:
+        allOf:
+        - $ref: '#/definitions/spec.CloudScan'
+        description: 'LastCost: the latest cost refresh.'
       health:
         $ref: '#/definitions/spec.CloudScan'
+      posture:
+        allOf:
+        - $ref: '#/definitions/spec.CloudScan'
+        description: 'LastPosture: the latest posture refresh.'
       reportedAt:
         type: string
       scan:
@@ -6458,6 +7863,63 @@ paths:
       summary: Update a cloud connection
       tags:
       - cloud-connections
+  /cloud-connections/cost-settings:
+    get:
+      description: The tag keys kept on cost rows, to group and budget by
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/synthetics.CloudCostSettings'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cost settings for every cloud connection
+      tags:
+      - cloud-connections
+    put:
+      consumes:
+      - application/json
+      description: Admins only. Up to 10 tracked tag keys; probes get them with their
+        next config
+      parameters:
+      - description: Settings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/synthetics.CloudCostSettings'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/synthetics.CloudCostSettings'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Set the cost settings for every cloud connection
+      tags:
+      - cloud-connections
   /cloud-connections/setup:
     get:
       description: Admins only. A fresh external ID, the control plane's issuer URL
@@ -6537,6 +7999,410 @@ paths:
       summary: A Test access run and its result once it arrives
       tags:
       - cloud-connections
+  /cloud-cost/anomalies:
+    get:
+      parameters:
+      - description: First day (default 30 days ago)
+        in: query
+        name: from
+        type: string
+      - description: Last day (default today)
+        in: query
+        name: to
+        type: string
+      - description: open or acknowledged
+        in: query
+        name: status
+        type: string
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cloudcost.AnomalyDTO'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cost anomalies
+      tags:
+      - cloud-cost
+  /cloud-cost/anomalies/{id}:
+    patch:
+      consumes:
+      - application/json
+      description: Project members
+      parameters:
+      - description: Anomaly ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status and note
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/cloudcost.AnomalyUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.Anomaly'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Acknowledge or reopen a cost anomaly
+      tags:
+      - cloud-cost
+  /cloud-cost/commitments:
+    get:
+      description: Savings Plans and reservations with their use over 30 days, flagged
+        when unused or ending within 60 days, and coverage per type
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.CommitmentsDTO'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Existing commitments
+      tags:
+      - cloud-cost
+  /cloud-cost/explore:
+    post:
+      consumes:
+      - application/json
+      description: Sums effective or billed cost from..to by day, month, quarter or
+        year, grouped by provider, account, region, service, resource, charge category
+        or a tracked tag (tag:<key>); one block per currency, never added together
+      parameters:
+      - description: Query
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/cloudcost.ExploreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.ExploreResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cost by group and period
+      tags:
+      - cloud-cost
+  /cloud-cost/facets:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Range and filters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/cloudcost.ExploreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.FacetsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: The values each cost filter can take with the others applied
+      tags:
+      - cloud-cost
+  /cloud-cost/planner:
+    get:
+      description: 'The providers'' purchase recommendations per connection and type:
+        1 or 3 years by payment, for one look-back; rightsizingFirst (default true)
+        scales each plan down by the open rightsizing savings on the usage it covers'
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      - description: 7, 30 (default) or 60
+        in: query
+        name: lookbackDays
+        type: integer
+      - description: Default true
+        in: query
+        name: rightsizingFirst
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.PlannerDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Commitment planner
+      tags:
+      - cloud-cost
+  /cloud-cost/recommendations:
+    get:
+      description: Rightsizing, idle, modernization and storage recommendations with
+        their status, expected and realized savings, and how each connection's last
+        refresh went
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.RecommendationsDTO'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cost recommendations
+      tags:
+      - cloud-cost
+    patch:
+      consumes:
+      - application/json
+      description: Project members. Dismissing needs a reason; plans and dismissals
+        go into the audit log
+      parameters:
+      - description: The recommendation's project, key and new status
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/cloudcost.RecommendationUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.RecommendationDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Plan, finish, dismiss or reopen a cost recommendation
+      tags:
+      - cloud-cost
+  /cloud-cost/resource:
+    get:
+      description: From the FOCUS exports, by day and charge category; key is the
+        resource's cloud ID (ARN or Azure resource ID)
+      parameters:
+      - description: Cloud resource ID
+        in: query
+        name: key
+        required: true
+        type: string
+      - description: Days back (default 30)
+        in: query
+        name: days
+        type: integer
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.ResourceCostDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: One resource's cost
+      tags:
+      - cloud-cost
+  /cloud-cost/resource-recommendations:
+    get:
+      description: 'For the asset drawer: open and planned recommendations for the
+        resource named by its cloud ID'
+      parameters:
+      - description: The resource's ARN or Azure resource ID
+        in: query
+        name: key
+        required: true
+        type: string
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cloudcost.RecommendationDTO'
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: One resource's open cost recommendations
+      tags:
+      - cloud-cost
+  /cloud-cost/sources:
+    get:
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cloudcost.SourceStatus'
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: What each connection's cost sources last delivered
+      tags:
+      - cloud-cost
+  /cloud-cost/summary:
+    get:
+      description: 'Per currency: month to date, last month, forecast and the last
+        90 days; what each connection last delivered; open anomalies'
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.SummaryDTO'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cloud cost overview
+      tags:
+      - cloud-cost
   /control-plane/admin/grants:
     post:
       consumes:
@@ -9414,6 +11280,320 @@ paths:
       summary: Update user plan
       tags:
       - user-plans
+  /posture/actions:
+    get:
+      description: Ranked changes that each fix a group of findings, guardrails that
+        stop findings coming back and coverage fixes, with the standards' scores now,
+        with the plan done and with every action done
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.ActionsDTO'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Posture actions
+      tags:
+      - posture
+    patch:
+      consumes:
+      - application/json
+      description: Project members. Dismissing needs a reason; both go into the audit
+        log
+      parameters:
+      - description: The action's project, key and change
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/posture.ActionUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.Action'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Plan or dismiss a posture action
+      tags:
+      - posture
+  /posture/coverage:
+    get:
+      description: 'For each connection, account and region: native, fallback to the
+        Obzly baseline, not covered or stale, with the reason'
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/posture.CoverageRow'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: Posture coverage per scope
+      tags:
+      - posture
+  /posture/facets:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      - description: Filters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/posture.Filters'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.FacetsResponse'
+      security:
+      - BearerAuth: []
+      summary: The values each posture filter can take with the others applied
+      tags:
+      - posture
+  /posture/findings:
+    post:
+      consumes:
+      - application/json
+      description: Findings matching the filters (open and unsuppressed by default),
+        a page at a time
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      - description: Filters, sort and page
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/posture.FindingsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.FindingsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Posture findings
+      tags:
+      - posture
+  /posture/findings/{id}:
+    get:
+      description: With its history and, for a baseline check, remediation steps
+      parameters:
+      - description: Finding ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.FindingDetail'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: One posture finding
+      tags:
+      - posture
+    patch:
+      consumes:
+      - application/json
+      description: Suppressing needs a reason and can end at a time; both are kept
+        in the finding's history and the audit log (project members who can change
+        the project)
+      parameters:
+      - description: Finding ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Suppression
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/posture.FindingUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.Finding'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Suppress or unsuppress a posture finding
+      tags:
+      - posture
+  /posture/resource:
+    get:
+      description: By its cloud ID (ARN or Azure resource ID), for the Infrastructure
+        asset drawer
+      parameters:
+      - description: Cloud resource ID
+        in: query
+        name: key
+        required: true
+        type: string
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/posture.Finding'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: One resource's open posture findings
+      tags:
+      - posture
+  /posture/summary:
+    get:
+      description: Each standard's score and source, open findings by severity, coverage
+        counts
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.SummaryDTO'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cloud posture overview
+      tags:
+      - posture
+  /posture/trends:
+    post:
+      consumes:
+      - application/json
+      description: 'Per day, month, quarter or year: findings open at its end by severity,
+        opened and resolved within it, and each standard''s score'
+      parameters:
+      - description: Only this project
+        in: query
+        name: projectId
+        type: string
+      - description: Range, granularity and filters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/posture.TrendsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.TrendsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Posture over time
+      tags:
+      - posture
   /projects:
     get:
       description: Get list of projects the user is a member of
@@ -10464,6 +12644,204 @@ paths:
       summary: Get project audit logs
       tags:
       - projects
+  /projects/{id}/cost-alerts:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.AlertSettingsDTO'
+      security:
+      - BearerAuth: []
+      summary: Where a project's new cost anomalies are sent
+      tags:
+      - cloud-cost
+    put:
+      consumes:
+      - application/json
+      description: Project members. Keeps a read-only alert rule (source cloud_cost);
+        no channels removes it
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Channels
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/cloudcost.AlertSettingsDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.AlertSettingsDTO'
+      security:
+      - BearerAuth: []
+      summary: Send a project's new cost anomalies to channels
+      tags:
+      - cloud-cost
+  /projects/{id}/cost-budgets:
+    get:
+      description: A project's monthly cost budgets with this month's spend and projection
+        (any member)
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cloudcost.BudgetDTO'
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cost budgets
+      tags:
+      - cloud-cost
+    post:
+      consumes:
+      - application/json
+      description: Project members. Keeps a read-only alert rule (source cloud_cost)
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Budget
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/cloudcost.BudgetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.BudgetDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create a cost budget
+      tags:
+      - cloud-cost
+  /projects/{id}/cost-budgets/{budgetId}:
+    delete:
+      description: Project members; its alert rule goes too
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Budget ID
+        in: path
+        name: budgetId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete a cost budget
+      tags:
+      - cloud-cost
+    put:
+      consumes:
+      - application/json
+      description: Project members
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Budget ID
+        in: path
+        name: budgetId
+        required: true
+        type: string
+      - description: Budget
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/cloudcost.BudgetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cloudcost.BudgetDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update a cost budget
+      tags:
+      - cloud-cost
   /projects/{id}/notification-channels:
     get:
       description: Channels this project may use (any member); where they send is
@@ -10565,6 +12943,61 @@ paths:
       summary: Send a test notification
       tags:
       - alerting
+  /projects/{id}/posture-alerts:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.AlertSettingsDTO'
+      security:
+      - BearerAuth: []
+      summary: Where a project's new posture findings are sent
+      tags:
+      - posture
+    put:
+      consumes:
+      - application/json
+      description: Channels and the least severity that alerts; no channels turns
+        the alert off
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Settings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/posture.AlertSettingsDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/posture.AlertSettingsDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Set where a project's new posture findings are sent
+      tags:
+      - posture
   /projects/{id}/promoted-fields:
     get:
       description: Log fields copied into typed columns at ingest, for faster filters
@@ -12152,6 +14585,168 @@ paths:
       summary: Transfer project ownership
       tags:
       - project-membership
+  /saved-views:
+    get:
+      description: The user's own views of a kind, and those others shared, with the
+        user's default
+      parameters:
+      - description: cost or posture
+        in: query
+        name: kind
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/savedviews.ViewList'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Saved views
+      tags:
+      - saved-views
+    post:
+      consumes:
+      - application/json
+      description: Private, or shared read-only with everyone
+      parameters:
+      - description: View
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/savedviews.ViewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/savedviews.ViewDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Save a view
+      tags:
+      - saved-views
+  /saved-views/{id}:
+    delete:
+      description: Its owner only
+      parameters:
+      - description: View ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete a saved view
+      tags:
+      - saved-views
+    put:
+      consumes:
+      - application/json
+      description: Its owner only
+      parameters:
+      - description: View ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: View
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/savedviews.ViewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/savedviews.ViewDTO'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Change a saved view
+      tags:
+      - saved-views
+  /saved-views/default:
+    put:
+      consumes:
+      - application/json
+      description: viewId null clears the default
+      parameters:
+      - description: Kind and view
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/savedviews.DefaultRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/savedviews.ViewList'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Open a tab with a saved view
+      tags:
+      - saved-views
   /scim/v2/Groups:
     get:
       description: 'The organization''s teams. Filters: displayName, externalId, id
@@ -15935,6 +18530,115 @@ paths:
       summary: Register a new user
       tags:
       - users
+  /v1/cloud/advice:
+    post:
+      consumes:
+      - application/json
+      description: obzly-probe sends a connection's weekly recommendations, commitments
+        and purchase options in chunks (gzip JSON, X-API-Key of the destination project);
+        each section that came back ok replaces the connection's data once every chunk
+        has arrived
+      parameters:
+      - description: The destination project's ingest key
+        in: header
+        name: X-API-Key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Receive cost recommendations from a probe
+      tags:
+      - cloud-cost
+  /v1/cloud/cost:
+    post:
+      consumes:
+      - application/json
+      description: obzly-probe sends daily cost rows in chunks (gzip JSON, X-API-Key
+        of the destination project); a batch replaces its days once every chunk has
+        arrived
+      parameters:
+      - description: The destination project's ingest key
+        in: header
+        name: X-API-Key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Receive a cost batch from a probe
+      tags:
+      - cloud-cost
+  /v1/cloud/posture:
+    post:
+      consumes:
+      - application/json
+      description: obzly-probe sends scope runs and findings in chunks (gzip JSON,
+        X-API-Key of the destination project); a batch applies once every chunk has
+        arrived
+      parameters:
+      - description: The destination project's ingest key
+        in: header
+        name: X-API-Key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Receive a posture batch from a probe
+      tags:
+      - posture
 schemes:
 - http
 swagger: "2.0"

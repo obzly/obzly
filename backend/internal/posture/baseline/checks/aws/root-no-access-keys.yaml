@@ -1,0 +1,18 @@
+id: aws-root-no-access-keys
+provider: aws
+resource: aws_account
+title: The root user should have no access keys
+severity: critical
+control: IAM.4
+standards:
+  - {standard: aws-fsbp, control: IAM.4}
+  - {standard: cis-aws, control: "1.4"}
+pass: r.root_access_keys == 0
+evidence: [root_access_keys]
+remediation:
+  cli: "# Signed in as root: aws iam list-access-keys, then aws iam delete-access-key --access-key-id <id>"
+  iac: "# Not manageable as code."
+  console: Sign in as the root user → Security credentials → Access keys → deactivate, then delete each key.
+fixtures:
+  pass: [{root_access_keys: 0}]
+  fail: [{root_access_keys: 1}]

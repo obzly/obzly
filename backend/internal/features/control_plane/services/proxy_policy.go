@@ -36,6 +36,8 @@ var proxyAllowlist = []*regexp.Regexp{
 	regexp.MustCompile(`^/api/v1/dashboards(/|$)`),
 	regexp.MustCompile(`^/api/v1/ai-usage(/|$)`),
 	regexp.MustCompile(`^/api/v1/inventory(/|$)`),
+	regexp.MustCompile(`^/api/v1/cloud-cost(/|$)`),
+	regexp.MustCompile(`^/api/v1/posture(/|$)`),
 }
 
 // IsProxyPathAllowed checks an already path.Clean-ed sub-path. GET /api/v1/users/me is

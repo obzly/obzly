@@ -18,13 +18,15 @@ import (
 )
 
 const (
-	azureLogin           = "https://login.microsoftonline.com"
-	azureManagement      = "https://management.azure.com"
-	azureIMDS            = "http://169.254.169.254"
-	azureScope           = "https://management.azure.com/.default"
-	azureGraphAPIVersion = "2022-10-01"
-	azureGraphPageSize   = 1000
-	maxAzureResources    = 50000
+	azureLogin      = "https://login.microsoftonline.com"
+	azureManagement = "https://management.azure.com"
+	azureIMDS       = "http://169.254.169.254"
+	// Token resources: ARM, and Blob storage (the cost export).
+	azureManagementResource = "https://management.azure.com"
+	azureStorageResource    = "https://storage.azure.com"
+	azureGraphAPIVersion    = "2022-10-01"
+	azureGraphPageSize      = 1000
+	maxAzureResources       = 50000
 	// The AKS workload identity webhook mounts the service account token here.
 	azureFederatedTokenEnv = "AZURE_FEDERATED_TOKEN_FILE"
 	// IMDS answers in milliseconds where it exists; elsewhere don't wait long.
@@ -264,13 +266,24 @@ func azureToken(
 	options Options,
 	client *http.Client,
 ) (string, error) {
+	return azureTokenFor(ctx, connection, options, client, azureManagementResource)
+}
+
+// azureTokenFor is azureToken for another resource, e.g. azureStorageResource.
+func azureTokenFor(
+	ctx context.Context,
+	connection spec.CloudConnection,
+	options Options,
+	client *http.Client,
+	resource string,
+) (string, error) {
 	var token struct {
 		AccessToken string `json:"access_token"`
 	}
 	if connection.Access == spec.AccessProbe {
 		ctx, cancel := context.WithTimeout(ctx, azureIMDSTimeout)
 		defer cancel()
-		query := url.Values{"api-version": {"2018-02-01"}, "resource": {"https://management.azure.com/"}}
+		query := url.Values{"api-version": {"2018-02-01"}, "resource": {resource + "/"}}
 		if connection.Identity != "" {
 			query.Set("client_id", connection.Identity)
 		}
@@ -290,7 +303,7 @@ func azureToken(
 		return "", err
 	}
 	form := url.Values{
-		"client_id": {connection.Identity}, "scope": {azureScope}, "grant_type": {"client_credentials"},
+		"client_id": {connection.Identity}, "scope": {resource + "/.default"}, "grant_type": {"client_credentials"},
 		"client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"},
 		"client_assertion":      {assertion},
 	}

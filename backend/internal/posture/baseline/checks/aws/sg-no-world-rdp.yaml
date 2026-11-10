@@ -1,0 +1,26 @@
+id: aws-sg-no-world-rdp
+provider: aws
+resource: aws_security_group
+title: Security groups should not allow RDP (3389) from anywhere
+severity: high
+control: EC2.14
+standards:
+  - {standard: aws-fsbp, control: EC2.14}
+  - {standard: cis-aws, control: "5.2"}
+pass: "!(3389 in r.world_ports) && !r.world_all_traffic"
+evidence: [world_ports, world_all_traffic]
+remediation:
+  cli: |
+    aws ec2 revoke-security-group-ingress --region {region} --group-id {name} \
+      --protocol tcp --port 3389 --cidr 0.0.0.0/0
+  iac: |
+    # CloudFormation: replace the 0.0.0.0/0 rule with your admin network or remove it
+    SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3389
+        ToPort: 3389
+        CidrIp: 10.0.0.0/8
+  console: EC2 → Security groups → the group → Inbound rules → Edit → remove or narrow the rule for port 3389 from 0.0.0.0/0 or ::/0.
+fixtures:
+  pass: [{world_ports: [22], world_all_traffic: false}]
+  fail: [{world_ports: [3389], world_all_traffic: false}]

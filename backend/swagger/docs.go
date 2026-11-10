@@ -1395,6 +1395,95 @@ const docTemplate = `{
                 }
             }
         },
+        "/cloud-connections/cost-settings": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The tag keys kept on cost rows, to group and budget by",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-connections"
+                ],
+                "summary": "Cost settings for every cloud connection",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/synthetics.CloudCostSettings"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Admins only. Up to 10 tracked tag keys; probes get them with their next config",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-connections"
+                ],
+                "summary": "Set the cost settings for every cloud connection",
+                "parameters": [
+                    {
+                        "description": "Settings",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/synthetics.CloudCostSettings"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/synthetics.CloudCostSettings"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/cloud-connections/setup": {
             "get": {
                 "security": [
@@ -1658,6 +1747,631 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/anomalies": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Cost anomalies",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "First day (default 30 days ago)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Last day (default today)",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "open or acknowledged",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/cloudcost.AnomalyDTO"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/anomalies/{id}": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Acknowledge or reopen a cost anomaly",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anomaly ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Status and note",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.AnomalyUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.Anomaly"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/commitments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Savings Plans and reservations with their use over 30 days, flagged when unused or ending within 60 days, and coverage per type",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Existing commitments",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.CommitmentsDTO"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/explore": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Sums effective or billed cost from..to by day, month, quarter or year, grouped by provider, account, region, service, resource, charge category or a tracked tag (tag:\u003ckey\u003e); one block per currency, never added together",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Cost by group and period",
+                "parameters": [
+                    {
+                        "description": "Query",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.ExploreRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.ExploreResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/facets": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "The values each cost filter can take with the others applied",
+                "parameters": [
+                    {
+                        "description": "Range and filters",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.ExploreRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.FacetsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/planner": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The providers' purchase recommendations per connection and type: 1 or 3 years by payment, for one look-back; rightsizingFirst (default true) scales each plan down by the open rightsizing savings on the usage it covers",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Commitment planner",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "7, 30 (default) or 60",
+                        "name": "lookbackDays",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Default true",
+                        "name": "rightsizingFirst",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.PlannerDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/recommendations": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Rightsizing, idle, modernization and storage recommendations with their status, expected and realized savings, and how each connection's last refresh went",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Cost recommendations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.RecommendationsDTO"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members. Dismissing needs a reason; plans and dismissals go into the audit log",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Plan, finish, dismiss or reopen a cost recommendation",
+                "parameters": [
+                    {
+                        "description": "The recommendation's project, key and new status",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.RecommendationUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.RecommendationDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/resource": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "From the FOCUS exports, by day and charge category; key is the resource's cloud ID (ARN or Azure resource ID)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "One resource's cost",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Cloud resource ID",
+                        "name": "key",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Days back (default 30)",
+                        "name": "days",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.ResourceCostDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/resource-recommendations": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "For the asset drawer: open and planned recommendations for the resource named by its cloud ID",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "One resource's open cost recommendations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The resource's ARN or Azure resource ID",
+                        "name": "key",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/cloudcost.RecommendationDTO"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/sources": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "What each connection's cost sources last delivered",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/cloudcost.SourceStatus"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cloud-cost/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Per currency: month to date, last month, forecast and the last 90 days; what each connection last delivered; open anomalies",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Cloud cost overview",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.SummaryDTO"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -6032,6 +6746,490 @@ const docTemplate = `{
                 }
             }
         },
+        "/posture/actions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ranked changes that each fix a group of findings, guardrails that stop findings coming back and coverage fixes, with the standards' scores now, with the plan done and with every action done",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Posture actions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.ActionsDTO"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members. Dismissing needs a reason; both go into the audit log",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Plan or dismiss a posture action",
+                "parameters": [
+                    {
+                        "description": "The action's project, key and change",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/posture.ActionUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.Action"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/posture/coverage": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "For each connection, account and region: native, fallback to the Obzly baseline, not covered or stale, with the reason",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Posture coverage per scope",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/posture.CoverageRow"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/posture/facets": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "The values each posture filter can take with the others applied",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Filters",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/posture.Filters"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.FacetsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/posture/findings": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Findings matching the filters (open and unsuppressed by default), a page at a time",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Posture findings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Filters, sort and page",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/posture.FindingsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.FindingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/posture/findings/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "With its history and, for a baseline check, remediation steps",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "One posture finding",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Finding ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.FindingDetail"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Suppressing needs a reason and can end at a time; both are kept in the finding's history and the audit log (project members who can change the project)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Suppress or unsuppress a posture finding",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Finding ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Suppression",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/posture.FindingUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.Finding"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/posture/resource": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "By its cloud ID (ARN or Azure resource ID), for the Infrastructure asset drawer",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "One resource's open posture findings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Cloud resource ID",
+                        "name": "key",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/posture.Finding"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/posture/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Each standard's score and source, open findings by severity, coverage counts",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Cloud posture overview",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.SummaryDTO"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/posture/trends": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Per day, month, quarter or year: findings open at its end by severity, opened and resolved within it, and each standard's score",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Posture over time",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this project",
+                        "name": "projectId",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Range, granularity and filters",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/posture.TrendsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.TrendsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/projects": {
             "get": {
                 "security": [
@@ -9477,6 +10675,313 @@ const docTemplate = `{
                 }
             }
         },
+        "/projects/{id}/cost-alerts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Where a project's new cost anomalies are sent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.AlertSettingsDTO"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members. Keeps a read-only alert rule (source cloud_cost); no channels removes it",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Send a project's new cost anomalies to channels",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Channels",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.AlertSettingsDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.AlertSettingsDTO"
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/cost-budgets": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "A project's monthly cost budgets with this month's spend and projection (any member)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Cost budgets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/cloudcost.BudgetDTO"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members. Keeps a read-only alert rule (source cloud_cost)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Create a cost budget",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Budget",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.BudgetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.BudgetDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/cost-budgets/{budgetId}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Update a cost budget",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Budget ID",
+                        "name": "budgetId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Budget",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.BudgetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cloudcost.BudgetDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members; its alert rule goes too",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Delete a cost budget",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Budget ID",
+                        "name": "budgetId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/projects/{id}/notification-channels": {
             "get": {
                 "security": [
@@ -9620,6 +11125,92 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/posture-alerts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Where a project's new posture findings are sent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.AlertSettingsDTO"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Channels and the least severity that alerts; no channels turns the alert off",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Set where a project's new posture findings are sent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Settings",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/posture.AlertSettingsDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/posture.AlertSettingsDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -10218,6 +11809,260 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/saved-views": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The user's own views of a kind, and those others shared, with the user's default",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Saved views",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "cost or posture",
+                        "name": "kind",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/savedviews.ViewList"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Private, or shared read-only with everyone",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Save a view",
+                "parameters": [
+                    {
+                        "description": "View",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/savedviews.ViewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/savedviews.ViewDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/saved-views/default": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "viewId null clears the default",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Open a tab with a saved view",
+                "parameters": [
+                    {
+                        "description": "Kind and view",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/savedviews.DefaultRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/savedviews.ViewList"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/saved-views/{id}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Its owner only",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Change a saved view",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "View ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "View",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/savedviews.ViewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/savedviews.ViewDTO"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Its owner only",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Delete a saved view",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "View ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -16044,6 +17889,159 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/v1/cloud/advice": {
+            "post": {
+                "description": "obzly-probe sends a connection's weekly recommendations, commitments and purchase options in chunks (gzip JSON, X-API-Key of the destination project); each section that came back ok replaces the connection's data once every chunk has arrived",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Receive cost recommendations from a probe",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The destination project's ingest key",
+                        "name": "X-API-Key",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/cloud/cost": {
+            "post": {
+                "description": "obzly-probe sends daily cost rows in chunks (gzip JSON, X-API-Key of the destination project); a batch replaces its days once every chunk has arrived",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cloud-cost"
+                ],
+                "summary": "Receive a cost batch from a probe",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The destination project's ingest key",
+                        "name": "X-API-Key",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/cloud/posture": {
+            "post": {
+                "description": "obzly-probe sends scope runs and findings in chunks (gzip JSON, X-API-Key of the destination project); a batch applies once every chunk has arrived",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posture"
+                ],
+                "summary": "Receive a posture batch from a probe",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The destination project's ingest key",
+                        "name": "X-API-Key",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -17146,8 +19144,16 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "budgetId": {
-                    "description": "BudgetID is the AI budget an ai_cost rule watches.",
+                    "description": "BudgetID is the AI budget an ai_cost rule watches, or the cost budget a cloud_cost rule does.",
                     "type": "string"
+                },
+                "costAnomalies": {
+                    "description": "CostAnomalies: a cloud_cost rule that fires for each new cost anomaly.",
+                    "type": "boolean"
+                },
+                "costCommitments": {
+                    "description": "CostCommitments: a cloud_cost rule whose series are the days left on each commitment\nending soon.",
+                    "type": "boolean"
                 },
                 "groupBy": {
                     "type": "string"
@@ -17160,6 +19166,10 @@ const docTemplate = `{
                 },
                 "minCount": {
                     "type": "integer"
+                },
+                "minSeverity": {
+                    "description": "MinSeverity: a cloud_posture rule fires for new or reopened findings this severe or more.",
+                    "type": "string"
                 },
                 "operationName": {
                     "type": "string"
@@ -17517,6 +19527,1004 @@ const docTemplate = `{
                 },
                 "total": {
                     "type": "integer"
+                }
+            }
+        },
+        "baseline.Remediation": {
+            "type": "object",
+            "properties": {
+                "cli": {
+                    "type": "string"
+                },
+                "console": {
+                    "type": "string"
+                },
+                "iac": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.AdviceSectionDTO": {
+            "type": "object",
+            "properties": {
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "refreshedAt": {
+                    "type": "string"
+                },
+                "section": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.AlertSettingsDTO": {
+            "type": "object",
+            "properties": {
+                "anomalyChannelIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "cloudcost.Anomaly": {
+            "type": "object",
+            "properties": {
+                "actual": {
+                    "type": "number"
+                },
+                "connectionId": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "day": {
+                    "type": "string"
+                },
+                "detectedAt": {
+                    "type": "string"
+                },
+                "expected": {
+                    "type": "number"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "number"
+                },
+                "service": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subAccount": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.AnomalyDTO": {
+            "type": "object",
+            "properties": {
+                "actual": {
+                    "type": "number"
+                },
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "day": {
+                    "type": "string"
+                },
+                "detectedAt": {
+                    "type": "string"
+                },
+                "expected": {
+                    "type": "number"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "number"
+                },
+                "service": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subAccount": {
+                    "type": "string"
+                },
+                "subAccountName": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.AnomalyUpdate": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.BudgetDTO": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number"
+                },
+                "channelIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "filters": {
+                    "$ref": "#/definitions/cloudcost.Filters"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "method": {
+                    "description": "Method: forecast (the provider's, for an unfiltered budget) or run-rate (the last days' average).",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "percent": {
+                    "type": "number"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "projected": {
+                    "type": "number"
+                },
+                "spent": {
+                    "type": "number"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "thresholdPercent": {
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.BudgetRequest": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number"
+                },
+                "channelIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "filters": {
+                    "$ref": "#/definitions/cloudcost.Filters"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "thresholdPercent": {
+                    "type": "integer"
+                }
+            }
+        },
+        "cloudcost.CommitmentDTO": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "endingSoon": {
+                    "type": "boolean"
+                },
+                "endsAt": {
+                    "type": "string"
+                },
+                "endsInDays": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "monthlyCost": {
+                    "type": "number"
+                },
+                "payment": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "startsAt": {
+                    "type": "string"
+                },
+                "term": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "unused": {
+                    "type": "boolean"
+                },
+                "unusedMonthly": {
+                    "type": "number"
+                },
+                "utilization": {
+                    "type": "number"
+                }
+            }
+        },
+        "cloudcost.CommitmentsDTO": {
+            "type": "object",
+            "properties": {
+                "commitments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.CommitmentDTO"
+                    }
+                },
+                "coverage": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.CoverageDTO"
+                    }
+                },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.AdviceSectionDTO"
+                    }
+                }
+            }
+        },
+        "cloudcost.CoverageDTO": {
+            "type": "object",
+            "properties": {
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "coveredPercent": {
+                    "type": "number"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "onDemandMonthly": {
+                    "type": "number"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.CurrencyBlock": {
+            "type": "object",
+            "properties": {
+                "currency": {
+                    "type": "string"
+                },
+                "other": {
+                    "description": "Other: the groups past the first maxExploreRows, added up.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/cloudcost.ExploreRow"
+                        }
+                    ]
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.ExploreRow"
+                    }
+                },
+                "total": {
+                    "type": "number"
+                },
+                "totals": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                }
+            }
+        },
+        "cloudcost.CurrencySummary": {
+            "type": "object",
+            "properties": {
+                "currency": {
+                    "type": "string"
+                },
+                "daily": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.DailyPoint"
+                    }
+                },
+                "forecast": {
+                    "description": "Forecast: month to date plus the providers' forecast for the rest (nil without one).",
+                    "type": "number"
+                },
+                "lastMonth": {
+                    "type": "number"
+                },
+                "lastMonthSameDays": {
+                    "type": "number"
+                },
+                "monthToDate": {
+                    "type": "number"
+                }
+            }
+        },
+        "cloudcost.DailyPoint": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number"
+                },
+                "day": {
+                    "type": "string"
+                },
+                "estimated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "cloudcost.ExploreRequest": {
+            "type": "object",
+            "properties": {
+                "filters": {
+                    "$ref": "#/definitions/cloudcost.Filters"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "granularity": {
+                    "type": "string"
+                },
+                "groupBy": {
+                    "type": "string"
+                },
+                "metric": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "description": "ProjectID narrows to one project (else every project the user can read).",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.ExploreResponse": {
+            "type": "object",
+            "properties": {
+                "currencies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.CurrencyBlock"
+                    }
+                },
+                "periods": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.PeriodDTO"
+                    }
+                }
+            }
+        },
+        "cloudcost.ExploreRow": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "number"
+                },
+                "values": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                }
+            }
+        },
+        "cloudcost.FacetValue": {
+            "type": "object",
+            "properties": {
+                "amounts": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number",
+                        "format": "float64"
+                    }
+                },
+                "label": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.FacetsResponse": {
+            "type": "object",
+            "properties": {
+                "dimensions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/cloudcost.FacetValue"
+                        }
+                    }
+                }
+            }
+        },
+        "cloudcost.Filters": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "charge": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "provider": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "region": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "resource": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "service": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tags": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "cloudcost.PeriodDTO": {
+            "type": "object",
+            "properties": {
+                "coverage": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.PlanDTO": {
+            "type": "object",
+            "properties": {
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "factor": {
+                    "type": "number"
+                },
+                "lookbackDays": {
+                    "type": "integer"
+                },
+                "onDemandMonthly": {
+                    "type": "number"
+                },
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.PurchaseOptionDTO"
+                    }
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "refreshedAt": {
+                    "type": "string"
+                },
+                "rightsizingMonthly": {
+                    "description": "RightsizingMonthly: open rightsizing and idle savings on the usage this type covers;\nFactor is what the plan was scaled by so the two never count the same saving.",
+                    "type": "number"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "usage": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.UsagePoint"
+                    }
+                }
+            }
+        },
+        "cloudcost.PlannerDTO": {
+            "type": "object",
+            "properties": {
+                "plans": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.PlanDTO"
+                    }
+                },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.AdviceSectionDTO"
+                    }
+                }
+            }
+        },
+        "cloudcost.PurchaseLineDTO": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "monthlySavings": {
+                    "type": "number"
+                },
+                "quantity": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "upfront": {
+                    "type": "number"
+                }
+            }
+        },
+        "cloudcost.PurchaseOptionDTO": {
+            "type": "object",
+            "properties": {
+                "averageUtilization": {
+                    "type": "number"
+                },
+                "breakEvenMonths": {
+                    "type": "number"
+                },
+                "commitment": {
+                    "type": "string"
+                },
+                "coveragePercent": {
+                    "type": "number"
+                },
+                "hourlyCommitment": {
+                    "type": "number"
+                },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.PurchaseLineDTO"
+                    }
+                },
+                "monthlyRecurring": {
+                    "type": "number"
+                },
+                "monthlySavings": {
+                    "type": "number"
+                },
+                "offered": {
+                    "type": "boolean"
+                },
+                "payment": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "savingsPercent": {
+                    "type": "number"
+                },
+                "term": {
+                    "type": "string"
+                },
+                "upfront": {
+                    "type": "number"
+                }
+            }
+        },
+        "cloudcost.RecommendationDTO": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "action": {
+                    "type": "string"
+                },
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "current": {
+                    "type": "string"
+                },
+                "doneAt": {
+                    "type": "string"
+                },
+                "doneBy": {
+                    "type": "string"
+                },
+                "dueDate": {
+                    "type": "string"
+                },
+                "effort": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "expectedMonthly": {
+                    "type": "number"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "measuredAt": {
+                    "type": "string"
+                },
+                "monthlySavings": {
+                    "type": "number"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "realizedMonthly": {
+                    "type": "number"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "refreshedAt": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "resourceKey": {
+                    "type": "string"
+                },
+                "resourceName": {
+                    "type": "string"
+                },
+                "resourceType": {
+                    "type": "string"
+                },
+                "risk": {
+                    "type": "string"
+                },
+                "savingsBasis": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.RecommendationUpdate": {
+            "type": "object",
+            "required": [
+                "key",
+                "projectId",
+                "status"
+            ],
+            "properties": {
+                "dueDate": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.RecommendationsDTO": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.RecommendationDTO"
+                    }
+                },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.AdviceSectionDTO"
+                    }
+                }
+            }
+        },
+        "cloudcost.ResourceCost": {
+            "type": "object",
+            "properties": {
+                "byCharge": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number",
+                        "format": "float64"
+                    }
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "days": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.DailyPoint"
+                    }
+                },
+                "total": {
+                    "type": "number"
+                }
+            }
+        },
+        "cloudcost.ResourceCostDTO": {
+            "type": "object",
+            "properties": {
+                "covered": {
+                    "description": "Covered: some export delivered these days for a connection of these projects.",
+                    "type": "boolean"
+                },
+                "currencies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.ResourceCost"
+                    }
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "cloudcost.SourceStatus": {
+            "type": "object",
+            "properties": {
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "coveredFrom": {
+                    "type": "string"
+                },
+                "coveredTo": {
+                    "type": "string"
+                },
+                "deliveredAt": {
+                    "type": "string"
+                },
+                "finalThrough": {
+                    "type": "string"
+                },
+                "forecastAt": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "rows": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.SummaryDTO": {
+            "type": "object",
+            "properties": {
+                "currencies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.CurrencySummary"
+                    }
+                },
+                "openAnomalies": {
+                    "type": "integer"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cloudcost.SourceStatus"
+                    }
+                },
+                "today": {
+                    "type": "string"
+                }
+            }
+        },
+        "cloudcost.UsagePoint": {
+            "type": "object",
+            "properties": {
+                "committed": {
+                    "type": "number"
+                },
+                "day": {
+                    "type": "string"
+                },
+                "onDemand": {
+                    "type": "number"
                 }
             }
         },
@@ -20387,6 +23395,779 @@ const docTemplate = `{
                 }
             }
         },
+        "posture.Action": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "costLinks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.CostLink"
+                    }
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "dismissReason": {
+                    "type": "string"
+                },
+                "dismissed": {
+                    "type": "boolean"
+                },
+                "effort": {
+                    "type": "string"
+                },
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.ActionFinding"
+                    }
+                },
+                "key": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "planned": {
+                    "type": "boolean"
+                },
+                "prevents": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "rank": {
+                    "type": "number"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.ActionFinding": {
+            "type": "object",
+            "properties": {
+                "control": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "resourceKey": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "suppressed": {
+                    "type": "boolean"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.ActionUpdate": {
+            "type": "object",
+            "required": [
+                "key",
+                "projectId"
+            ],
+            "properties": {
+                "dismissed": {
+                    "type": "boolean"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "planned": {
+                    "type": "boolean"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.ActionsDTO": {
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.Action"
+                    }
+                },
+                "standards": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.SimulatedScore"
+                    }
+                }
+            }
+        },
+        "posture.AlertSettingsDTO": {
+            "type": "object",
+            "properties": {
+                "channelIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "minSeverity": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.CostLink": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "monthlySavings": {
+                    "type": "number"
+                }
+            }
+        },
+        "posture.CoverageCounts": {
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "type": "integer"
+                },
+                "fallback": {
+                    "type": "integer"
+                },
+                "native": {
+                    "type": "integer"
+                },
+                "notCovered": {
+                    "type": "integer"
+                },
+                "stale": {
+                    "type": "integer"
+                }
+            }
+        },
+        "posture.CoverageRow": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.CoverageRun"
+                    }
+                },
+                "scannedAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.CoverageRun": {
+            "type": "object",
+            "properties": {
+                "failed": {
+                    "type": "integer"
+                },
+                "passed": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "standard": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.Event": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "by": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.FacetValue": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.FacetsResponse": {
+            "type": "object",
+            "properties": {
+                "dimensions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/posture.FacetValue"
+                        }
+                    }
+                }
+            }
+        },
+        "posture.Filters": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "connection": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "control": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "provider": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "region": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "resource": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "search": {
+                    "description": "Search matches the title, control or resource.",
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "source": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "standard": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.Finding": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "check": {
+                    "type": "string"
+                },
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "control": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "$ref": "#/definitions/posture.stringMap"
+                },
+                "firstSeen": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "remediationUrl": {
+                    "type": "string"
+                },
+                "resolvedAt": {
+                    "type": "string"
+                },
+                "resourceKey": {
+                    "type": "string"
+                },
+                "resourceType": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "standards": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/spec.StandardRef"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "suppressReason": {
+                    "type": "string"
+                },
+                "suppressed": {
+                    "type": "boolean"
+                },
+                "suppressedBy": {
+                    "type": "string"
+                },
+                "suppressedUntil": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.FindingDetail": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "check": {
+                    "type": "string"
+                },
+                "connectionId": {
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "control": {
+                    "type": "string"
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.Event"
+                    }
+                },
+                "evidence": {
+                    "$ref": "#/definitions/posture.stringMap"
+                },
+                "firstSeen": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "remediation": {
+                    "$ref": "#/definitions/baseline.Remediation"
+                },
+                "remediationUrl": {
+                    "type": "string"
+                },
+                "resolvedAt": {
+                    "type": "string"
+                },
+                "resourceKey": {
+                    "type": "string"
+                },
+                "resourceType": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "standardNames": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "standards": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/spec.StandardRef"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "suppressReason": {
+                    "type": "string"
+                },
+                "suppressed": {
+                    "type": "boolean"
+                },
+                "suppressedBy": {
+                    "type": "string"
+                },
+                "suppressedUntil": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.FindingUpdate": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "suppressed": {
+                    "type": "boolean"
+                },
+                "until": {
+                    "description": "Until: when the suppression ends and the finding counts again (RFC 3339); empty is never.",
+                    "type": "string"
+                }
+            }
+        },
+        "posture.FindingsRequest": {
+            "type": "object",
+            "properties": {
+                "desc": {
+                    "type": "boolean"
+                },
+                "filters": {
+                    "$ref": "#/definitions/posture.Filters"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "sort": {
+                    "description": "Sort: severity (default), firstSeen, lastSeen or title; Desc reverses it.",
+                    "type": "string"
+                }
+            }
+        },
+        "posture.FindingsResponse": {
+            "type": "object",
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.Finding"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "posture.ScorePoint": {
+            "type": "object",
+            "properties": {
+                "day": {
+                    "type": "string"
+                },
+                "percent": {
+                    "type": "number"
+                }
+            }
+        },
+        "posture.SimulatedScore": {
+            "type": "object",
+            "properties": {
+                "current": {
+                    "type": "number"
+                },
+                "evaluated": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "standard": {
+                    "type": "string"
+                },
+                "withAll": {
+                    "type": "number"
+                },
+                "withPlan": {
+                    "type": "number"
+                }
+            }
+        },
+        "posture.StandardScore": {
+            "type": "object",
+            "properties": {
+                "evaluated": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "passed": {
+                    "type": "integer"
+                },
+                "percent": {
+                    "type": "number"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "standard": {
+                    "type": "string"
+                },
+                "trend": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.ScorePoint"
+                    }
+                }
+            }
+        },
+        "posture.SummaryDTO": {
+            "type": "object",
+            "properties": {
+                "coverage": {
+                    "$ref": "#/definitions/posture.CoverageCounts"
+                },
+                "lastScanAt": {
+                    "type": "string"
+                },
+                "open": {
+                    "description": "Open: open findings that aren't suppressed, by severity.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "resolved30d": {
+                    "description": "Resolved30d: findings resolved in the last 30 days.",
+                    "type": "integer"
+                },
+                "standards": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.StandardScore"
+                    }
+                },
+                "suppressed": {
+                    "type": "integer"
+                }
+            }
+        },
+        "posture.TrendPeriod": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "open": {
+                    "description": "Open: findings open at the period's end, by severity.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "opened": {
+                    "type": "integer"
+                },
+                "resolved": {
+                    "type": "integer"
+                },
+                "scores": {
+                    "description": "Scores: each standard's percent at the period's end; absent before it was evaluated.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number",
+                        "format": "float64"
+                    }
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.TrendsRequest": {
+            "type": "object",
+            "properties": {
+                "filters": {
+                    "$ref": "#/definitions/posture.Filters"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "granularity": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "posture.TrendsResponse": {
+            "type": "object",
+            "properties": {
+                "periods": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/posture.TrendPeriod"
+                    }
+                }
+            }
+        },
+        "posture.stringMap": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "string"
+            }
+        },
         "projects_controllers.PromoteFieldRequest": {
             "type": "object",
             "required": [
@@ -20694,6 +24475,78 @@ const docTemplate = `{
                 },
                 "updatedAt": {
                     "type": "string"
+                }
+            }
+        },
+        "savedviews.DefaultRequest": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "viewId": {
+                    "description": "ViewID nil clears the default.",
+                    "type": "string"
+                }
+            }
+        },
+        "savedviews.ViewDTO": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "mine": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "shared": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "object"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "savedviews.ViewList": {
+            "type": "object",
+            "properties": {
+                "defaultId": {
+                    "type": "string"
+                },
+                "views": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/savedviews.ViewDTO"
+                    }
+                }
+            }
+        },
+        "savedviews.ViewRequest": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "shared": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "object"
                 }
             }
         },
@@ -21201,6 +25054,40 @@ const docTemplate = `{
                 }
             }
         },
+        "spec.AdviceScanInfo": {
+            "type": "object",
+            "properties": {
+                "commitments": {
+                    "type": "integer"
+                },
+                "options": {
+                    "type": "integer"
+                },
+                "recommendations": {
+                    "type": "integer"
+                },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/spec.AdviceSection"
+                    }
+                }
+            }
+        },
+        "spec.AdviceSection": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "section": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
         "spec.Assertion": {
             "type": "object",
             "properties": {
@@ -21256,6 +25143,14 @@ const docTemplate = `{
                 "access": {
                     "type": "string"
                 },
+                "cost": {
+                    "description": "Cost is set when Uses has UseCost.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.CostSettings"
+                        }
+                    ]
+                },
                 "destinationId": {
                     "type": "string"
                 },
@@ -21278,6 +25173,14 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "posture": {
+                    "description": "Posture is set when Uses has UsePosture.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.PostureSettings"
+                        }
+                    ]
                 },
                 "provider": {
                     "type": "string"
@@ -21315,6 +25218,14 @@ const docTemplate = `{
         "spec.CloudScan": {
             "type": "object",
             "properties": {
+                "cost": {
+                    "description": "Cost is set on ScanCost reports.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.CostScanInfo"
+                        }
+                    ]
+                },
                 "durationSeconds": {
                     "type": "number"
                 },
@@ -21331,6 +25242,14 @@ const docTemplate = `{
                 "partial": {
                     "description": "Partial: the scan hit its time limit; what it found was still sent.",
                     "type": "boolean"
+                },
+                "posture": {
+                    "description": "Posture is set on ScanPosture reports.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.PostureScanInfo"
+                        }
+                    ]
                 },
                 "probe": {
                     "type": "string"
@@ -21376,6 +25295,95 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "spec.CostExport": {
+            "type": "object",
+            "properties": {
+                "bucket": {
+                    "type": "string"
+                },
+                "container": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "storageAccount": {
+                    "type": "string"
+                }
+            }
+        },
+        "spec.CostScanInfo": {
+            "type": "object",
+            "properties": {
+                "advice": {
+                    "description": "Advice is set when this refresh also read recommendations (weekly).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.AdviceScanInfo"
+                        }
+                    ]
+                },
+                "finalThrough": {
+                    "description": "FinalThrough: the last day the provider has finalised (YYYY-MM-DD).",
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "lastFile": {
+                    "description": "LastFile and LastFileAt: the newest export file read.",
+                    "type": "string"
+                },
+                "lastFileAt": {
+                    "type": "string"
+                },
+                "requests": {
+                    "description": "Requests counts billing API calls (Cost Explorer charges per call).",
+                    "type": "integer"
+                },
+                "rows": {
+                    "type": "integer"
+                },
+                "source": {
+                    "description": "Source is what this refresh read: export or api.",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "spec.CostSettings": {
+            "type": "object",
+            "properties": {
+                "export": {
+                    "$ref": "#/definitions/spec.CostExport"
+                },
+                "refreshHours": {
+                    "type": "integer"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "trackedTags": {
+                    "description": "TrackedTags: tag keys kept on cost rows (all others are dropped).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "viaConnectionId": {
+                    "description": "ViaConnectionID: with CostScopeVia, the connection that reads this\none's cost.",
                     "type": "string"
                 }
             }
@@ -21622,6 +25630,44 @@ const docTemplate = `{
                 }
             }
         },
+        "spec.PostureScanInfo": {
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "findings": {
+                    "type": "integer"
+                },
+                "native": {
+                    "description": "Native and Baseline: the regions each source covered; NotCovered: neither did.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "notCovered": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "spec.PostureSettings": {
+            "type": "object",
+            "properties": {
+                "refreshHours": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                }
+            }
+        },
         "spec.ProbeCheck": {
             "type": "object",
             "properties": {
@@ -21793,6 +25839,17 @@ const docTemplate = `{
                 "unsupported": {
                     "description": "Unsupported: the probe can't run this type here (ICMP without\nCAP_NET_RAW or ping sockets).",
                     "type": "boolean"
+                }
+            }
+        },
+        "spec.StandardRef": {
+            "type": "object",
+            "properties": {
+                "control": {
+                    "type": "string"
+                },
+                "standard": {
+                    "type": "string"
                 }
             }
         },
@@ -22417,6 +26474,14 @@ const docTemplate = `{
                 "access": {
                     "type": "string"
                 },
+                "cost": {
+                    "description": "Cost: settings for the cost use (tracked tags are set for all connections).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.CostSettings"
+                        }
+                    ]
+                },
                 "destinationId": {
                     "type": "string"
                 },
@@ -22438,6 +26503,14 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "posture": {
+                    "description": "Posture: settings for the posture use.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.PostureSettings"
+                        }
+                    ]
                 },
                 "probeId": {
                     "type": "string"
@@ -22483,6 +26556,14 @@ const docTemplate = `{
                 "access": {
                     "type": "string"
                 },
+                "cost": {
+                    "description": "Cost: the cost use's settings, when the connection has that use.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.CostSettings"
+                        }
+                    ]
+                },
                 "createdAt": {
                     "type": "string"
                 },
@@ -22510,6 +26591,14 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "posture": {
+                    "description": "Posture: the posture use's settings, when the connection has that use.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.PostureSettings"
+                        }
+                    ]
                 },
                 "probe": {
                     "$ref": "#/definitions/synthetics.ProbeRef"
@@ -22555,6 +26644,18 @@ const docTemplate = `{
                 }
             }
         },
+        "synthetics.CloudCostSettings": {
+            "type": "object",
+            "properties": {
+                "trackedTags": {
+                    "description": "TrackedTags: the tag keys kept on cost rows, to group and budget by.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "synthetics.CloudSetup": {
             "type": "object",
             "properties": {
@@ -22577,8 +26678,24 @@ const docTemplate = `{
         "synthetics.CloudState": {
             "type": "object",
             "properties": {
+                "cost": {
+                    "description": "LastCost: the latest cost refresh.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.CloudScan"
+                        }
+                    ]
+                },
                 "health": {
                     "$ref": "#/definitions/spec.CloudScan"
+                },
+                "posture": {
+                    "description": "LastPosture: the latest posture refresh.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/spec.CloudScan"
+                        }
+                    ]
                 },
                 "reportedAt": {
                     "type": "string"

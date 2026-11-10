@@ -81,6 +81,16 @@ func (p *probe) scheduleCloud(ctx context.Context, config *spec.ProbeConfig,
 func (p *probe) cloudLoop(ctx context.Context, connection spec.CloudConnection, destination spec.Destination,
 	info spec.ProbeInfo,
 ) {
+	if readsCost(connection) {
+		go p.costLoop(ctx, connection, destination)
+	}
+	if hasUse(connection, spec.UsePosture) {
+		go p.postureLoop(ctx, connection, destination)
+	}
+	if !hasUse(connection, spec.UseInventory) {
+		<-ctx.Done()
+		return
+	}
 	inventoryEvery, healthEvery := cloudIntervals(connection)
 	run := &cloudRun{p: p, connection: connection, destination: destination, info: info,
 		throttle: discovery.NewThrottle(), healthEvery: healthEvery, aws: discovery.NewAWSCache()}
@@ -231,7 +241,22 @@ func (p *probe) runCloudTask(ctx context.Context, task spec.Task) {
 			return p.api.taskCloudToken(ctx, task.ID)
 		})
 	}
-	result := discovery.Discover(scanCtx, *task.Cloud, options)
+	connection := *task.Cloud
+	result := discovery.Result{Scan: spec.CloudScan{
+		Kind: spec.ScanInventory, Uses: map[string]spec.UseResult{}, StartedAt: time.Now().UTC(),
+	}}
+	if hasUse(connection, spec.UseInventory) {
+		result = discovery.Discover(scanCtx, connection, options)
+	}
+	if hasUse(connection, spec.UseCost) {
+		result.Scan.Uses[spec.UseCost] = discovery.TestCost(scanCtx, connection, options, time.Now())
+	}
+	if hasUse(connection, spec.UsePosture) {
+		// A sampled refresh: what's covered natively, what falls back, and what's denied.
+		posture := discovery.CollectPosture(scanCtx, connection, options, time.Now())
+		result.Scan.Uses[spec.UsePosture] = posture.Scan.Uses[spec.UsePosture]
+		result.Scan.Posture = posture.Scan.Posture
+	}
 	result.Scan.Probe = p.instance
 	if err := p.api.postCloudResult(ctx, task.ID, result.Scan); err != nil {
 		p.log.Warn("Failed to report a test access result", "task", task.ID, "error", err)
@@ -330,6 +355,15 @@ func (p *probe) cloudStatePath(connection spec.CloudConnection) string {
 func cloudScope(connection spec.CloudConnection) string {
 	connection.Name, connection.IntervalSeconds, connection.HealthIntervalSeconds = "", 0, 0
 	connection.DestinationID = ""
+	// Other uses (cost) and their settings don't change what discovery finds; keeping inventory
+	// alone leaves the scope of connections saved before them unchanged.
+	uses := []string{}
+	for _, use := range connection.Uses {
+		if use == spec.UseInventory {
+			uses = append(uses, use)
+		}
+	}
+	connection.Cost, connection.Posture, connection.Uses = nil, nil, uses
 	encoded, _ := json.Marshal(connection)
 	return string(encoded)
 }
