@@ -1,0 +1,23 @@
+id: azure-nsg-no-world-ssh
+provider: azure
+resource: azure_network_security_group
+title: Network security groups should not allow SSH (22) from the internet
+severity: high
+control: azure-nsg-no-world-ssh
+standards:
+  - {standard: mcsb, control: NS-1}
+  - {standard: cis-azure, control: "6.2"}
+pass: "!(22 in r.world_ports) && !r.world_all_traffic"
+evidence: [world_ports, world_all_traffic]
+remediation:
+  cli: |
+    az network nsg rule list --resource-group {resourceGroup} --nsg-name {name} --output table
+    az network nsg rule update --resource-group {resourceGroup} --nsg-name {name} --name <rule> \
+      --source-address-prefixes <your admin network>
+  iac: |
+    // Bicep: narrow the rule's source, or remove it and use Azure Bastion
+    sourceAddressPrefix: '10.0.0.0/8'
+  console: Network security group → Inbound security rules → the rule allowing 22 from Any or Internet → narrow the source or delete it. Prefer Azure Bastion.
+fixtures:
+  pass: [{world_ports: [443], world_all_traffic: false}]
+  fail: [{world_ports: [22], world_all_traffic: false}, {world_ports: [], world_all_traffic: true}]

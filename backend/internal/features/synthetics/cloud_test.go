@@ -36,7 +36,7 @@ func Test_CloudConnections_AdminsManage_Validated_AndInUseBlocksDeletes(t *testi
 	for name, broken := range map[string]func(*synthetics.CloudConnectionRequest){
 		"account":             func(r *synthetics.CloudConnectionRequest) { r.ScopeID = "12345" },
 		"role":                func(r *synthetics.CloudConnectionRequest) { r.Identity = "arn:aws:iam::1:user/bob" },
-		"later use":           func(r *synthetics.CloudConnectionRequest) { r.ScanTypes = []string{"cost"} },
+		"unknown use":         func(r *synthetics.CloudConnectionRequest) { r.ScanTypes = []string{"compliance"} },
 		"region":              func(r *synthetics.CloudConnectionRequest) { r.Regions = []string{"mars"} },
 		"type":                func(r *synthetics.CloudConnectionRequest) { r.ResourceTypes = []string{"virtual_machine"} },
 		"probe":               func(r *synthetics.CloudConnectionRequest) { r.ProbeID = uuid.New() },

@@ -24,6 +24,7 @@ import {
   type CloudSetup,
   type CloudTest,
   type CloudUse,
+  type PostureSettings,
   cloudConnectionsApi,
 } from '../../../entity/cloud';
 import type { Destination, Probe } from '../../../entity/synthetics';
@@ -35,38 +36,68 @@ import {
   generateTemplate,
   probeSubject,
 } from '../lib/cloudTemplates';
+import { type CostDraft, costDraftFrom, costDraftReady, costSettingsFrom } from '../lib/costChoice';
+import { CloudCostStep } from './CloudCostStep';
+import { CloudPostureStep } from './CloudPostureStep';
 import { ProviderLogo } from './ProviderLogo';
 
 interface Props {
   connection?: CloudConnection;
+  /** Every connection, to pick the one a member reads its cost through. */
+  connections: CloudConnection[];
   probes: Probe[];
   destinations: Destination[];
   onClose: () => void;
   onSaved: () => void;
 }
 
-const STEPS = ['Provider', 'Scan types', 'Scope', 'Access', 'Run template', 'Settings and test'];
+type StepKey =
+  'provider' | 'uses' | 'scope' | 'cost' | 'posture' | 'access' | 'template' | 'settings';
+
+const STEP_LABEL: Record<StepKey, string> = {
+  provider: 'Provider',
+  uses: 'Scan types',
+  scope: 'Scope',
+  cost: 'Cost',
+  posture: 'Posture',
+  access: 'Access',
+  template: 'Run template',
+  settings: 'Settings and test',
+};
+
+// The cost and posture steps only when ticked: cost's export location shapes the template.
+const stepsFor = (uses: CloudUse[]): StepKey[] => [
+  'provider',
+  'uses',
+  'scope',
+  ...(uses.includes('cost') ? (['cost'] as const) : []),
+  ...(uses.includes('posture') ? (['posture'] as const) : []),
+  'access',
+  'template',
+  'settings',
+];
 const TEST_POLL_MS = 2000;
 const TEST_TIMEOUT_MS = 120_000;
 
-const USES: { value: CloudUse; label: string; detail: string; ready: boolean }[] = [
+const USES: { value: CloudUse; label: string; detail: string; since?: string }[] = [
   {
     value: 'inventory',
     label: 'Infrastructure inventory',
     detail: 'Resources with no agent: load balancers, databases, buckets, functions',
-    ready: true,
+    since: 'v0.56.0',
   },
   {
     value: 'cost',
     label: 'Cost and billing',
-    detail: 'Spend by service, account and tag; forecast; anomalies',
-    ready: false,
+    detail: 'Spend by service, account, region and tag; forecast; budgets and anomalies',
+    since: 'v1.1.0',
   },
   {
     value: 'posture',
     label: 'Security posture',
-    detail: 'Misconfiguration findings against CIS and provider benchmarks',
-    ready: false,
+    detail:
+      'Misconfiguration findings against CIS and provider benchmarks, native or Obzly baseline',
+    since: 'v1.1.0',
   },
 ];
 
@@ -253,10 +284,17 @@ const HEALTH_INTERVALS = [
 const defaultScope = (provider: CloudProvider): CloudScope =>
   provider === 'aws' ? 'account' : 'subscription';
 
-export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved }: Props) => {
+export const CloudWizard = ({
+  connection,
+  connections,
+  probes,
+  destinations,
+  onClose,
+  onSaved,
+}: Props) => {
   const { message } = App.useApp();
   const editing = !!connection;
-  const [step, setStep] = useState(editing ? STEPS.length - 1 : 0);
+  const [step, setStep] = useState(editing ? stepsFor(connection.scanTypes).length - 1 : 0);
   const [setup, setSetup] = useState<CloudSetup>();
   const [provider, setProvider] = useState<CloudProvider | undefined>(connection?.provider);
   const [uses, setUses] = useState<CloudUse[]>(connection?.scanTypes ?? ['inventory']);
@@ -281,6 +319,10 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
   const [types, setTypes] = useState<string[]>(connection?.resourceTypes ?? []);
   const [interval, setInterval] = useState(connection?.intervalSeconds ?? 14400);
   const [healthInterval, setHealthInterval] = useState(connection?.healthIntervalSeconds ?? 900);
+  const [cost, setCost] = useState<CostDraft>(costDraftFrom(connection?.cost));
+  const [posture, setPosture] = useState<PostureSettings>(
+    connection?.posture ?? { source: 'auto', refreshHours: 12 },
+  );
   const [test, setTest] = useState<CloudTest | { error: string }>();
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -296,7 +338,11 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
     };
   }, [message]);
 
+  const steps = stepsFor(uses);
+  const stepKey = steps[Math.min(step, steps.length - 1)];
   const info = provider ? PROVIDERS[provider] : undefined;
+  // A member read through a payer needs no cost permissions of its own.
+  const templateUses = cost.scope === 'via' ? uses.filter((use) => use !== 'cost') : uses;
   const probe = probes.find((item) => item.id === probeId);
   const externalId = connection?.externalId || setup?.externalId || '';
   const needsIdentity = access === 'role' || access === 'federated' || access === 'workload';
@@ -311,6 +357,7 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
       setRegions([]);
       setTypes([]);
       setIdentity('');
+      setCost(costDraftFrom());
     }
     setProvider(next);
   };
@@ -324,7 +371,7 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
               access,
               scope,
               scopeId,
-              uses,
+              uses: templateUses,
               issuer: setup?.issuer ?? '',
               probeGroup: probe?.id ?? '<probe group ID>',
               externalId,
@@ -334,6 +381,15 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
               resourceGroup,
               clusterIssuer,
               serviceAccount,
+              costExport:
+                cost.source === 'api'
+                  ? undefined
+                  : {
+                      bucket: cost.bucket,
+                      prefix: cost.prefix,
+                      storageAccount: cost.storageAccount,
+                      resourceGroup: cost.resourceGroup,
+                    },
             },
             format,
           )
@@ -343,7 +399,8 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
       access,
       scope,
       scopeId,
-      uses,
+      templateUses,
+      cost,
       setup,
       probe,
       externalId,
@@ -372,17 +429,19 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
     resourceTypes: types,
     intervalSeconds: interval,
     healthIntervalSeconds: healthInterval,
+    cost: uses.includes('cost') && provider ? costSettingsFrom(cost, provider) : undefined,
+    posture: uses.includes('posture') ? posture : undefined,
     enabled: connection?.enabled ?? true,
     version: connection?.version,
   });
 
   const canNext = (() => {
-    switch (step) {
-      case 0:
+    switch (stepKey) {
+      case 'provider':
         return !!provider;
-      case 1:
+      case 'uses':
         return uses.length > 0;
-      case 2:
+      case 'scope':
         return (
           !!scopeId.trim() &&
           !!name.trim() &&
@@ -390,9 +449,11 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
           !!destinationId &&
           (provider !== 'azure' || !!tenantId.trim())
         );
-      case 3:
+      case 'cost':
+        return !!provider && costDraftReady(cost, provider);
+      case 'access':
         return access !== 'role' || !!probeRoleArn.trim() || editing;
-      case 4:
+      case 'template':
         return ran && (!needsIdentity || !!identity.trim());
       default:
         return true;
@@ -452,7 +513,7 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
   };
 
   const body = () => {
-    if (step === 0) {
+    if (stepKey === 'provider') {
       return (
         <Section
           title="Which cloud?"
@@ -478,12 +539,12 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
       );
     }
     if (!info || !provider) return null;
-    switch (step) {
-      case 1:
+    switch (stepKey) {
+      case 'uses':
         return (
           <Section
             title="What should this connection scan?"
-            detail="Each scan type adds only the read-only permissions it needs. Cost and posture come in a later release; the wizard will then give you an update to run."
+            detail="Each scan type adds only the read-only permissions it needs. Adding one later gives you an updated template to run."
           >
             <Checkbox.Group
               className="flex flex-col gap-3"
@@ -491,10 +552,10 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
               onChange={(values) => setUses(values as CloudUse[])}
             >
               {USES.map((use) => (
-                <Checkbox key={use.value} value={use.value} disabled={!use.ready}>
+                <Checkbox key={use.value} value={use.value} disabled={!use.since}>
                   <span className="font-medium">{use.label}</span>
                   <span className="ml-2 rounded bg-gray-100 px-1.5 text-[11px] text-gray-500 dark:bg-gray-700 dark:text-gray-300">
-                    {use.ready ? 'v0.56.0' : 'later'}
+                    {use.since ?? 'later'}
                   </span>
                   <span className="block text-xs text-gray-500 dark:text-gray-400">
                     {use.detail}
@@ -506,20 +567,20 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
               <div className="mb-1 text-[11px] tracking-wide text-gray-500 uppercase dark:text-gray-400">
                 Read-only {provider === 'aws' ? 'AWS' : 'Azure'} permissions this needs
               </div>
-              {uses.map((use) => (
+              {templateUses.map((use) => (
                 <div key={use} className="font-mono text-xs text-gray-700 dark:text-gray-300">
                   {provider === 'aws'
                     ? [
                         ...AWS_PERMISSIONS[use].managed.map((policy) => `${policy} (AWS managed)`),
                         ...AWS_PERMISSIONS[use].actions,
                       ].join(' · ')
-                    : `${AZURE_ROLES[use].name} role`}
+                    : `${AZURE_ROLES[use].name} role${use === 'posture' ? ' and Reader (the baseline checks read resource settings)' : ''}`}
                 </div>
               ))}
             </div>
           </Section>
         );
-      case 2: {
+      case 'scope': {
         const scopeInfo = info.scopes.find((item) => item.value === scope) ?? info.scopes[0];
         return (
           <Section title={`Which ${provider === 'aws' ? 'account' : 'subscription'}?`}>
@@ -591,7 +652,36 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
           </Section>
         );
       }
-      case 3:
+      case 'cost':
+        return (
+          <Section
+            title="Cost and billing"
+            detail="Where the cost data comes from. Each figure in the Cost tab shows its source, and you can change it later without losing history."
+          >
+            <CloudCostStep
+              provider={provider}
+              draft={cost}
+              onChange={setCost}
+              connections={connections}
+              selfId={connection?.id}
+            />
+          </Section>
+        );
+      case 'posture':
+        return (
+          <Section
+            title="Security posture"
+            detail="Where findings come from. Each finding and standard score shows its source, and the Coverage view says why a region falls back."
+          >
+            <CloudPostureStep
+              provider={provider}
+              settings={posture}
+              onChange={setPosture}
+              lastRefresh={connection?.status.posture?.posture}
+            />
+          </Section>
+        );
+      case 'access':
         return (
           <Section
             title="How does the probe group get read-only access?"
@@ -703,7 +793,7 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
             )}
           </Section>
         );
-      case 4:
+      case 'template':
         return (
           <Section
             title={`Run this ${provider === 'aws' ? (scope === 'organization' ? 'in the management account' : 'in the target account') : scope === 'management_group' ? 'for the management group' : 'in the subscription'}`}
@@ -760,52 +850,56 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
         );
       default:
         return (
-          <Section title="Inventory settings">
-            <Field label={info.regionsLabel}>
-              <Select
-                mode="tags"
-                value={regions}
-                placeholder="All"
-                onChange={setRegions}
-                options={info.regions.map((region) => ({ value: region, label: region }))}
-              />
-            </Field>
-            <Field label="Resource types (none ticked: all)">
-              <Checkbox.Group
-                className="grid grid-cols-2 gap-1"
-                value={types}
-                onChange={(values) => setTypes(values as string[])}
-                options={info.types}
-              />
-            </Field>
-            <div className="flex flex-wrap gap-4">
-              <Field label="Full discovery every">
-                <Select
-                  className="w-44"
-                  value={interval}
-                  onChange={(value: number) => {
-                    setInterval(value);
-                    setHealthInterval((current) => Math.min(current, value));
-                  }}
-                  options={INVENTORY_INTERVALS}
-                />
-              </Field>
-              <Field label="Health scan every">
-                <Select
-                  className="w-44"
-                  value={healthInterval}
-                  onChange={setHealthInterval}
-                  options={HEALTH_INTERVALS.filter((option) => option.value <= interval)}
-                />
-              </Field>
-            </div>
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              Discovery lists everything, so new resources appear after the next one. Health scans
-              re-read the state, status checks and load balancer targets of what it found. Calls are
-              paced per account and region, and the probe waits whenever AWS or Azure asks it to
-              slow down.
-            </span>
-            <div className="mt-2 font-semibold">Test access</div>
+          <Section title={uses.includes('inventory') ? 'Inventory settings' : 'Test access'}>
+            {uses.includes('inventory') && (
+              <>
+                <Field label={info.regionsLabel}>
+                  <Select
+                    mode="tags"
+                    value={regions}
+                    placeholder="All"
+                    onChange={setRegions}
+                    options={info.regions.map((region) => ({ value: region, label: region }))}
+                  />
+                </Field>
+                <Field label="Resource types (none ticked: all)">
+                  <Checkbox.Group
+                    className="grid grid-cols-2 gap-1"
+                    value={types}
+                    onChange={(values) => setTypes(values as string[])}
+                    options={info.types}
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-4">
+                  <Field label="Full discovery every">
+                    <Select
+                      className="w-44"
+                      value={interval}
+                      onChange={(value: number) => {
+                        setInterval(value);
+                        setHealthInterval((current) => Math.min(current, value));
+                      }}
+                      options={INVENTORY_INTERVALS}
+                    />
+                  </Field>
+                  <Field label="Health scan every">
+                    <Select
+                      className="w-44"
+                      value={healthInterval}
+                      onChange={setHealthInterval}
+                      options={HEALTH_INTERVALS.filter((option) => option.value <= interval)}
+                    />
+                  </Field>
+                </div>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  Discovery lists everything, so new resources appear after the next one. Health
+                  scans re-read the state, status checks and load balancer targets of what it found.
+                  Calls are paced per account and region, and the probe waits whenever AWS or Azure
+                  asks it to slow down.
+                </span>
+              </>
+            )}
+            {uses.includes('inventory') && <div className="mt-2 font-semibold">Test access</div>}
             <span className="text-xs text-gray-500 dark:text-gray-400">
               One dry scan per use on a live member of {probe?.name ?? 'the probe group'}, of the
               first account and up to two regions so it answers quickly; nothing is sent to a Site.
@@ -816,7 +910,7 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
     }
   };
 
-  const last = step === STEPS.length - 1;
+  const last = step >= steps.length - 1;
   return (
     <Drawer
       open
@@ -864,8 +958,8 @@ export const CloudWizard = ({ connection, probes, destinations, onClose, onSaved
           <Steps
             size="small"
             current={step}
-            items={STEPS.map((title, index) => ({
-              title,
+            items={steps.map((key, index) => ({
+              title: STEP_LABEL[key],
               disabled: index > step || (editing && index === 0),
             }))}
             onChange={(next) => next < step && !(editing && next === 0) && setStep(next)}
@@ -912,6 +1006,12 @@ const Field = ({
   </label>
 );
 
+const USE_NAME: Record<string, string> = {
+  inventory: 'Inventory',
+  cost: 'Cost',
+  posture: 'Posture',
+};
+
 const STATE_STYLE: Record<string, { type: 'success' | 'warning' | 'error'; label: string }> = {
   ok: { type: 'success', label: 'Works' },
   needs_permission: { type: 'warning', label: 'Needs permission' },
@@ -944,7 +1044,7 @@ const TestResult = ({
             key={use}
             type={style.type}
             showIcon
-            title={`${use === 'inventory' ? 'Inventory' : use}: ${style.label}${use === 'inventory' && result.state !== 'error' ? `, ${scan.resources} resources${scan.regions?.length ? ` in ${scan.regions.length} regions` : ''}` : ''}`}
+            title={`${USE_NAME[use] ?? use}: ${style.label}${use === 'inventory' && result.state !== 'error' ? `, ${scan.resources} resources${scan.regions?.length ? ` in ${scan.regions.length} regions` : ''}` : ''}`}
             description={
               result.message || result.missing?.length ? (
                 <span className="text-xs">

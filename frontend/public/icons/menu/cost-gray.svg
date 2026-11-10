@@ -1,0 +1,5 @@
+<svg width="800" height="800" viewBox="0 0 800 800" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="400" cy="400" r="270" stroke="#CDCFD6" stroke-width="44"/>
+<path d="M490 300C478 268 444 248 400 248C346 248 310 276 310 316C310 410 494 372 494 470C494 512 454 544 400 544C350 544 314 522 302 488" stroke="#CDCFD6" stroke-width="44" stroke-linecap="round"/>
+<path d="M400 190V248M400 544V610" stroke="#CDCFD6" stroke-width="44" stroke-linecap="round"/>
+</svg>

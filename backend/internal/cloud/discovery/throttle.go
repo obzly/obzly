@@ -221,11 +221,29 @@ func peekThrottled(response *http.Response) bool {
 	return false
 }
 
-// retryAfter is Retry-After (seconds or an HTTP date) or Azure's
-// x-ms-retry-after-ms.
+// costManagementRetryAfter: Azure Cost Management says when each of its
+// quotas (per client type, entity and tenant) allows the next query.
+var costManagementRetryAfter = []string{
+	"x-ms-ratelimit-microsoft.costmanagement-clienttype-retry-after",
+	"x-ms-ratelimit-microsoft.costmanagement-entity-retry-after",
+	"x-ms-ratelimit-microsoft.costmanagement-tenant-retry-after",
+	"x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after",
+}
+
+// retryAfter is Retry-After (seconds or an HTTP date), Azure's
+// x-ms-retry-after-ms, or the longest of Cost Management's own.
 func retryAfter(header http.Header, now time.Time) time.Duration {
 	if ms, err := strconv.Atoi(header.Get("x-ms-retry-after-ms")); err == nil && ms > 0 {
 		return time.Duration(ms) * time.Millisecond
+	}
+	var costManagement time.Duration
+	for _, name := range costManagementRetryAfter {
+		if seconds, err := strconv.Atoi(strings.TrimSpace(header.Get(name))); err == nil && seconds > 0 {
+			costManagement = max(costManagement, time.Duration(seconds)*time.Second)
+		}
+	}
+	if costManagement > 0 {
+		return costManagement
 	}
 	value := strings.TrimSpace(header.Get("Retry-After"))
 	if value == "" {

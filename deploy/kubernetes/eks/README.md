@@ -124,9 +124,11 @@ projects, plans, API keys and root admin exactly as it always has.
      either/or).
    - mTLS between the control plane and this ingress, if your ALB/ingress
      controller setup already supports client-cert verification.
-   Leave `/v1/logs`, `/v1/traces`, `/api/v1/logs/receiving`, and the OTLP
-   gRPC port (`:4317`) open regardless - ingest stays regional and reachable
-   by collectors directly, by design (ARCHITECTURE.md's non-goals).
+   Leave `/v1/logs`, `/v1/traces`, `/v1/metrics`, `/api/v1/logs/receiving`,
+   the probes' `/v1/cloud/cost`, `/v1/cloud/posture` and `/v1/cloud/advice`,
+   and the OTLP gRPC port (`:4317`) open regardless - ingest stays regional
+   and reachable by collectors and probes directly, by design
+   (ARCHITECTURE.md's non-goals).
 4. This Site's own root admin/local accounts/local MFA keep working
    unchanged (break-glass path) - the exchange endpoint is additive, not a
    replacement for the existing sign-in flow.

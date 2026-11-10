@@ -52,7 +52,7 @@ spec:
           # The release these manifests deploy; change the tag to upgrade
           # (docs/runbooks/upgrade.md). Avoid :latest - it makes rollbacks
           # and "what's actually running" harder to reason about.
-          image: ghcr.io/obzly/obzly:v1.0.0
+          image: ghcr.io/obzly/obzly:v1.1.0
           imagePullPolicy: Always
           # Starts as root only to chown /obzly-data and write
           # runtime-config.js, then drops to uid 1000 with no capabilities.

@@ -27,6 +27,10 @@ func Test_IsProxyPathAllowed(t *testing.T) {
 		{"ai budget status allowed", http.MethodGet, "/api/v1/projects/abc/ai-budgets/status", true},
 		{"ai model prices allowed", http.MethodPost, "/api/v1/projects/abc/ai-model-prices/fill-common", true},
 		{"inventory allowed", http.MethodGet, "/api/v1/inventory/assets/abc", true},
+		{"cloud cost allowed", http.MethodPost, "/api/v1/cloud-cost/explore", true},
+		{"posture allowed", http.MethodPatch, "/api/v1/posture/findings/0b9f1c2d-0000-0000-0000-000000000000", true},
+		{"posture prefix only", http.MethodGet, "/api/v1/posturex", false},
+		{"cost receiver never proxied", http.MethodPost, "/v1/cloud/cost", false},
 		{"projects allowed", http.MethodGet, "/api/v1/projects", true},
 		{"dashboards allowed", http.MethodGet, "/api/v1/dashboards/xyz", true},
 		// A typo in these prefixes silently 404s a whole page through the control plane.

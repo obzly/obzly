@@ -18,6 +18,10 @@ import (
 const (
 	ManagedBySyntheticsPrefix = "synthetics:"
 	ManagedByBudgetPrefix     = "ai-budget:"
+	// ManagedByCloudCostPrefix: cost budgets and anomaly alerts kept by this Site's cloud cost.
+	ManagedByCloudCostPrefix = "cloud-cost:"
+	// ManagedByCloudPosturePrefix: finding alerts kept by this Site's cloud posture.
+	ManagedByCloudPosturePrefix = "cloud-posture:"
 )
 
 // SourceSample is one series' value from a source another feature computes.
@@ -30,6 +34,23 @@ type SourceSample struct {
 type AICostSource func(ctx context.Context, rule *AlertRule, now time.Time) ([]SourceSample, error)
 
 var aiCostSource AICostSource
+
+// CloudCostSource computes a cloud_cost rule's series at now.
+type CloudCostSource = AICostSource
+
+var cloudCostSource CloudCostSource
+
+// SetCloudCostSource wires the cloud_cost source (set at startup, before the evaluator runs).
+func SetCloudCostSource(source CloudCostSource) {
+	cloudCostSource = source
+}
+
+var cloudPostureSource AICostSource
+
+// SetCloudPostureSource wires the cloud_posture source (set at startup, before the evaluator runs).
+func SetCloudPostureSource(source AICostSource) {
+	cloudPostureSource = source
+}
 
 // ManagedRule is a rule a feature on this Site keeps in sync; Key is its
 // managed_by. Users can't edit or delete it in Alerts.

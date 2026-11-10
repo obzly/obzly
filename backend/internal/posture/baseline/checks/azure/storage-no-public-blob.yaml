@@ -1,0 +1,19 @@
+id: azure-storage-no-public-blob
+provider: azure
+resource: azure_storage_account
+title: Storage accounts should disallow anonymous blob access
+severity: high
+control: azure-storage-no-public-blob
+standards:
+  - {standard: cis-azure, control: "3.7"}
+pass: "!r.allow_blob_public_access"
+evidence: [allow_blob_public_access]
+remediation:
+  cli: az storage account update --name {name} --resource-group {resourceGroup} --allow-blob-public-access false
+  iac: |
+    // Bicep, on the Microsoft.Storage/storageAccounts resource
+    properties: { allowBlobPublicAccess: false }
+  console: Storage account → Settings → Configuration → Allow Blob anonymous access → Disabled.
+fixtures:
+  pass: [{allow_blob_public_access: false}]
+  fail: [{allow_blob_public_access: true}]

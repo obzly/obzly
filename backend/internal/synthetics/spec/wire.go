@@ -174,6 +174,7 @@ const (
 	AccessFederated = "federated"
 
 	UseInventory = "inventory"
+	UseCost      = "cost"
 
 	UseOK              = "ok"
 	UseNeedsPermission = "needs_permission"
@@ -183,6 +184,8 @@ const (
 	// what the last discovery found (new resources wait for the next one).
 	ScanInventory = "inventory"
 	ScanHealth    = "health"
+	// ScanCost reads billing data (docs/CLOUD_COST_POSTURE.md "Cost").
+	ScanCost = "cost"
 
 	// Cloud APIs throttle per account and region, so full discoveries are
 	// rare and health scans only re-read known resources.
@@ -192,6 +195,25 @@ const (
 	DefaultCloudHealthSeconds    = 900
 	MinCloudHealthSeconds        = 300
 	MaxCloudHealthSeconds        = 3600
+
+	// Cost sources: auto reads the FOCUS export once it has data and the
+	// billing API until then; export and api use only one of them.
+	CostSourceAuto   = "auto"
+	CostSourceExport = "export"
+	CostSourceAPI    = "api"
+	// Cost scopes: account reads this account or subscription only;
+	// billing reads the management account or billing scope for every
+	// member; via means another connection reads it, so it is never
+	// counted twice.
+	CostScopeAccount = "account"
+	CostScopeBilling = "billing"
+	CostScopeVia     = "via"
+
+	// Billing data changes a few times a day at most.
+	DefaultCostRefreshHours = 12
+	MinCostRefreshHours     = 6
+	MaxCostRefreshHours     = 24
+	MaxCostTrackedTags      = 10
 )
 
 // CloudConnection is what a probe needs to scan one account or
@@ -217,6 +239,98 @@ type CloudConnection struct {
 	IntervalSeconds       int    `json:"intervalSeconds"`
 	HealthIntervalSeconds int    `json:"healthIntervalSeconds,omitempty"`
 	DestinationID         string `json:"destinationId"`
+	// Cost is set when Uses has UseCost.
+	Cost *CostSettings `json:"cost,omitempty"`
+	// Posture is set when Uses has UsePosture.
+	Posture *PostureSettings `json:"posture,omitempty"`
+}
+
+// CostSettings are the cost use's choices for one connection.
+type CostSettings struct {
+	Source string `json:"source"`
+	Scope  string `json:"scope"`
+	// ViaConnectionID: with CostScopeVia, the connection that reads this
+	// one's cost.
+	ViaConnectionID string      `json:"viaConnectionId,omitempty"`
+	Export          *CostExport `json:"export,omitempty"`
+	RefreshHours    int         `json:"refreshHours,omitempty"`
+	// TrackedTags: tag keys kept on cost rows (all others are dropped).
+	TrackedTags []string `json:"trackedTags,omitempty"`
+}
+
+// CostExport is where a FOCUS export lands: an S3 bucket (AWS) or a storage
+// account container (Azure), with the prefix the export writes under.
+type CostExport struct {
+	Bucket         string `json:"bucket,omitempty"`
+	Region         string `json:"region,omitempty"`
+	StorageAccount string `json:"storageAccount,omitempty"`
+	Container      string `json:"container,omitempty"`
+	Prefix         string `json:"prefix,omitempty"`
+}
+
+// CostScanInfo describes one cost refresh, reported to the control plane.
+type CostScanInfo struct {
+	// Source is what this refresh read: export or api.
+	Source string `json:"source"`
+	// FinalThrough: the last day the provider has finalised (YYYY-MM-DD).
+	FinalThrough string `json:"finalThrough,omitempty"`
+	From         string `json:"from,omitempty"`
+	To           string `json:"to,omitempty"`
+	Rows         int    `json:"rows"`
+	// LastFile and LastFileAt: the newest export file read.
+	LastFile   string     `json:"lastFile,omitempty"`
+	LastFileAt *time.Time `json:"lastFileAt,omitempty"`
+	// Requests counts billing API calls (Cost Explorer charges per call).
+	Requests int `json:"requests,omitempty"`
+	// Advice is set when this refresh also read recommendations (weekly).
+	Advice *AdviceScanInfo `json:"advice,omitempty"`
+}
+
+// CostBatch is one chunk of daily cost rows sent to a Site. A batch replaces
+// the rows of its connection and source for the days From..To (inclusive)
+// once all Total chunks have arrived, so a half-sent batch changes nothing.
+type CostBatch struct {
+	BatchID        string    `json:"batchId"`
+	Seq            int       `json:"seq"`
+	Total          int       `json:"total"`
+	ConnectionID   string    `json:"connectionId"`
+	ConnectionName string    `json:"connectionName"`
+	Provider       string    `json:"provider"`
+	Source         string    `json:"source"`
+	From           string    `json:"from"`
+	To             string    `json:"to"`
+	FinalThrough   string    `json:"finalThrough,omitempty"`
+	Rows           []CostRow `json:"rows"`
+	// Forecast is sent with the last chunk only.
+	Forecast []CostForecast `json:"forecast,omitempty"`
+}
+
+// CostRow is one day of cost for one combination of dimensions, in FOCUS
+// terms. Amounts are millionths of the currency unit, summed exactly.
+type CostRow struct {
+	Day             string            `json:"d"`
+	BillingAccount  string            `json:"ba,omitempty"`
+	SubAccount      string            `json:"sa,omitempty"`
+	SubAccountName  string            `json:"san,omitempty"`
+	Service         string            `json:"svc,omitempty"`
+	Region          string            `json:"rg,omitempty"`
+	Resource        string            `json:"res,omitempty"`
+	ChargeCategory  string            `json:"cc,omitempty"`
+	PricingCategory string            `json:"pc,omitempty"`
+	Currency        string            `json:"cur"`
+	BilledMicros    int64             `json:"b"`
+	EffectiveMicros int64             `json:"e"`
+	ListMicros      int64             `json:"l,omitempty"`
+	Tags            map[string]string `json:"t,omitempty"`
+	Estimated       bool              `json:"est,omitempty"`
+}
+
+// CostForecast is the provider's forecast of effective cost for the rest of
+// a month, per currency (the Site adds the month's actual cost so far).
+type CostForecast struct {
+	Month           string `json:"month"`
+	Currency        string `json:"cur"`
+	RemainingMicros int64  `json:"remaining"`
 }
 
 // CloudScan is the outcome of one scan or Test access: per use whether it
@@ -239,6 +353,10 @@ type CloudScan struct {
 	StoodDown float64 `json:"stoodDownSeconds,omitempty"`
 	// Partial: the scan hit its time limit; what it found was still sent.
 	Partial bool `json:"partial,omitempty"`
+	// Cost is set on ScanCost reports.
+	Cost *CostScanInfo `json:"cost,omitempty"`
+	// Posture is set on ScanPosture reports.
+	Posture *PostureScanInfo `json:"posture,omitempty"`
 }
 
 type UseResult struct {

@@ -1,0 +1,20 @@
+id: azure-storage-https-only
+provider: azure
+resource: azure_storage_account
+title: Storage accounts should accept secure transfer (HTTPS) only
+severity: medium
+control: azure-storage-https-only
+standards:
+  - {standard: mcsb, control: DP-3}
+  - {standard: cis-azure, control: "3.1"}
+pass: r.https_only
+evidence: [https_only]
+remediation:
+  cli: az storage account update --name {name} --resource-group {resourceGroup} --https-only true
+  iac: |
+    // Bicep, on the Microsoft.Storage/storageAccounts resource
+    properties: { supportsHttpsTrafficOnly: true }
+  console: Storage account → Settings → Configuration → Secure transfer required → Enabled.
+fixtures:
+  pass: [{https_only: true}]
+  fail: [{https_only: false}]

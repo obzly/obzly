@@ -1,6 +1,7 @@
 // What the cloud connection wizard asks the user to run, as a template or a
 // CLI script. Every permission is read-only.
 import type { CloudAccess, CloudProvider, CloudScope, CloudUse } from '../../../entity/cloud';
+import azureCostExportTemplate from '../templates/obzly-cost-export.bicep?raw';
 import azureIdentityTemplate from '../templates/obzly-identity.bicep?raw';
 import azureReaderTemplate from '../templates/obzly-reader.bicep?raw';
 import awsRoleTemplate from '../templates/obzly-readonly-role.yaml?raw';
@@ -29,6 +30,14 @@ export interface TemplateInput {
   /** Azure workload: the cluster's OIDC issuer and the probe's service account. */
   clusterIssuer: string;
   serviceAccount: string;
+  /** Where the FOCUS cost export lands, when cost reads one: read access to it only. */
+  costExport?: {
+    bucket?: string;
+    prefix?: string;
+    storageAccount?: string;
+    /** Azure: the storage account's resource group (the template's scope, not stored). */
+    resourceGroup?: string;
+  };
 }
 
 export interface GeneratedTemplate {
@@ -48,20 +57,41 @@ export const AWS_PERMISSIONS: Record<CloudUse, { managed: string[]; actions: str
       'ec2:DescribeInstanceStatus',
     ],
   },
+  // Kept equal to the cost statement of obzly-readonly-role.yaml: billing, recommendations
+  // (Cost Explorer, Compute Optimizer, Obzly's idle checks) and the export's definition.
   cost: {
     managed: [],
     actions: [
       'ce:GetCostAndUsage',
       'ce:GetCostForecast',
       'ce:GetDimensionValues',
-      'ce:GetAnomalies',
-      'budgets:ViewBudget',
-      'cur:DescribeReportDefinitions',
+      'ce:GetTags',
+      'ce:GetSavingsPlansPurchaseRecommendation',
+      'ce:GetReservationPurchaseRecommendation',
+      'ce:GetSavingsPlansCoverage',
+      'ce:GetSavingsPlansUtilizationDetails',
+      'ce:GetReservationCoverage',
+      'ce:GetReservationUtilization',
+      'compute-optimizer:GetEnrollmentStatus',
+      'compute-optimizer:GetEC2InstanceRecommendations',
+      'compute-optimizer:GetEBSVolumeRecommendations',
+      'compute-optimizer:GetIdleRecommendations',
+      'ec2:DescribeRegions',
+      'ec2:DescribeInstances',
+      'ec2:DescribeVolumes',
+      'ec2:DescribeAddresses',
+      'bcm-data-exports:GetExport',
+      'bcm-data-exports:ListExports',
     ],
   },
+  // SecurityAudit covers the baseline checks' reads; Security Hub's findings need these three.
   posture: {
     managed: ['SecurityAudit'],
-    actions: ['securityhub:Get*', 'securityhub:List*', 'guardduty:Get*', 'guardduty:List*'],
+    actions: [
+      'securityhub:DescribeHub',
+      'securityhub:GetEnabledStandards',
+      'securityhub:GetFindings',
+    ],
   },
 };
 
@@ -81,6 +111,26 @@ export const AWS_INVENTORY_ACTIONS = [
   'lambda:ListFunctions',
   's3:ListAllMyBuckets',
   'tag:GetResources',
+];
+
+// The calls posture makes (Security Hub, then the baseline checks), for a policy on the probe's
+// own role, which can't take the SecurityAudit managed policy through CloudFormation.
+export const AWS_POSTURE_ACTIONS = [
+  'securityhub:DescribeHub',
+  'securityhub:GetEnabledStandards',
+  'securityhub:GetFindings',
+  'ec2:DescribeRegions',
+  'ec2:DescribeSecurityGroups',
+  'ec2:DescribeInstances',
+  'ec2:GetEbsEncryptionByDefault',
+  'rds:DescribeDBInstances',
+  'iam:GetAccountSummary',
+  'iam:GetAccountPasswordPolicy',
+  'cloudtrail:DescribeTrails',
+  'cloudtrail:GetTrailStatus',
+  's3:ListAllMyBuckets',
+  's3:GetBucketPublicAccessBlock',
+  's3:GetBucketLogging',
 ];
 
 export const AZURE_ROLES: Record<CloudUse, { name: string; id: string }> = {
@@ -104,6 +154,40 @@ export const issuerHost = (issuer: string) => {
 };
 
 const has = (input: TemplateInput, use: CloudUse) => input.uses.includes(use);
+
+/** The export bucket and prefix when cost reads an AWS export. */
+const awsExport = (input: TemplateInput) => {
+  const bucket = input.costExport?.bucket?.trim();
+  return has(input, 'cost') && bucket
+    ? { bucket, prefix: input.costExport?.prefix?.trim() ?? '' }
+    : undefined;
+};
+
+/** Read access to the export's objects only: GetObject under the prefix, ListBucket of it. */
+export const awsExportStatements = (bucket: string, prefix: string) => [
+  {
+    Sid: 'costexport',
+    Effect: 'Allow',
+    Action: 's3:GetObject',
+    Resource: `arn:aws:s3:::${bucket}/${prefix}*`,
+  },
+  {
+    Sid: 'costexportlist',
+    Effect: 'Allow',
+    Action: 's3:ListBucket',
+    Resource: `arn:aws:s3:::${bucket}`,
+    Condition: { StringLike: { 's3:prefix': `${prefix}*` } },
+  },
+];
+
+const azureExport = (input: TemplateInput) => {
+  const account = input.costExport?.storageAccount?.trim();
+  return has(input, 'cost') && account
+    ? { account, resourceGroup: or(input.costExport?.resourceGroup ?? '', '<its resource group>') }
+    : undefined;
+};
+
+const STORAGE_BLOB_DATA_READER = 'Storage Blob Data Reader';
 const or = (value: string, placeholder: string) => value.trim() || placeholder;
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
@@ -132,11 +216,19 @@ const awsTrustParameters = (input: TemplateInput) =>
         `ProbeSubject=${probeSubject(input.probeGroup)}`,
       ];
 
-const awsUseParameters = (input: TemplateInput) => [
-  `Inventory=${has(input, 'inventory')}`,
-  `Cost=${has(input, 'cost')}`,
-  `Posture=${has(input, 'posture')}`,
-];
+const awsUseParameters = (input: TemplateInput) => {
+  const parameters = [
+    `Inventory=${has(input, 'inventory')}`,
+    `Cost=${has(input, 'cost')}`,
+    `Posture=${has(input, 'posture')}`,
+  ];
+  const exported = awsExport(input);
+  if (exported) {
+    parameters.push(`ExportBucket=${exported.bucket}`);
+    if (exported.prefix) parameters.push(`ExportPrefix=${exported.prefix}`);
+  }
+  return parameters;
+};
 
 const awsCloudFormation = (input: TemplateInput): GeneratedTemplate => {
   const parameters = [...awsTrustParameters(input), ...awsUseParameters(input)];
@@ -249,14 +341,18 @@ const awsCLI = (input: TemplateInput): GeneratedTemplate => {
       );
     }
   }
-  const statements = input.uses
-    .filter((use) => AWS_PERMISSIONS[use].actions.length > 0)
-    .map((use) => ({
-      Sid: use,
-      Effect: 'Allow',
-      Action: AWS_PERMISSIONS[use].actions,
-      Resource: '*',
-    }));
+  const exported = awsExport(input);
+  const statements: object[] = [
+    ...input.uses
+      .filter((use) => AWS_PERMISSIONS[use].actions.length > 0)
+      .map((use) => ({
+        Sid: use,
+        Effect: 'Allow',
+        Action: AWS_PERMISSIONS[use].actions,
+        Resource: '*',
+      })),
+    ...(exported ? awsExportStatements(exported.bucket, exported.prefix) : []),
+  ];
   if (statements.length > 0) {
     lines.push(
       'aws iam put-role-policy --role-name "$ROLE" --policy-name obzly-readonly-extra \\',
@@ -273,16 +369,21 @@ const awsCLI = (input: TemplateInput): GeneratedTemplate => {
 
 const awsProbePolicy = (input: TemplateInput, format: TemplateFormat): GeneratedTemplate => {
   const actions = [
-    ...(has(input, 'inventory') ? AWS_INVENTORY_ACTIONS : []),
-    ...input.uses
-      .filter((use) => use !== 'inventory')
-      .flatMap((use) => AWS_PERMISSIONS[use].actions),
+    ...new Set([
+      ...(has(input, 'inventory') ? AWS_INVENTORY_ACTIONS : []),
+      ...(has(input, 'cost') ? AWS_PERMISSIONS.cost.actions : []),
+      ...(has(input, 'posture') ? AWS_POSTURE_ACTIONS : []),
+    ]),
   ];
   const role = or(input.probeRoleName, '<the probe group IAM role name>');
+  const exported = awsExport(input);
   if (format === 'cli') {
     const document = {
       Version: '2012-10-17',
-      Statement: [{ Sid: 'obzly', Effect: 'Allow', Action: actions, Resource: '*' }],
+      Statement: [
+        { Sid: 'obzly', Effect: 'Allow', Action: actions, Resource: '*' },
+        ...(exported ? awsExportStatements(exported.bucket, exported.prefix) : []),
+      ],
     };
     return {
       script: [
@@ -315,6 +416,19 @@ const awsProbePolicy = (input: TemplateInput, format: TemplateFormat): Generated
     '            Action:',
     ...actions.map((action) => `              - ${action}`),
     "            Resource: '*'",
+    ...(exported
+      ? [
+          '          - Effect: Allow',
+          '            Action: s3:GetObject',
+          `            Resource: 'arn:aws:s3:::${exported.bucket}/${exported.prefix}*'`,
+          '          - Effect: Allow',
+          '            Action: s3:ListBucket',
+          `            Resource: 'arn:aws:s3:::${exported.bucket}'`,
+          '            Condition:',
+          '              StringLike:',
+          `                's3:prefix': '${exported.prefix}*'`,
+        ]
+      : []),
     '',
   ].join('\n');
   return {
@@ -355,6 +469,13 @@ const azureBicep = (input: TemplateInput): GeneratedTemplate => {
     `cost=${has(input, 'cost')}`,
     `posture=${has(input, 'posture')}`,
   );
+  const exported = azureExport(input);
+  if (exported) {
+    parameters.push(
+      `costExportStorageAccount=${exported.account}`,
+      `costExportResourceGroup=${exported.resourceGroup}`,
+    );
+  }
   const lines = [
     '#!/usr/bin/env bash',
     `# Obzly read-only access: ${input.uses.join(', ')}`,
@@ -371,6 +492,15 @@ const azureBicep = (input: TemplateInput): GeneratedTemplate => {
     '  --template-file obzly-reader.bicep \\',
     `  --parameters ${parameters.join(' ')}`,
   );
+  if (has(input, 'cost')) {
+    lines.push(
+      '',
+      '# Optional: existing reservations and savings plans need a tenant-level reader role, which a',
+      '# Global Administrator (with access elevated) or a reservation owner can assign:',
+      "# az role assignment create --assignee-object-id <the identity's principal ID> --assignee-principal-type ServicePrincipal \\",
+      '#   --role "Reservations Reader" --scope /providers/Microsoft.Capacity',
+    );
+  }
   if (input.access !== 'probe') {
     lines.push(
       '',
@@ -383,6 +513,8 @@ const azureBicep = (input: TemplateInput): GeneratedTemplate => {
     files: [
       { name: 'obzly-reader.bicep', content: azureReaderTemplate },
       { name: 'obzly-identity.bicep', content: azureIdentityTemplate },
+      // obzly-reader.bicep references it even when no export is given.
+      { name: 'obzly-cost-export.bicep', content: azureCostExportTemplate },
     ],
   };
 };
@@ -411,10 +543,30 @@ const azureCLI = (input: TemplateInput): GeneratedTemplate => {
       `  --issuer ${azureIssuer(input)} --subject ${azureSubject(input)} --audiences ${AZURE_AUDIENCE}`,
     );
   }
-  for (const use of input.uses) {
+  // Posture's baseline checks read resources' settings, which takes Reader too.
+  const roles = new Set(input.uses.map((use) => AZURE_ROLES[use].name));
+  if (has(input, 'posture')) roles.add(AZURE_ROLES.inventory.name);
+  for (const role of roles) {
     lines.push(
       `az role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal \\`,
-      `  --role "${AZURE_ROLES[use].name}" --scope "$SCOPE"`,
+      `  --role "${role}" --scope "$SCOPE"`,
+    );
+  }
+  const exported = azureExport(input);
+  if (exported) {
+    lines.push(
+      `EXPORT=$(az storage account show --name ${exported.account} --resource-group ${exported.resourceGroup} --query id -o tsv)`,
+      `az role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal \\`,
+      `  --role "${STORAGE_BLOB_DATA_READER}" --scope "$EXPORT"`,
+    );
+  }
+  if (has(input, 'cost')) {
+    lines.push(
+      '',
+      '# Optional: existing reservations and savings plans need a tenant-level reader role, which a',
+      '# Global Administrator (with access elevated) or a reservation owner can assign:',
+      '# az role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal \\',
+      '#   --role "Reservations Reader" --scope /providers/Microsoft.Capacity',
     );
   }
   if (input.access !== 'probe') {

@@ -1,0 +1,22 @@
+id: aws-ec2-imdsv2
+provider: aws
+resource: aws_ec2_instance
+title: EC2 instances should require IMDSv2
+severity: high
+control: EC2.8
+standards:
+  - {standard: aws-fsbp, control: EC2.8}
+  - {standard: cis-aws, control: "5.6"}
+applies: r.state != "terminated"
+pass: r.http_tokens == "required"
+evidence: [http_tokens]
+remediation:
+  cli: aws ec2 modify-instance-metadata-options --region {region} --instance-id {name} --http-tokens required --http-endpoint enabled
+  iac: |
+    # CloudFormation, in the instance's AWS::EC2::LaunchTemplate data
+    MetadataOptions:
+      HttpTokens: required
+  console: EC2 → Instances → the instance → Actions → Instance settings → Modify instance metadata options → IMDSv2 Required.
+fixtures:
+  pass: [{state: running, http_tokens: required}, {state: terminated, http_tokens: optional}]
+  fail: [{state: running, http_tokens: optional}]
