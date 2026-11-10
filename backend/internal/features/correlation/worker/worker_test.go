@@ -79,9 +79,11 @@ func storeSpan(
 	require.NoError(t, spans_core.GetSpanCoreRepository().ForceFlush())
 }
 
-func runWorker(t *testing.T) {
+// runWorker correlates the test's own project only: other packages' tests share the database
+// and delete their projects while a scan of every project runs, which failed it at random.
+func runWorker(t *testing.T, projectID uuid.UUID) {
 	t.Helper()
-	require.NoError(t, correlation_worker.GetCorrelationBackgroundService().ExecuteAllTasksForTest())
+	require.NoError(t, correlation_worker.GetCorrelationBackgroundService().ExecuteTaskForProjectForTest(projectID))
 }
 
 func listSessions(t *testing.T, projectID uuid.UUID) []correlation_core.SessionSummaryDTO {
@@ -98,7 +100,7 @@ func Test_CorrelateProject_ErrorLog_CreatesSession(t *testing.T) {
 
 	storeErrorLog(t, projectID, "checkout", now.Add(-time.Minute), "")
 
-	runWorker(t)
+	runWorker(t, projectID)
 
 	sessions := listSessions(t, projectID)
 	require.NotEmpty(t, sessions, "an ERROR log should be a genuine anomaly and create a session")
@@ -129,7 +131,7 @@ func Test_CorrelateProject_NoAnomalies_NoSessionsCreated(t *testing.T) {
 		now.Add(-time.Minute),
 	)
 
-	runWorker(t)
+	runWorker(t, projectID)
 
 	sessions := listSessions(t, projectID)
 	for _, s := range sessions {
@@ -153,7 +155,7 @@ func Test_CorrelateProject_CrossServiceTraceLink_MergesConnectedServices(t *test
 	storeSpan(t, projectID, "frontend", traceID, "span-frontend-1", "", spans_core.StatusCodeOK, now)
 	storeSpan(t, projectID, "backend", traceID, "span-backend-1", "span-frontend-1", spans_core.StatusCodeError, now)
 
-	runWorker(t)
+	runWorker(t, projectID)
 
 	sessions := listSessions(t, projectID)
 	var merged *correlation_core.SessionSummaryDTO
@@ -191,7 +193,7 @@ func Test_CorrelateProject_CrossServiceTraceLink_WithoutGraphEdge_DoesNotMerge(t
 	storeErrorLog(t, projectID, "isolated-a", now, traceID)
 	storeSpan(t, projectID, "isolated-b", traceID, "span-isolated-1", "", spans_core.StatusCodeError, now)
 
-	runWorker(t)
+	runWorker(t, projectID)
 
 	sessions := listSessions(t, projectID)
 	var sawA, sawB, sawMerged bool
@@ -222,7 +224,7 @@ func Test_CorrelateProject_NonOverlappingBuckets_CreatesSeparateSessions(t *test
 	storeErrorLog(t, projectID, "bursty", now.Add(-30*time.Minute), "")
 	storeErrorLog(t, projectID, "bursty", now.Add(-5*time.Minute), "")
 
-	runWorker(t)
+	runWorker(t, projectID)
 
 	sessions := listSessions(t, projectID)
 	var bursty []correlation_core.SessionSummaryDTO
