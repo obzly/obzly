@@ -1,7 +1,7 @@
 # Cloud cost and security posture (design)
 
-Status: approved 2026-11-09 with its UI mock. Not built yet; the build is split into three releases
-(see [Build phases](#build-phases)). It adds the **cost** and **posture** uses to the cloud
+Status: approved 2026-11-09 with its UI mock. Not built yet; it ships as one release, v1.1.0, built
+in three milestones (see [Build phases](#build-phases)). It adds the **cost** and **posture** uses to the cloud
 connections from [`INFRASTRUCTURE.md`](INFRASTRUCTURE.md), which the wizard already lists as "later".
 
 ## Goal
@@ -412,27 +412,33 @@ finding, recommendation or budget needs a project member.
 
 ## Build phases
 
-1. **Cost (v1.1.0):**
+Everything ships together in **one release, v1.1.0**: one branch, one pull request, one `FEATURE`
+commit and one tag, so operators upgrade once. The work is done in this order, and each milestone is
+finished and tested before the next starts:
+
+1. **Cost:**
    - the cost use with source choice and billing scope;
    - FOCUS 1.2 export readers (AWS, Azure) and the API fallback;
    - Site tables;
    - Overview and Explorer with saved views;
    - budgets (managed rules) and anomalies;
    - the asset drawer's cost section.
-2. **Posture (v1.2.0):**
+2. **Posture:**
    - native ingestion (Security Hub, Defender for Cloud);
    - the findings lifecycle and scope runs;
    - Standards, Findings, Trends and Coverage;
    - the first baseline checks;
    - alerts for new critical and high findings.
-3. **Recommendations (v1.3.0):**
+3. **Recommendations:**
    - cost recommendations with states and realized savings;
    - commitments and the planner;
    - posture actions, guardrails and the score simulator;
    - MCP tools.
 
-Each phase updates the role and Bicep templates for its permissions, and the docs and upgrade
-runbook.
+The release also updates:
+- the role and Bicep templates for all new permissions, so a connection is updated once;
+- the docs and the upgrade runbook;
+- `docs/releases/v1.1.0.md`.
 
 ## Open questions
 

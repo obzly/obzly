@@ -507,8 +507,8 @@ inventory and cloud connections"](ARCHITECTURE.md#synthetics-the-infrastructure-
   for everyone; JetStream reads capped by bytes.
 - **v0.57.0** (done): multi-step API monitors and maintenance windows.
 - **Next:** cost and security posture over the same cloud connections (designed and approved:
-  [`docs/CLOUD_COST_POSTURE.md`](docs/CLOUD_COST_POSTURE.md); built in three releases - cost,
-  posture, recommendations), AWS `tag:GetResources`
+  [`docs/CLOUD_COST_POSTURE.md`](docs/CLOUD_COST_POSTURE.md); ships as one release, v1.1.0 -
+  cost, posture, recommendations), AWS `tag:GetResources`
   breadth and Azure Resource Health, CloudWatch / Azure Monitor health for load balancers and
   databases, browser monitors.
 
