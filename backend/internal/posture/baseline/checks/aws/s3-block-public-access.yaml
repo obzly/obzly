@@ -1,0 +1,29 @@
+id: aws-s3-block-public-access
+provider: aws
+resource: aws_s3_bucket
+title: S3 buckets should block public access
+severity: high
+control: S3.8
+standards:
+  - {standard: aws-fsbp, control: S3.8}
+  - {standard: cis-aws, control: 2.1.4}
+pass: r.block_public_acls && r.ignore_public_acls && r.block_public_policy && r.restrict_public_buckets
+evidence: [block_public_acls, ignore_public_acls, block_public_policy, restrict_public_buckets]
+remediation:
+  cli: |
+    aws s3api put-public-access-block --bucket {name} \
+      --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+  iac: |
+    # CloudFormation, on the AWS::S3::Bucket
+    PublicAccessBlockConfiguration:
+      BlockPublicAcls: true
+      IgnorePublicAcls: true
+      BlockPublicPolicy: true
+      RestrictPublicBuckets: true
+  console: S3 → the bucket → Permissions → Block public access (bucket settings) → Edit → turn on Block all public access.
+fixtures:
+  pass:
+    - {block_public_acls: true, ignore_public_acls: true, block_public_policy: true, restrict_public_buckets: true}
+  fail:
+    - {block_public_acls: true, ignore_public_acls: true, block_public_policy: false, restrict_public_buckets: true}
+    - {block_public_acls: false, ignore_public_acls: false, block_public_policy: false, restrict_public_buckets: false}

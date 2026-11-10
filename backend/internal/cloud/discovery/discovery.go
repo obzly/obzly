@@ -54,10 +54,12 @@ type Options struct {
 	// so it answers within the wizard's wait.
 	Sample bool
 	// AWSEndpoint and the Azure ones point at a fake in tests.
-	AWSEndpoint      string
-	AzureLogin       string
-	AzureManagement  string
-	AzureIMDS        string
+	AWSEndpoint     string
+	AzureLogin      string
+	AzureManagement string
+	AzureIMDS       string
+	// AzureBlob replaces https://{account}.blob.core.windows.net ({account} is kept).
+	AzureBlob        string
 	FederatedTokenFS func(path string) ([]byte, error)
 	Getenv           func(string) string
 }
@@ -193,9 +195,8 @@ func finish(
 				"(scan less often or narrow the regions and types)", scan.Duration/60, len(resources)),
 		}
 	}
-	for _, name := range connection.Uses {
-		scan.Uses[name] = use
-	}
+	// Discovery and health scans grade inventory only; cost reports on its own (CollectCost).
+	scan.Uses[spec.UseInventory] = use
 	return Result{Resources: resources, Scan: scan}
 }
 

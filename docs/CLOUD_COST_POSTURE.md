@@ -1,8 +1,8 @@
-# Cloud cost and security posture (design)
+# Cloud cost and security posture
 
-Status: approved 2026-11-09 with its UI mock. Not built yet; it ships as one release, v1.1.0, built
-in three milestones (see [Build phases](#build-phases)). It adds the **cost** and **posture** uses to the cloud
-connections from [`INFRASTRUCTURE.md`](INFRASTRUCTURE.md), which the wizard already lists as "later".
+Status: approved 2026-11-09 with its UI mock; built and shipped in v1.1.0, in three milestones (see
+[Build phases](#build-phases)). It adds the **cost** and **posture** uses to the cloud connections
+from [`INFRASTRUCTURE.md`](INFRASTRUCTURE.md).
 
 ## Goal
 
@@ -65,13 +65,15 @@ Obzly stays read-only: it never changes a resource and never buys a commitment.
 | Cost and Posture tabs | Control plane | Fan out to Sites through the proxy, like Infrastructure; merge per currency |
 | Saved views | Control plane | Per user, optionally shared with everyone |
 
-- **Delivery:** the probe sends results as OTLP log records to the connection's destination project,
-  like cloud inventory. This reuses the project API key, the ingest pipeline and the proxy, with no
-  new endpoint.
-- **Batches:** each delivery is a batch with an ID, the scope it covers and a closing manifest
-  record with its row count. The Site applies a batch only once the manifest has arrived and the
-  count matches, and it replaces the rows for that scope in one transaction. A half-delivered batch
-  changes nothing.
+- **Delivery:** the probe posts each batch to the destination Site's `POST /v1/cloud/cost`
+  (gzip JSON), authenticated with the destination project's API key like its other ingest. It
+  goes straight to the Site, never through the control plane. Inventory keeps sending metrics;
+  cost rows aren't telemetry, so they get their own receiver rather than riding on log records.
+- **Batches:** each delivery is a batch with an ID, the days it covers and chunks of at most
+  20,000 rows, each numbered `seq` of `total`. The Site stages chunks and applies a batch only
+  once all of them have arrived, replacing that connection's and source's rows for those days in
+  one transaction. A half-delivered batch changes nothing, and resending a chunk is harmless.
+  For a day an export covers, the export's rows replace the API's.
 - **Data volume:** daily cost rows at resource level for a few thousand resources are a few
   million rows a year. That fits Postgres with monthly partitions. Moving them to the segment store
   is an open question for very large estates.
@@ -84,16 +86,15 @@ Obzly stays read-only: it never changes a resource and never buys a commitment.
 | --- | --- | --- | --- |
 | How | FOCUS export once it lands; the billing API fills in until then, and if the export stops | FOCUS export | AWS Cost Explorer API / Azure Cost Management query API |
 | Cost to you | Export storage, plus a few API calls at the start | Export storage, usually cents a month | AWS: $0.01 per request (each page counts), plus a per-usage-record charge for hourly or resource-level data. Azure: free, but throttled per tenant |
-| Resource level | Yes | Yes | AWS: last 14 days only, after opting in. Azure: yes |
+| Resource level | Yes | Yes | No: Obzly reads the APIs by account, service and region (AWS has resource level for 14 days only, as a paid opt-in) |
 | Amortized (effective) cost | Yes | Yes | AWS: `AmortizedCost` metric. Azure: `AmortizedCost` type |
 | History | From the export's start; AWS and Azure can backfill | Same | AWS: 13 months (38 months at monthly granularity with multi-year data on). Azure: per query range |
 | Setup | Bucket or storage account, and the export | Same | None beyond the role |
 
-The wizard shows these as cards with a live monthly estimate. It's calculated from:
-- the refresh rate;
-- the number of accounts;
-- the number of tracked tags;
-- whether resource-level API data is on.
+The wizard shows these as cards with a live monthly estimate. For Cost Explorer it's the refresh
+rate times one request per account in scope plus one forecast, at $0.01 each, with the one-off
+90-day backfill noted beside it. Obzly reads Cost Explorer by account, service and region only, so
+it never turns on (or pays for) resource-level API data; single resources come from the export.
 
 The source can be changed later without losing history.
 
@@ -135,8 +136,14 @@ The source can be changed later without losing history.
   - provider retry-after headers are obeyed;
   - Azure POST queries need retries switched on per request;
   - a 429 marks the section Throttled, never "0 rows".
-- **Purchase and rightsizing recommendations** from Cost Explorer, Compute Optimizer and Azure
-  Advisor are fetched weekly, to keep API charges down.
+- **Recommendations, commitments and purchase options** are read weekly, after a cost refresh, by
+  the connection that reads cost, to keep API charges down:
+  - AWS: about 75 Cost Explorer requests a week (about $3.20 a month, shown in the wizard), plus
+    Compute Optimizer and EC2 describe calls, which are free;
+  - Azure: Advisor, reservation and savings plan recommendations, free but throttled.
+  - They go to the Site's own `POST /v1/cloud/advice`, chunked like cost and posture batches.
+  - Each part (rightsizing, Obzly checks, commitments, planner) reports ok, not enabled, needs
+    permission or error. A part that isn't ok keeps its last good data on the Site.
 
 ### On the Site
 
@@ -209,16 +216,21 @@ The source can be changed later without losing history.
 ### Native findings
 
 - **AWS Security Hub:**
-  - read in OCSF with `GetFindingsV2`, or with `GetFindings` in ASFF where V2 isn't available, both
-    mapped to one finding model;
-  - filtered to Security Hub's own control findings;
-  - a finding's control ID (e.g. `S3.8`) and the standards that cite it come from the control
-    definitions;
-  - IAM: `securityhub:GetFindings` covers both calls.
-- **Azure:** one Resource Graph query over `securityresources` (assessments and their statuses),
-  like the inventory query.
-- **Detection:** the probe records per region and standard whether native is on and readable, which
-  feeds the Coverage view and Automatic mode.
+  - read with `GetFindings` (ASFF, generally available) per region: `DescribeHub` says whether it's
+    on, `GetEnabledStandards` which standards are; `GetFindingsV2` (OCSF) stays an option once it
+    leaves preview;
+  - filtered to Security Hub's own control findings (`ProductName` Security Hub, active, passed or
+    failed), so passed controls count toward scores too;
+  - a finding's control is its consolidated `SecurityControlId` (e.g. `S3.8`); CIS numbers come
+    from its related requirements ("CIS AWS Foundations Benchmark v3.0.0/2.1.4");
+  - only FSBP and CIS AWS are mapped; other enabled standards are left out.
+- **Azure:** one Resource Graph query over `securityresources` (Defender assessments, healthy and
+  unhealthy), mapped to the Microsoft cloud security benchmark, which Defender assesses by default.
+  A subscription with no assessments counts as "not enabled". Azure scopes are whole subscriptions.
+- **Detection:** the probe records per region (AWS) or subscription (Azure) and standard whether
+  native is on and readable, which feeds the Coverage view and Automatic mode.
+- **Account-wide controls** (IAM, CloudTrail, S3 account settings) come from Security Hub wherever
+  it runs; the baseline reads them only when no region of the account has it.
 
 ### Obzly baseline
 
@@ -238,18 +250,32 @@ The source can be changed later without losing history.
   configuration never does.
 - **Collect less:** sensitive values (user data, environment variables, parameters) are never
   collected. A check that needs them looks at a yes/no fact (e.g. "has environment variables").
-- **Size:** about 120 checks to start, covering the CIS and FSBP/MCSB controls that matter most.
+- **Size:** v1.1.0 starts with 19 checks (12 AWS, 7 Azure) on the most cited controls: public
+  access, admin ports open to the internet, encryption, the root user, CloudTrail and IMDSv2. The
+  catalog grows release by release towards about 120.
+- **Identity:** an AWS check uses the FSBP control it stands in for (e.g. `EC2.8`) as its control,
+  so a finding keeps its history when Security Hub is turned on or off; an Azure check uses its own
+  ID, as Defender's assessments have no shared control ID.
+- **Unknown is never a pass:** a fact the probe couldn't read fails the check with the error as
+  evidence, and a scope whose reads failed resolves nothing.
 - **Why CEL and not Rego:** it is small, side-effect free and fast enough to embed in the probe, and
   the people who write the checks already know it from Kubernetes.
 
 ### Findings
 
-- **`posture_findings`:** one row per source, control and resource key. It holds:
+- **Delivery:** the probe posts each refresh to the Site's `POST /v1/cloud/posture` with the
+  project's API key, in chunks of up to 5,000 findings; the Site applies it once every chunk has
+  arrived, like cost.
+- **`posture_findings`:** one row per connection, control and resource key (the source is a column,
+  so it can change). It holds:
   - severity and status;
   - first seen, last seen, resolved at;
   - suppression: reason, until, by;
   - evidence (small);
   - the standards and controls.
+- **Resolving:** a finding missing from a refresh resolves only if an ok run of its scope came from
+  its own source, or from a source that evaluated its control. A source that doesn't evaluate the
+  control, or a scope that wasn't read, leaves it open.
 - **`posture_finding_events`:** opened, resolved, reopened, suppressed, unsuppressed. Used by Trends
   and history.
 - **`posture_scope_runs`:** per connection, region, standard and source: result and reason. A
@@ -281,27 +307,42 @@ The source can be changed later without losing history.
 - **Kinds:** rightsizing, idle (stopped or unattached resources, idle GPUs), modernization (gp2 →
   gp3, Graviton) and storage (lifecycle rules).
 - **Sources:**
-  - Compute Optimizer;
-  - Azure Advisor;
-  - Obzly checks;
-  - **Obzly agent metrics:** CPU and memory p95 over 14 days. CloudWatch alone has no memory data.
-    Resources are joined through inventory: EC2 instance ID ↔ `host_id`.
-- **Prices:** savings use the resource's own effective cost from cost data, scaled by list-price
-  ratios from the AWS Price List and Azure Retail Prices APIs.
+  - **Compute Optimizer:** EC2 rightsizing (overprovisioned instances), EBS volumes (for example
+    gp2 to gp3) and idle resources. It needs an opt-in (free); without it the section says "not
+    enabled".
+  - **Azure Advisor**, cost category. Its purchase advice is left to the planner.
+  - **Obzly checks:** unattached EBS volumes and managed disks, gp2 volumes, unused Elastic IPs and
+    public IP addresses. On Azure they need Reader (Inventory or Posture on the connection), because
+    Resource Graph without it answers "nothing", which would read as "nothing idle".
+  - Where both have one for the same resource and kind, the provider's recommendation wins.
+  - **Obzly agent metrics:** CPU and memory p95 over 14 days for EC2 rightsizing, joined through
+    `host_id` (the instance ID). CloudWatch alone has no memory figure. A busy memory (p95 of 80%
+    or more) marks the recommendation high risk.
+- **Savings:** the provider's estimate. An Obzly check has no estimate: its saving is a share of
+  the resource's own effective cost over the last 30 days (all of it when idle, 20% for gp2 to
+  gp3), and is "n/a" until an export has resource-level cost. Elastic IPs use the list price
+  ($0.005 an hour).
 - **Storage:**
-  - `cost_recommendations` is replaced on each refresh;
-  - `recommendation_states` keeps open, planned (owner, due date), done and dismissed (reason) by a
-    stable key, so state survives refreshes.
-- **Done is detected** when inventory and cost data show the change.
+  - `cost_recommendations` is replaced on each refresh, per section that came back ok;
+  - `cost_recommendation_states` keeps open, planned (owner, due date), done and dismissed (reason)
+    by a stable key, so state survives refreshes.
+- **Done is detected** when a recommendation disappears from a refresh whose section read ok. If it
+  comes back later, the change didn't stick and it reopens; one someone marked done stays done.
 - **Realized savings:** the median daily cost 14 days before vs 14 days after, shown against what
-  was expected.
+  was expected, measured 16 days after the change so late cost data has arrived. Without at least 7
+  days on each side it stays n/a.
 
 ### Commitments
 
 - **Existing commitments:** Savings Plans, EC2 and RDS Reserved Instances, and Azure reservations
   and savings plans, with coverage, how much each is used, and when it ends.
+  - AWS reads them from Cost Explorer's utilization and coverage reports, so no per-region describe
+    calls are needed.
+  - Azure reads the reservations and savings plans the identity can see. That needs Reservations
+    Reader (assigned at `/providers/Microsoft.Capacity`), which a template can't assign; the setup
+    script shows the command, and until then the section says "needs permission".
   - A commitment used 0% (for example an RDS reservation for a family that was migrated) is flagged.
-  - So is one ending within 60 days; that also alerts.
+  - So is one ending within 60 days; that also alerts, on the project's cost alert channels.
 - **Planner:**
   - **Types:**
     - AWS: Compute Savings Plan, EC2 Instance Savings Plan, EC2 and RDS Reserved Instances;
@@ -322,8 +363,8 @@ The source can be changed later without losing history.
     - payback month;
     - a usage chart.
   - **The coverage slider** (cover 50–120% of steady usage, with unused hours shown) needs hourly
-    data, so it appears only for connections with an hourly export. Otherwise the provider's
-    recommended commitment is used.
+    data, and FOCUS 1.2 exports are daily, so it isn't built yet: the provider's recommended
+    commitment is used.
   - **How to buy** lists the console steps. Obzly never buys.
 
 ### Posture
@@ -331,7 +372,8 @@ The source can be changed later without losing history.
 - **Actions:** each groups the findings that one change fixes. Examples:
   - "Lock down contoso-logs-eu: require TLS and turn on access logging" closes two findings;
   - "Delete 6 unattached, unencrypted EBS volumes" is linked to the matching cost recommendation.
-- **Guardrails** stop a finding coming back:
+- **Guardrails** stop a finding coming back. A guardrail that is itself a control (EBS encryption
+  by default is EC2.7) also closes that finding, and its separate fix isn't offered as well:
   - S3 Block Public Access for the whole account;
   - IMDSv2 as the default for new instances;
   - EBS encryption by default;
@@ -375,8 +417,8 @@ bucket or storage account.
 | Use | AWS | Azure |
 | --- | --- | --- |
 | Cost: export | `s3:GetObject` and `s3:ListBucket` on the export prefix, `bcm-data-exports:GetExport` / `ListExports` | `Storage Blob Data Reader` on the export container |
-| Cost: API, forecasts and recommendations | `ce:GetCostAndUsage`, `GetCostForecast`, `GetDimensionValues`, `GetTags`, `GetSavingsPlansPurchaseRecommendation`, `GetReservationPurchaseRecommendation`, `GetSavingsPlansCoverage` / `Utilization`, `GetReservationCoverage` / `Utilization`; `savingsplans:DescribeSavingsPlans`, `ec2:DescribeReservedInstances`, `rds:DescribeReservedDBInstances`, `compute-optimizer:Get*Recommendations`, `GetEnrollmentStatus`, `pricing:GetProducts` | `Cost Management Reader` (and `Billing Reader` at billing scope), `Reservations Reader`; Advisor through `Reader` |
-| Posture | `SecurityAudit` (baseline), `securityhub:GetFindings`, `DescribeHub`, `GetEnabledStandards`, `ListSecurityControlDefinitions` | `Security Reader` |
+| Cost: API, forecasts and recommendations | `ce:GetCostAndUsage`, `GetCostForecast`, `GetDimensionValues`, `GetTags`, `GetSavingsPlansPurchaseRecommendation`, `GetReservationPurchaseRecommendation`, `GetSavingsPlansCoverage`, `GetSavingsPlansUtilizationDetails`, `GetReservationCoverage`, `GetReservationUtilization`; `compute-optimizer:GetEnrollmentStatus`, `GetEC2InstanceRecommendations`, `GetEBSVolumeRecommendations`, `GetIdleRecommendations`; `ec2:DescribeRegions`, `DescribeInstances`, `DescribeVolumes`, `DescribeAddresses` (Obzly checks) | `Cost Management Reader` (and `Billing Reader` at billing scope), which also reads Advisor; `Reservations Reader` for existing reservations and savings plans (optional, tenant level); `Reader` for the Obzly checks |
+| Posture | `SecurityAudit` (baseline), `securityhub:DescribeHub`, `GetEnabledStandards`, `GetFindings` | `Security Reader`, and `Reader` for the baseline checks' resource reads |
 
 This replaces the cost and posture rows of the table in `INFRASTRUCTURE.md`.
 
@@ -390,15 +432,19 @@ finding, recommendation or budget needs a project member.
   - `/api/v1/cloud-cost/summary`, `/explore` (range, period, group, filters, metric, currency),
     `/facets`, `/status`;
   - `/budgets`, `/anomalies`;
-  - `/recommendations` (and `PATCH` for status), `/commitments`, `/planner`.
+  - `/recommendations` (and `PATCH` with the project and key in the body, since keys are ARNs),
+    `/resource-recommendations` (the asset drawer), `/commitments`, `/planner` (look-back,
+    rightsizing first);
+  - receiver: `POST /v1/cloud/advice`.
 - **Posture:**
   - `/api/v1/posture/standards`, `/findings`, `PATCH /findings/{id}` (suppress or unsuppress);
   - `/trends`, `/coverage`;
   - `/actions` (and `PATCH` for plan or dismiss).
 - **Control plane:** `/api/v1/saved-views` (CRUD; a shared view is read-only to everyone but its
   owner), plus each user's default view per tab.
-- **MCP:** read-only tools: cost summary, explore, anomalies, budgets, recommendations, posture
-  scores, findings, coverage. Each is scoped to the caller's projects, and resource names and tags
+- **MCP:** read-only tools `cost_summary`, `cost_explore`, `cost_anomalies`, `cost_budgets`,
+  `cost_recommendations` (with flagged commitments), `posture_scores`, `posture_findings` and
+  `posture_coverage`. Each is scoped to the caller's projects, and resource names and tags
   are marked as data, not instructions.
 
 ## Security and privacy

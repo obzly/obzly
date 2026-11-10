@@ -1,0 +1,18 @@
+id: aws-root-mfa
+provider: aws
+resource: aws_account
+title: The root user should have MFA
+severity: critical
+control: IAM.9
+standards:
+  - {standard: aws-fsbp, control: IAM.9}
+  - {standard: cis-aws, control: "1.5"}
+pass: r.root_mfa
+evidence: [root_mfa]
+remediation:
+  cli: "# The root user's MFA can only be set up by signing in as root."
+  iac: "# Not manageable as code."
+  console: Sign in as the root user → account menu → Security credentials → Multi-factor authentication → Assign MFA device.
+fixtures:
+  pass: [{root_mfa: true}]
+  fail: [{root_mfa: false}]

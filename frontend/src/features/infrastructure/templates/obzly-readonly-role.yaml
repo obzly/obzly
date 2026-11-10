@@ -53,6 +53,14 @@ Parameters:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'false'
+  ExportBucket:
+    Type: String
+    Default: ''
+    Description: Cost - the S3 bucket the FOCUS Data Export writes to (empty without an export).
+  ExportPrefix:
+    Type: String
+    Default: ''
+    Description: Cost - the export's S3 prefix, e.g. focus (read access is limited to it).
 
 Rules:
   AssumeRoleNeedsPrincipalAndExternalId:
@@ -77,6 +85,7 @@ Conditions:
   WithInventory: !Equals [!Ref Inventory, 'true']
   WithCost: !Equals [!Ref Cost, 'true']
   WithPosture: !Equals [!Ref Posture, 'true']
+  WithExport: !And [!Condition WithCost, !Not [!Equals [!Ref ExportBucket, '']]]
 
 Resources:
   ObzlyIssuer:
@@ -132,20 +141,50 @@ Resources:
                     - ce:GetCostAndUsage
                     - ce:GetCostForecast
                     - ce:GetDimensionValues
-                    - ce:GetAnomalies
-                    - budgets:ViewBudget
-                    - cur:DescribeReportDefinitions
+                    - ce:GetTags
+                    - ce:GetSavingsPlansPurchaseRecommendation
+                    - ce:GetReservationPurchaseRecommendation
+                    - ce:GetSavingsPlansCoverage
+                    - ce:GetSavingsPlansUtilizationDetails
+                    - ce:GetReservationCoverage
+                    - ce:GetReservationUtilization
+                    - compute-optimizer:GetEnrollmentStatus
+                    - compute-optimizer:GetEC2InstanceRecommendations
+                    - compute-optimizer:GetEBSVolumeRecommendations
+                    - compute-optimizer:GetIdleRecommendations
+                    - ec2:DescribeRegions
+                    - ec2:DescribeInstances
+                    - ec2:DescribeVolumes
+                    - ec2:DescribeAddresses
+                    - bcm-data-exports:GetExport
+                    - bcm-data-exports:ListExports
                   Resource: '*'
+                - !Ref AWS::NoValue
+              - !If
+                - WithExport
+                - Sid: costexport
+                  Effect: Allow
+                  Action: s3:GetObject
+                  Resource: !Sub 'arn:${AWS::Partition}:s3:::${ExportBucket}/${ExportPrefix}*'
+                - !Ref AWS::NoValue
+              - !If
+                - WithExport
+                - Sid: costexportlist
+                  Effect: Allow
+                  Action: s3:ListBucket
+                  Resource: !Sub 'arn:${AWS::Partition}:s3:::${ExportBucket}'
+                  Condition:
+                    StringLike:
+                      s3:prefix: !Sub '${ExportPrefix}*'
                 - !Ref AWS::NoValue
               - !If
                 - WithPosture
                 - Sid: posture
                   Effect: Allow
                   Action:
-                    - securityhub:Get*
-                    - securityhub:List*
-                    - guardduty:Get*
-                    - guardduty:List*
+                    - securityhub:DescribeHub
+                    - securityhub:GetEnabledStandards
+                    - securityhub:GetFindings
                   Resource: '*'
                 - !Ref AWS::NoValue
 

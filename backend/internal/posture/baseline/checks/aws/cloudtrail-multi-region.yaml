@@ -1,0 +1,26 @@
+id: aws-cloudtrail-multi-region
+provider: aws
+resource: aws_cloudtrail
+title: A multi-region CloudTrail trail should be logging
+severity: high
+control: CloudTrail.1
+standards:
+  - {standard: aws-fsbp, control: CloudTrail.1}
+  - {standard: cis-aws, control: "3.1"}
+pass: r.multi_region_logging
+evidence: [multi_region_logging, trails]
+remediation:
+  cli: |
+    aws cloudtrail create-trail --name management-events --s3-bucket-name <trail bucket> --is-multi-region-trail
+    aws cloudtrail start-logging --name management-events
+  iac: |
+    # CloudFormation
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      IsLogging: true
+      IsMultiRegionTrail: true
+      S3BucketName: <trail bucket>
+  console: CloudTrail → Trails → Create trail; it applies to all regions by default.
+fixtures:
+  pass: [{multi_region_logging: true, trails: 1}]
+  fail: [{multi_region_logging: false, trails: 0}]

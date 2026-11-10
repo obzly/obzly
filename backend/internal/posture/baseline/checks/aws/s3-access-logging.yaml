@@ -1,0 +1,23 @@
+id: aws-s3-access-logging
+provider: aws
+resource: aws_s3_bucket
+title: S3 buckets should have server access logging
+severity: medium
+control: S3.9
+standards:
+  - {standard: aws-fsbp, control: S3.9}
+pass: r.logging_enabled
+evidence: [logging_enabled]
+remediation:
+  cli: |
+    aws s3api put-bucket-logging --bucket {name} \
+      --bucket-logging-status '{"LoggingEnabled":{"TargetBucket":"<log bucket>","TargetPrefix":"{name}/"}}'
+  iac: |
+    # CloudFormation, on the AWS::S3::Bucket
+    LoggingConfiguration:
+      DestinationBucketName: <log bucket>
+      LogFilePrefix: {name}/
+  console: S3 → the bucket → Properties → Server access logging → Edit → Enable, and pick a target bucket.
+fixtures:
+  pass: [{logging_enabled: true}]
+  fail: [{logging_enabled: false}]

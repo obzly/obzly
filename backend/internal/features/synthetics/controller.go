@@ -47,6 +47,8 @@ func (c *Controller) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/cloud-connections", c.ListCloudConnections)
 	router.POST("/cloud-connections", c.CreateCloudConnection)
 	router.GET("/cloud-connections/setup", c.CloudSetup)
+	router.GET("/cloud-connections/cost-settings", c.GetCloudCostSettings)
+	router.PUT("/cloud-connections/cost-settings", c.UpdateCloudCostSettings)
 	router.POST("/cloud-connections/test", c.TestCloudConnection)
 	router.GET("/cloud-connections/tests/:id", c.GetCloudTest)
 	router.GET("/cloud-connections/:id", c.GetCloudConnection)
@@ -590,6 +592,7 @@ func respond(ctx *gin.Context, body any, err error) {
 	case errors.Is(err, ErrNotFound):
 		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, ErrConflict), errors.Is(err, ErrInUse), errors.Is(err, ErrCloudInUse),
+		errors.Is(err, ErrCostReadThrough),
 		errors.Is(err, ErrMaintenanceConflict):
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:

@@ -1,0 +1,20 @@
+id: azure-storage-min-tls
+provider: azure
+resource: azure_storage_account
+title: Storage accounts should require TLS 1.2 or later
+severity: medium
+control: azure-storage-min-tls
+standards:
+  - {standard: mcsb, control: DP-3}
+  - {standard: cis-azure, control: "3.15"}
+pass: r.min_tls in ["TLS1_2", "TLS1_3"]
+evidence: [min_tls]
+remediation:
+  cli: az storage account update --name {name} --resource-group {resourceGroup} --min-tls-version TLS1_2
+  iac: |
+    // Bicep, on the Microsoft.Storage/storageAccounts resource
+    properties: { minimumTlsVersion: 'TLS1_2' }
+  console: Storage account → Settings → Configuration → Minimum TLS version → Version 1.2.
+fixtures:
+  pass: [{min_tls: TLS1_2}]
+  fail: [{min_tls: TLS1_0}, {min_tls: ""}]

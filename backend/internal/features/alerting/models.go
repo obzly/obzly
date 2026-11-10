@@ -27,6 +27,12 @@ const (
 	// SourceAICost: an AI budget's spend this period (managed rules only;
 	// see SetAICostSource).
 	SourceAICost = "ai_cost"
+	// SourceCloudCost: a cloud cost budget's forecast, or new cost anomalies (managed rules
+	// only; see SetCloudCostSource).
+	SourceCloudCost = "cloud_cost"
+	// SourceCloudPosture: new or reopened posture findings (managed rules only; see
+	// SetCloudPostureSource).
+	SourceCloudPosture = "cloud_posture"
 )
 
 // Channel kinds.
@@ -146,8 +152,15 @@ type RuleQuery struct {
 	RootSpansOnly   bool                 `json:"rootSpansOnly,omitempty"`
 	BaselineSeconds int                  `json:"baselineSeconds,omitempty"`
 	MinCount        int64                `json:"minCount,omitempty"`
-	// BudgetID is the AI budget an ai_cost rule watches.
+	// BudgetID is the AI budget an ai_cost rule watches, or the cost budget a cloud_cost rule does.
 	BudgetID string `json:"budgetId,omitempty"`
+	// CostAnomalies: a cloud_cost rule that fires for each new cost anomaly.
+	CostAnomalies bool `json:"costAnomalies,omitempty"`
+	// CostCommitments: a cloud_cost rule whose series are the days left on each commitment
+	// ending soon.
+	CostCommitments bool `json:"costCommitments,omitempty"`
+	// MinSeverity: a cloud_posture rule fires for new or reopened findings this severe or more.
+	MinSeverity string `json:"minSeverity,omitempty"`
 }
 
 func (q RuleQuery) Value() (driver.Value, error) { return jsonValue(q) }

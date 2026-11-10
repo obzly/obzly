@@ -1,7 +1,7 @@
 import type { QueryNode } from '../../query';
 
-// ai_cost rules are kept by AI budgets only.
-export type RuleSource = 'metrics' | 'logs' | 'log_patterns' | 'traces' | 'ai_cost';
+// ai_cost rules are kept by AI budgets only; cloud_cost rules by cost budgets and anomaly alerts.
+export type RuleSource = 'metrics' | 'logs' | 'log_patterns' | 'traces' | 'ai_cost' | 'cloud_cost';
 export type Comparison = '>' | '>=' | '<' | '<=' | '==' | '!=';
 export type ChannelKind = 'webhook' | 'slack' | 'pagerduty' | 'email';
 

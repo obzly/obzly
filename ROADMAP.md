@@ -506,9 +506,9 @@ inventory and cloud connections"](ARCHITECTURE.md#synthetics-the-infrastructure-
   Infrastructure; Obzly settings in tabs with Overview, Updates and audit CSV export; require MFA
   for everyone; JetStream reads capped by bytes.
 - **v0.57.0** (done): multi-step API monitors and maintenance windows.
-- **Next:** cost and security posture over the same cloud connections (designed and approved:
-  [`docs/CLOUD_COST_POSTURE.md`](docs/CLOUD_COST_POSTURE.md); ships as one release, v1.1.0 -
-  cost, posture, recommendations), AWS `tag:GetResources`
+- **v1.1.0** (done): cost and security posture over the same cloud connections, with
+  recommendations for both ([`docs/CLOUD_COST_POSTURE.md`](docs/CLOUD_COST_POSTURE.md)).
+- **Next:** AWS `tag:GetResources`
   breadth and Azure Resource Health, CloudWatch / Azure Monitor health for load balancers and
   databases, browser monitors.
 

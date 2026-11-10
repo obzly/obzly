@@ -24,10 +24,12 @@ import {
 } from '../../../entity/users';
 import { AiObservabilityComponent } from '../../../features/aiObservability';
 import { AlertsComponent } from '../../../features/alerts';
+import { CostComponent } from '../../../features/cost';
 import { DashboardsComponent } from '../../../features/dashboards';
 import { SessionsListComponent } from '../../../features/incidents';
 import { InfrastructureComponent, type NavigateTarget } from '../../../features/infrastructure';
 import { OrganizationsComponent } from '../../../features/organizations';
+import { PostureComponent } from '../../../features/posture';
 import {
   CreateProjectDialogComponent,
   DataSourcesComponent,
@@ -63,6 +65,8 @@ type TabName =
   | 'organizations'
   | 'synthetics'
   | 'infrastructure'
+  | 'cost'
+  | 'posture'
   | 'search'
   | 'traces'
   | 'service-map'
@@ -82,6 +86,8 @@ const TAB_NAMES: TabName[] = [
   'organizations',
   'synthetics',
   'infrastructure',
+  'cost',
+  'posture',
   'search',
   'traces',
   'service-map',
@@ -549,6 +555,23 @@ export const MainScreenComponent = () => {
                     isVisible: true,
                   },
                   {
+                    text: 'Cost',
+                    name: 'cost',
+                    icon: '/icons/menu/cost-gray.svg',
+                    selectedIcon: '/icons/menu/cost-white.svg',
+                    onClick: () => setSelectedTab('cost'),
+                    // Cloud connections, and so cost, are kept on the control plane.
+                    isVisible: IS_CONTROL_PLANE,
+                  },
+                  {
+                    text: 'Posture',
+                    name: 'posture',
+                    icon: '/icons/menu/posture-gray.svg',
+                    selectedIcon: '/icons/menu/posture-white.svg',
+                    onClick: () => setSelectedTab('posture'),
+                    isVisible: IS_CONTROL_PLANE,
+                  },
+                  {
                     text: 'Synthetics',
                     name: 'synthetics',
                     icon: '/icons/menu/synthetics-gray.svg',
@@ -703,6 +726,32 @@ export const MainScreenComponent = () => {
                     : undefined
                 }
                 onNavigate={openFromInventory}
+              />
+            )}
+            {selectedTab === 'cost' && IS_CONTROL_PLANE && (
+              <CostComponent
+                contentHeight={contentHeight}
+                onManageCloud={
+                  centralUser?.role === UserRole.ADMIN
+                    ? () => {
+                        rememberSettingsTab('cloud');
+                        setSelectedTab('obzly-settings');
+                      }
+                    : undefined
+                }
+              />
+            )}
+            {selectedTab === 'posture' && IS_CONTROL_PLANE && (
+              <PostureComponent
+                contentHeight={contentHeight}
+                onManageCloud={
+                  centralUser?.role === UserRole.ADMIN
+                    ? () => {
+                        rememberSettingsTab('cloud');
+                        setSelectedTab('obzly-settings');
+                      }
+                    : undefined
+                }
               />
             )}
             {selectedTab === 'organizations' && (

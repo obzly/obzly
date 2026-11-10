@@ -15,6 +15,8 @@ import {
   inventoryApi,
 } from '../../../entity/inventory';
 import type { PromQLSeries } from '../../../entity/synthetics';
+import { ResourceCostPanel } from '../../cost';
+import { ResourcePosturePanel } from '../../posture';
 import {
   type ChartColors,
   EChart,
@@ -271,6 +273,13 @@ export const AssetDetailDrawer = ({
                   </Panel>
                 ))}
               </div>
+            </div>
+          )}
+
+          {asset.attributes.cloud_resource_id && (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <ResourceCostPanel siteId={siteId} cloudId={asset.attributes.cloud_resource_id} />
+              <ResourcePosturePanel siteId={siteId} cloudId={asset.attributes.cloud_resource_id} />
             </div>
           )}
 

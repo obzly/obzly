@@ -1,0 +1,20 @@
+id: azure-keyvault-recoverable
+provider: azure
+resource: azure_key_vault
+title: Key vaults should have soft delete and purge protection
+severity: medium
+control: azure-keyvault-recoverable
+standards:
+  - {standard: mcsb, control: DP-8}
+  - {standard: cis-azure, control: "8.5"}
+pass: r.soft_delete && r.purge_protection
+evidence: [soft_delete, purge_protection]
+remediation:
+  cli: az keyvault update --name {name} --resource-group {resourceGroup} --enable-purge-protection true
+  iac: |
+    // Bicep, on the Microsoft.KeyVault/vaults resource
+    properties: { enableSoftDelete: true, enablePurgeProtection: true }
+  console: Key vault → Settings → Properties → Purge protection → Enable purge protection.
+fixtures:
+  pass: [{soft_delete: true, purge_protection: true}]
+  fail: [{soft_delete: true, purge_protection: false}]

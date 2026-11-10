@@ -30,6 +30,12 @@ param inventory bool = true
 param cost bool = false
 param posture bool = false
 
+@description('cost: the storage account the FOCUS cost export writes to (empty without an export).')
+param costExportStorageAccount string = ''
+
+@description('cost: that storage account\'s resource group.')
+param costExportResourceGroup string = ''
+
 var createIdentity = accessMode != 'probe'
 
 module identity 'obzly-identity.bicep' = if (createIdentity) {
@@ -46,12 +52,24 @@ var principal = createIdentity ? identity!.outputs.principalId : principalId
 // new identity exists.
 var assignmentSeed = createIdentity ? '${resourceGroupName}/${subject}' : principalId
 
-// Built-in role IDs: Reader, Cost Management Reader, Security Reader.
+// Built-in role IDs: Reader, Cost Management Reader, Security Reader. Posture's baseline checks
+// read resources' settings, which takes Reader too.
 var roles = concat(
-  inventory ? ['acdd72a7-3385-48ef-bd42-f606fba81ae7'] : [],
+  inventory || posture ? ['acdd72a7-3385-48ef-bd42-f606fba81ae7'] : [],
   cost ? ['72fafb9e-0641-4937-9268-a91bfd8191a3'] : [],
   posture ? ['39bc4728-0917-49c7-9d2c-d95423bc2eb4'] : []
 )
+
+// Cost with an export: Storage Blob Data Reader on the export's storage account only.
+module costExport 'obzly-cost-export.bicep' = if (cost && !empty(costExportStorageAccount)) {
+  name: 'obzly-cost-export'
+  scope: resourceGroup(costExportResourceGroup)
+  params: {
+    storageAccountName: costExportStorageAccount
+    principalId: principal
+    assignmentSeed: assignmentSeed
+  }
+}
 
 resource assignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for role in roles: {
   name: guid(subscription().id, assignmentSeed, role)

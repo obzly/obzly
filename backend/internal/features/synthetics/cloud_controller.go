@@ -292,3 +292,45 @@ func (c *ProbeController) CloudToken(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, token)
 	}
 }
+
+// GetCloudCostSettings
+// @Summary Cost settings for every cloud connection
+// @Description The tag keys kept on cost rows, to group and budget by
+// @Tags cloud-connections
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} synthetics.CloudCostSettings
+// @Failure 401 {object} map[string]string
+// @Router /cloud-connections/cost-settings [get]
+func (c *Controller) GetCloudCostSettings(ctx *gin.Context) {
+	if _, ok := currentUser(ctx); !ok {
+		return
+	}
+	settings, err := c.service.GetCloudCostSettings()
+	respond(ctx, settings, err)
+}
+
+// UpdateCloudCostSettings
+// @Summary Set the cost settings for every cloud connection
+// @Description Admins only. Up to 10 tracked tag keys; probes get them with their next config
+// @Tags cloud-connections
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body synthetics.CloudCostSettings true "Settings"
+// @Success 200 {object} synthetics.CloudCostSettings
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /cloud-connections/cost-settings [put]
+func (c *Controller) UpdateCloudCostSettings(ctx *gin.Context) {
+	user, ok := currentUser(ctx)
+	if !ok {
+		return
+	}
+	var request CloudCostSettings
+	if !bind(ctx, &request) {
+		return
+	}
+	settings, err := c.service.UpdateCloudCostSettings(user, request)
+	respond(ctx, settings, err)
+}

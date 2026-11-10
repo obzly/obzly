@@ -5,6 +5,7 @@ import { apiHelper } from '../../../shared/api/apiHelper';
 import type {
   CloudConnection,
   CloudConnectionRequest,
+  CloudCostSettings,
   CloudSetup,
   CloudTest,
 } from '../model/CloudConnection';
@@ -23,4 +24,7 @@ export const cloudConnectionsApi = {
   test: (request: CloudConnectionRequest): Promise<CloudTest> =>
     apiHelper.fetchPostJson(`${base()}/test`, body(request)),
   getTest: (id: string): Promise<CloudTest> => apiHelper.fetchGetJson(`${base()}/tests/${id}`),
+  costSettings: (): Promise<CloudCostSettings> => apiHelper.fetchGetJson(`${base()}/cost-settings`),
+  updateCostSettings: (settings: CloudCostSettings): Promise<CloudCostSettings> =>
+    apiHelper.fetchPutJson(`${base()}/cost-settings`, body(settings)),
 };

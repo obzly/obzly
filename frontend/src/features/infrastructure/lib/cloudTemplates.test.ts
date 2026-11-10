@@ -68,9 +68,65 @@ describe('generateTemplate', () => {
     expect(bicep.files.map((file) => file.name)).toEqual([
       'obzly-reader.bicep',
       'obzly-identity.bicep',
+      'obzly-cost-export.bicep',
     ]);
     const cli = generateTemplate({ ...azure, access: 'workload' }, 'cli');
     expect(cli.script).toContain('--subject system:serviceaccount:obzly-probe:obzly-probe');
     expect(cli.script).toContain('--role "Reader"');
+  });
+
+  it('reads only the cost export: its prefix in S3, its storage account in Azure', () => {
+    const exported = input({
+      uses: ['cost'],
+      costExport: { bucket: 'contoso-billing', prefix: 'focus/' },
+    });
+    expect(generateTemplate(exported, 'template').script).toContain(
+      'Cost=true Posture=false ExportBucket=contoso-billing ExportPrefix=focus/',
+    );
+    const cli = generateTemplate(exported, 'cli').script;
+    expect(cli).toContain('ce:GetCostAndUsage');
+    expect(cli).toContain('arn:aws:s3:::contoso-billing/focus/*');
+    const probe = generateTemplate({ ...exported, access: 'probe' }, 'template').files[0].content;
+    expect(probe).toContain("s3:prefix': 'focus/*'");
+    expect(generateTemplate({ ...exported, uses: ['inventory'] }, 'template').script).not.toContain(
+      'ExportBucket',
+    );
+
+    const azure = input({
+      provider: 'azure',
+      access: 'federated',
+      scope: 'management_group',
+      scopeId: 'mg-contoso',
+      uses: ['cost'],
+      costExport: { storageAccount: 'contosobilling', resourceGroup: 'billing' },
+    });
+    const azureCli = generateTemplate(azure, 'cli').script;
+    expect(azureCli).toContain('--role "Cost Management Reader"');
+    expect(azureCli).toContain(
+      'az storage account show --name contosobilling --resource-group billing',
+    );
+    expect(azureCli).toContain('--role "Storage Blob Data Reader" --scope "$EXPORT"');
+    const bicep = generateTemplate({ ...azure, scope: 'subscription' }, 'template').script;
+    expect(bicep).toContain(
+      'costExportStorageAccount=contosobilling costExportResourceGroup=billing',
+    );
+  });
+});
+
+describe('posture permissions', () => {
+  it('reads Security Hub and the baseline, with Reader for Azure resources', () => {
+    const aws = input({ uses: ['posture'] });
+    expect(generateTemplate(aws, 'template').script).toContain('Posture=true');
+    const probe = generateTemplate({ ...aws, access: 'probe' }, 'template').files[0].content;
+    expect(probe).toContain('securityhub:GetFindings');
+    expect(probe).toContain('s3:GetBucketPublicAccessBlock');
+    expect(probe).not.toContain('guardduty');
+
+    const azure = generateTemplate(
+      input({ provider: 'azure', access: 'federated', scope: 'subscription', uses: ['posture'] }),
+      'cli',
+    ).script;
+    expect(azure).toContain('--role "Security Reader"');
+    expect(azure).toContain('--role "Reader"');
   });
 });

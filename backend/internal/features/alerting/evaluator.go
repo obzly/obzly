@@ -351,11 +351,14 @@ func (e *Evaluator) query(ctx context.Context, rule *AlertRule, now time.Time) (
 			samples = []sample{{labels: Labels{}, value: 0}}
 		}
 		return samples, nil
-	case SourceAICost:
-		if aiCostSource == nil {
-			return nil, errors.New("AI budgets aren't available on this Site")
+	case SourceAICost, SourceCloudCost, SourceCloudPosture:
+		source := map[string]AICostSource{
+			SourceAICost: aiCostSource, SourceCloudCost: cloudCostSource, SourceCloudPosture: cloudPostureSource,
+		}[rule.Source]
+		if source == nil {
+			return nil, fmt.Errorf("the %s source isn't available on this Site", rule.Source)
 		}
-		computed, err := aiCostSource(ctx, rule, now)
+		computed, err := source(ctx, rule, now)
 		if err != nil {
 			return nil, err
 		}

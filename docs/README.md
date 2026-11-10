@@ -8,9 +8,9 @@
 - [`INFRASTRUCTURE.md`](INFRASTRUCTURE.md) - the Infrastructure inventory (assets, health,
   lifecycle, changes) and cloud connections (AWS and Azure, the wizard, permissions, credentials);
   templates in [`../deploy/cloud/`](../deploy/cloud/).
-- [`CLOUD_COST_POSTURE.md`](CLOUD_COST_POSTURE.md) - design for the cost and posture uses of cloud
-  connections: FOCUS exports or billing APIs, native posture with the Obzly baseline as fallback,
-  explorer and trends, recommendations and the commitment planner (approved, not built yet).
+- [`CLOUD_COST_POSTURE.md`](CLOUD_COST_POSTURE.md) - the cost and posture uses of cloud
+  connections (since v1.1.0): FOCUS exports or billing APIs, native posture with the Obzly baseline
+  as fallback, explorer and trends, recommendations and the commitment planner.
 - [`runbooks/`](runbooks/) - operating Obzly:
   - [`backup-restore.md`](runbooks/backup-restore.md) - what to back up, key material
     (`secret_keys`), the restore order, `obzly reconcile`, the integrity audit and the restore

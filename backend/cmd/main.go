@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 	"obzly/internal/features/alerting"
 	"obzly/internal/features/api_keys"
 	"obzly/internal/features/audit_logs"
+	"obzly/internal/features/cloudcost"
 	control_plane_controllers "obzly/internal/features/control_plane/controllers"
 	control_plane_services "obzly/internal/features/control_plane/services"
 	correlation_api "obzly/internal/features/correlation/api"
@@ -58,9 +60,11 @@ import (
 	otlp_logs "obzly/internal/features/otlp/logs"
 	otlp_metrics "obzly/internal/features/otlp/metrics"
 	otlp_traces "obzly/internal/features/otlp/traces"
+	"obzly/internal/features/posture"
 	projects_controllers "obzly/internal/features/projects/controllers"
 	projects_services "obzly/internal/features/projects/services"
 	prometheus_remotewrite "obzly/internal/features/prometheus/remotewrite"
+	"obzly/internal/features/savedviews"
 	"obzly/internal/features/servicemap"
 	"obzly/internal/features/sharedconfig"
 	spans_cleanup "obzly/internal/features/spans/cleanup"
@@ -110,7 +114,6 @@ import (
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.opentelemetry.io/otel/attribute"
-	"golang.org/x/term"
 	"google.golang.org/grpc"
 )
 
@@ -128,6 +131,18 @@ func main() {
 	}
 
 	log := logger.GetLogger()
+
+	// Account repair next to a running server: before anything binds a port.
+	if command, ok, err := parseAdminCommand(os.Args[1:], os.Stderr); ok {
+		if err != nil {
+			if !errors.Is(err, flag.ErrHelp) {
+				log.Error("Invalid command", "error", err)
+			}
+			os.Exit(2)
+		}
+		os.Exit(runAdminCommand(command, log))
+	}
+
 	config.StartListeningForShutdownSignal()
 
 	mode := config.GetEnv().ServiceMode
@@ -220,8 +235,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	handlePasswordReset(log)
-
 	orgplan.Start(context.Background(), log)
 	// Monitor alerts ride the shared-config document: built here on a control
 	// plane, kept as managed rules on a Site.
@@ -229,6 +242,8 @@ func main() {
 	sharedconfig.SetMaintenance(synthetics.GetService().MaintenanceFor, alerting.ApplyManagedSilences)
 	synthetics.SetCloudTokenSigner(control_plane_services.SignCloudToken)
 	alerting.SetAICostSource(aiusage.GetAIUsageService().EvaluateBudgetRule)
+	alerting.SetCloudCostSource(cloudcost.GetService().EvaluateRule)
+	alerting.SetCloudPostureSource(posture.GetService().EvaluateRule)
 	sharedconfig.Start(context.Background(), log)
 
 	if mode.RunsBackgroundWorkers() {
@@ -948,6 +963,8 @@ func setUpIdentityRoutes(r *gin.Engine, v1 *gin.RouterGroup) *gin.RouterGroup {
 	users_controllers.GetUserPlanController().RegisterRoutes(protected)
 	access_tokens.GetAccessTokenController().RegisterRoutes(protected)
 	oauth.GetOAuthController().RegisterRoutes(protected)
+	// Saved Cost Explorer and Posture Trends views belong to the user, like the account.
+	savedviews.GetController().RegisterRoutes(protected)
 	// Served everywhere: a control plane reports its own schema, a Site
 	// adds its rewrite and segment backlog (the service checks the mode).
 	system_upgradestatus.GetController().RegisterRoutes(protected)
@@ -968,6 +985,10 @@ func setUpSiteRoutes(r *gin.Engine, v1 *gin.RouterGroup, protected *gin.RouterGr
 
 	// Prometheus remote write: root-mounted with API-key auth, like OTLP/HTTP.
 	prometheus_remotewrite.GetHTTPController().RegisterRoutes(r)
+
+	// Cloud cost from probes (POST /v1/cloud/cost): root-mounted with API-key auth, like OTLP/HTTP.
+	cloudcost.GetController().RegisterReceiver(r)
+	posture.GetController().RegisterReceiver(r)
 
 	// Jaeger-compatible query API: its own API-key auth, so on the root router.
 	traces_jaeger.GetJaegerController().RegisterRoutes(r)
@@ -993,6 +1014,8 @@ func setUpSiteRoutes(r *gin.Engine, v1 *gin.RouterGroup, protected *gin.RouterGr
 	aiusage.GetBudgetController().RegisterRoutes(protected)
 	alerting.GetController().RegisterRoutes(protected)
 	inventory.GetController().RegisterRoutes(protected)
+	cloudcost.GetController().RegisterRoutes(protected)
+	posture.GetController().RegisterRoutes(protected)
 	// Organizations live where users are managed: here only on a standalone
 	// install (its own control plane); a Site enrolled in one has its
 	// organizations there.
@@ -1081,6 +1104,9 @@ func runBackgroundCleanupWorkers(log *slog.Logger) {
 	aiusage.GetAIUsageService().StartBudgetRuleSync(context.Background())
 	// The infrastructure inventory, rebuilt every 5 minutes (leader-locked).
 	inventory.GetBuilder().Start(context.Background())
+	// Drops cost batches that never completed, hourly (leader-locked).
+	cloudcost.GetService().StartMaintenance(context.Background())
+	posture.GetService().StartMaintenance(context.Background())
 	// A sample of uploaded segments against object storage, weekly.
 	if url := config.GetEnv().ObjectStorageURL; url != "" {
 		if store, err := segments.NewObjectStore(context.Background(), url); err != nil {
@@ -1612,124 +1638,4 @@ func cacheControlFor(urlPath string) string {
 	default:
 		return "public, max-age=3600"
 	}
-}
-
-func handlePasswordReset(log *slog.Logger) {
-	// --new-password still works for existing automation, but a password argument
-	// shows in `ps` and shell history; --email alone prompts for it instead.
-	newPassword := flag.String(
-		"new-password", "",
-		"Set a new password for the user (insecure - visible via ps/shell history; "+
-			"omit this and pass only --email to be prompted instead)",
-	)
-	email := flag.String("email", "", "Email (or root admin login) of the user to reset")
-	resetMFA := flag.Bool(
-		"reset-mfa", false,
-		"With --email: clear the user's MFA (lost authenticator) instead of resetting the password. "+
-			"Admins set it up again at their next sign-in. Add --new-password to reset both.",
-	)
-	resetBootstrapToken := flag.Bool(
-		"reset-bootstrap-token", false,
-		"Print a new bootstrap token for the root admin (the first one is logged only once, at creation). "+
-			"Only while the root admin has no password.",
-	)
-
-	flag.Parse()
-
-	if *resetBootstrapToken {
-		printNewBootstrapToken(log)
-	}
-
-	if *email == "" {
-		if *resetMFA {
-			log.Error("--reset-mfa needs --email <user email or root admin login>")
-			os.Exit(1)
-		}
-		return
-	}
-
-	if *resetMFA {
-		resetUserMFA(*email, log)
-		if *newPassword == "" {
-			os.Exit(0)
-		}
-	}
-
-	log.Info("Found reset password command - reseting password...")
-
-	password := *newPassword
-	if password == "" {
-		var err error
-		password, err = promptForPassword()
-		if err != nil {
-			log.Error("Failed to read password", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	resetPassword(*email, password, log)
-}
-
-// promptForPassword reads a password from stdin with echo off, so it never
-// shows on screen, in `ps` or in shell history.
-func promptForPassword() (string, error) {
-	fmt.Print("New password: ")
-	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	if err != nil {
-		return "", fmt.Errorf("failed to read password from terminal: %w", err)
-	}
-
-	password := string(passwordBytes)
-	if password == "" {
-		return "", fmt.Errorf("password must not be empty")
-	}
-	return password, nil
-}
-
-// printNewBootstrapToken writes the token to stdout only, not the log, so it
-// doesn't reach a log pipeline. Exits.
-func printNewBootstrapToken(log *slog.Logger) {
-	token, err := users_services.GetUserService().ResetBootstrapToken()
-	if err != nil {
-		log.Error("Failed to reset the bootstrap token", "error", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("New root admin bootstrap token (the previous one no longer works):")
-	fmt.Println(token)
-	os.Exit(0)
-}
-
-// resetUserMFA clears one user's MFA from the command line. Exits non-zero on
-// failure.
-func resetUserMFA(email string, log *slog.Logger) {
-	wasEnabled, err := users_services.GetUserService().ResetMFAByEmail(email)
-	if err != nil {
-		log.Error("Failed to reset MFA", "error", err)
-		os.Exit(1)
-	}
-
-	if wasEnabled {
-		log.Info(
-			"MFA reset - the user signs in with their password and, if an admin, sets up MFA again",
-			"email", email,
-		)
-	} else {
-		log.Info("MFA was not enabled for this user - cleared any unfinished setup", "email", email)
-	}
-}
-
-func resetPassword(email string, newPassword string, log *slog.Logger) {
-	log.Info("Resetting password...")
-
-	userService := users_services.GetUserService()
-	err := userService.ChangeUserPasswordByEmail(email, newPassword)
-	if err != nil {
-		log.Error("Failed to reset password", "error", err)
-		os.Exit(1)
-	}
-
-	log.Info("Password reset successfully")
-	os.Exit(0)
 }

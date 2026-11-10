@@ -10,10 +10,12 @@ import (
 	"time"
 
 	access_tokens "obzly/internal/features/access_tokens"
+	"obzly/internal/features/cloudcost"
 	logs_core "obzly/internal/features/logs/core"
 	logs_querying "obzly/internal/features/logs/querying"
 	mcp_server "obzly/internal/features/mcp"
 	"obzly/internal/features/oauth"
+	"obzly/internal/features/posture"
 	projects_controllers "obzly/internal/features/projects/controllers"
 	projects_testing "obzly/internal/features/projects/testing"
 	users_controllers "obzly/internal/features/users/controllers"
@@ -161,6 +163,22 @@ func Test_CreateAccessToken_WhenMFAEnabled_RequiresCode(t *testing.T) {
 	assert.Contains(t, string(resp.Body), "mfaRequired")
 }
 
+func Test_MCP_CloudTools_ReadCostAndPostureOfTheCallersProjects(t *testing.T) {
+	router := createRouter()
+	server := httptest.NewServer(router)
+	defer server.Close()
+	owner := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	project := projects_testing.CreateTestProject("MCP cloud "+uuid.NewString()[:8], owner, router)
+	session := connect(t, server.URL, createToken(t, router, owner))
+
+	recommendations := callText(t, session, "cost_recommendations", map[string]any{"project": project.Name})
+	assert.Contains(t, recommendations, `"recommendations":[]`, recommendations)
+	scores := callText(t, session, "posture_scores", map[string]any{"project": project.ID.String()})
+	assert.Contains(t, scores, `"standards":[]`, scores)
+	summary := callText(t, session, "cost_summary", map[string]any{})
+	assert.Contains(t, summary, `"currencies"`, summary)
+}
+
 func createRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -173,6 +191,8 @@ func createRouter() *gin.Engine {
 	projects_controllers.GetProjectController().RegisterRoutes(protected)
 	projects_controllers.GetMembershipController().RegisterRoutes(protected)
 	logs_querying.GetLogQueryController().RegisterRoutes(protected)
+	cloudcost.GetController().RegisterRoutes(protected)
+	posture.GetController().RegisterRoutes(protected)
 	users_controllers.GetUserController().RegisterProtectedRoutes(protected)
 
 	oauth.GetOAuthController().RegisterRoutes(protected)

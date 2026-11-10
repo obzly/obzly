@@ -55,7 +55,7 @@
 set -euo pipefail
 
 # The release job rewrites this line in the copy it attaches to a release.
-OBZLY_DEFAULT_IMAGE_TAG="v1.0.0"
+OBZLY_DEFAULT_IMAGE_TAG="v1.1.0"
 
 # Everything runs from main, called on the last line: a download cut off
 # halfway (curl | bash) then defines nothing and runs nothing.
