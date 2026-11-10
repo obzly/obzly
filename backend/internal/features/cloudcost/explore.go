@@ -85,7 +85,7 @@ func (s *Service) Explore(ctx context.Context, projects []uuid.UUID, request Exp
 	default:
 		return nil, errors.New("granularity must be daily, monthly, quarterly or yearly")
 	}
-	group, err := groupSQL(request.GroupBy)
+	group, groupArgs, err := groupSQL(request.GroupBy)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (s *Service) Explore(ctx context.Context, projects []uuid.UUID, request Exp
 	}
 	query := fmt.Sprintf(`SELECT %s AS g, %s AS p, currency, SUM(%s)::float8 AS amount FROM cloud_cost_daily
 		WHERE %s GROUP BY 1, 2, 3`, group, periodSQL(granularity), metric, where)
-	if err := storage.GetDb().WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+	if err := storage.GetDb().WithContext(ctx).Raw(query, append(groupArgs, args...)...).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	columns := periods(from, to, granularity)
@@ -195,7 +195,7 @@ func (s *Service) Facets(ctx context.Context, projects []uuid.UUID, request Expl
 	}
 	response := &FacetsResponse{Dimensions: map[string][]FacetValue{}}
 	for _, dimension := range dimensions {
-		group, _ := groupSQL(dimension)
+		group, groupArgs, _ := groupSQL(dimension)
 		resourceLevel := dimension == DimResource || len(request.Filters.Resource) > 0
 		where, args := filterSQL(projects, from, to, request.Filters, dimension, resourceLevel)
 		limit := 1000
@@ -215,7 +215,11 @@ func (s *Service) Facets(ctx context.Context, projects []uuid.UUID, request Expl
 			top AS (SELECT value, max(abs(amount)) AS size FROM sums GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT %d)
 			SELECT sums.value, sums.currency, sums.amount FROM sums JOIN top USING (value)
 			ORDER BY top.size DESC, sums.value, sums.amount DESC`, group, where, limit)
-		if err := storage.GetDb().WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+		if err := storage.GetDb().
+			WithContext(ctx).
+			Raw(query, append(groupArgs, args...)...).
+			Scan(&rows).
+			Error; err != nil {
 			return nil, err
 		}
 		values := []FacetValue{}
@@ -363,26 +367,27 @@ func filterSQL(
 	return strings.Join(clauses, " AND "), args
 }
 
-func groupSQL(dimension string) (string, error) {
+// groupSQL is the expression a dimension groups by, with its arguments: a tag key is a bind
+// parameter, never SQL text.
+func groupSQL(dimension string) (string, []any, error) {
 	switch dimension {
 	case DimProvider:
-		return "provider", nil
+		return "provider", nil, nil
 	case DimAccount:
-		return "sub_account", nil
+		return "sub_account", nil, nil
 	case DimRegion:
-		return "region", nil
+		return "region", nil, nil
 	case DimService:
-		return "service", nil
+		return "service", nil, nil
 	case DimResource:
-		return "resource", nil
+		return "resource", nil, nil
 	case DimCharge:
-		return "charge_category", nil
+		return "charge_category", nil, nil
 	}
-	// Tag keys go into the SQL text, so only the characters cloud tag keys use are allowed.
 	if key, ok := strings.CutPrefix(dimension, tagPrefix); ok && tagKeyPattern.MatchString(key) {
-		return "COALESCE(tags->>'" + key + "', '')", nil
+		return "COALESCE(tags->>?, '')", []any{key}, nil
 	}
-	return "", fmt.Errorf("can't group by %q", dimension)
+	return "", nil, fmt.Errorf("can't group by %q", dimension)
 }
 
 func metricColumn(metric string) (string, error) {
