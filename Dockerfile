@@ -11,7 +11,7 @@
 # it's "run this stage natively" either way. BUILDPLATFORM is a global
 # arg buildx predefines automatically, no explicit ARG declaration
 # needed.
-FROM --platform=$BUILDPLATFORM node:26.13.0-alpine AS frontend-build
+FROM --platform=$BUILDPLATFORM node:26.13.1-alpine AS frontend-build
 
 WORKDIR /frontend
 
@@ -44,7 +44,7 @@ RUN npm run build
 # built against a newer glibc fails there with "GLIBC_2.38 not found"
 # (seen after the Phase 6 rebuild). Bookworm's cross toolchains target the
 # same glibc.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-bookworm AS backend-build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-bookworm AS backend-build
 
 ARG TARGETOS
 ARG TARGETARCH
