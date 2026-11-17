@@ -62,7 +62,7 @@ RUN set -e; \
 
 # goose runs in the image (migrations at startup), so it's built for the
 # target; pure Go. A cross-compiled `go install` lands in bin/<os>_<arch>.
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go install github.com/pressly/goose/v3/cmd/goose@v3.29.0 && \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go install github.com/pressly/goose/v3/cmd/goose@v3.30.1 && \
     if [ -f "/go/bin/${TARGETOS}_${TARGETARCH}/goose" ]; then mv "/go/bin/${TARGETOS}_${TARGETARCH}/goose" /go/bin/goose; fi
 # swag only runs here.
 RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6
