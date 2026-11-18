@@ -12,6 +12,8 @@ interface Props {
   typeName: string;
   disabled?: boolean;
   disabledReason?: string;
+  /** What the panel keeps; defaults to the search chart's wording. */
+  hint?: string;
 }
 
 const NEW_DASHBOARD = '__new__';
@@ -31,6 +33,7 @@ export const SaveToDashboardComponent = ({
   typeName,
   disabled,
   disabledReason,
+  hint,
 }: Props): React.JSX.Element => {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
@@ -145,8 +148,8 @@ export const SaveToDashboardComponent = ({
         </label>
       )}
       <span className="text-xs text-gray-500 dark:text-gray-400">
-        Saved as a {typeName} panel with this search, split and measure. It follows the
-        dashboard&apos;s time range.
+        {hint ??
+          `Saved as a ${typeName} panel with this search, split and measure. It follows the dashboard's time range.`}
       </span>
       <span className="flex justify-end gap-2">
         <Button size="small" onClick={() => setOpen(false)}>

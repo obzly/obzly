@@ -1,6 +1,7 @@
+import { Table } from 'antd';
 import type { JSX } from 'react';
 
-import type { Panel } from '../../../entity/dashboards';
+import type { Panel, PanelTable } from '../../../entity/dashboards';
 import { type StatusColors, useTheme } from '../../../shared/theme';
 import {
   ChangePill,
@@ -285,3 +286,37 @@ export const StatusStripView = ({
     </div>
   );
 };
+
+const formatCell = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+};
+
+/** A logs_sql table panel: the result's own columns and rows. */
+export const SqlTableView = ({ table }: { table: PanelTable }): JSX.Element => (
+  <div className="flex h-full flex-col gap-1 overflow-auto">
+    <Table<Record<string, unknown>>
+      size="small"
+      pagination={{ pageSize: 20, hideOnSinglePage: true, showSizeChanger: false }}
+      scroll={{ x: 'max-content' }}
+      rowKey="key"
+      dataSource={table.rows.map((row, rowIndex) => ({
+        key: rowIndex,
+        ...Object.fromEntries(row.map((value, column) => [String(column), value])),
+      }))}
+      columns={table.columns.map((name, column) => ({
+        title: name,
+        dataIndex: String(column),
+        key: `${column}`,
+        ellipsis: true,
+        render: (value: unknown) => formatCell(value),
+      }))}
+    />
+    {table.truncated && (
+      <span className="text-xs text-gray-500 dark:text-gray-400">
+        The result was truncated; add a LIMIT to the panel&apos;s SQL.
+      </span>
+    )}
+  </div>
+);

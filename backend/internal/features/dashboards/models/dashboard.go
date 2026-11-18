@@ -144,13 +144,16 @@ const (
 	PanelSourceLogs    PanelSource = "logs"
 	PanelSourceSpans   PanelSource = "spans"
 	PanelSourceMetrics PanelSource = "metrics"
+	// PanelSourceLogsSQL runs the panel's SQL (SQL mode's "logs" table) over
+	// the panel's window; its data is columns and rows, not buckets.
+	PanelSourceLogsSQL PanelSource = "logs_sql"
 )
 
 // IsValid also accepts "": panels stored before Source existed mean "logs"
 // (see EffectiveSource).
 func (s PanelSource) IsValid() bool {
 	switch s {
-	case PanelSourceLogs, PanelSourceSpans, PanelSourceMetrics, "":
+	case PanelSourceLogs, PanelSourceSpans, PanelSourceMetrics, PanelSourceLogsSQL, "":
 		return true
 	default:
 		return false
@@ -204,6 +207,10 @@ type Panel struct {
 	// Metrics-source only: a PromQL expression, run as a range query over
 	// the panel's window.
 	PromQuery string `json:"promQuery,omitempty"`
+
+	// Logs-SQL-source only: one SELECT over SQL mode's "logs" table.
+	// Dashboard variables are not substituted into it.
+	SQL string `json:"sql,omitempty"`
 
 	// GroupField is any log field for a logs panel, a spans_core.GroupField
 	// for a spans panel.

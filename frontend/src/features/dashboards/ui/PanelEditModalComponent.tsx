@@ -88,6 +88,7 @@ export const PanelEditModalComponent = ({
   const [metric, setMetric] = useState<SpanMetric>(panel?.metric ?? 'count');
 
   const [promQuery, setPromQuery] = useState(panel?.promQuery ?? '');
+  const [sql, setSql] = useState(panel?.sql ?? '');
 
   const [groupField, setGroupField] = useState<string | undefined>(panel?.groupField);
   const [bucketMs, setBucketMs] = useState<number>(panel?.bucketMs ?? 0);
@@ -132,7 +133,9 @@ export const PanelEditModalComponent = ({
 
   const isSpans = source === 'spans';
   const isMetrics = source === 'metrics';
-  const isTimeSeries = isTimeBucketedType(type);
+  const isSql = source === 'logs_sql';
+  // A SQL panel buckets time in its own SQL.
+  const isTimeSeries = isTimeBucketedType(type) && !isSql;
   const groupsIntoDiscreteValues = groupsIntoDiscreteValuesFor(type);
   const typeUnavailable = kindUnavailableReason(type, source, isSpans ? metric : undefined);
   const settings = settingsForType(type, {
@@ -152,7 +155,11 @@ export const PanelEditModalComponent = ({
       message.error('A PromQL query is required');
       return;
     }
-    if (!isSpans && !isMetrics && groupsIntoDiscreteValues && !groupField) {
+    if (isSql && !sql.trim()) {
+      message.error('A SQL query is required');
+      return;
+    }
+    if (!isSpans && !isMetrics && !isSql && groupsIntoDiscreteValues && !groupField) {
       message.error(
         type === 'pie' || type === 'table'
           ? 'Pie and table panels need a "group by" field to break down by'
@@ -185,6 +192,16 @@ export const PanelEditModalComponent = ({
 
     if (isMetrics) {
       onSave({ ...basePanel, promQuery: promQuery.trim() });
+      return;
+    }
+
+    if (isSql) {
+      onSave({
+        ...basePanel,
+        groupField: undefined,
+        limit: type === 'rankedList' ? limit : undefined,
+        sql: sql.trim(),
+      });
       return;
     }
 
@@ -371,7 +388,42 @@ export const PanelEditModalComponent = ({
           </div>
         )}
 
-        {isMetrics ? (
+        {isSql ? (
+          <>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                SQL query
+              </label>
+              <Input.TextArea
+                value={sql}
+                onChange={(e) => setSql(e.target.value)}
+                placeholder="SELECT lower(level) AS level, count(*) AS lines FROM logs GROUP BY 1"
+                rows={5}
+                className="!font-mono"
+                aria-label="SQL query"
+              />
+              <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+                One SELECT over the <code>logs</code> table, as in Logs › SQL, run over the
+                dashboard&apos;s time range. A line needs a time column and numbers; a ranked list
+                or donut a label and a number; a single number shows the first number of the first
+                row. Dashboard variables and filters are not applied to SQL.
+              </div>
+            </div>
+            {type === 'rankedList' && (
+              <div>
+                <label className={fieldLabel}>Max rows shown (optional)</label>
+                <InputNumber
+                  min={1}
+                  max={1000}
+                  value={limit}
+                  onChange={(value) => setLimit(value ?? undefined)}
+                  className="w-32"
+                  aria-label="Max rows shown"
+                />
+              </div>
+            )}
+          </>
+        ) : isMetrics ? (
           <>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">

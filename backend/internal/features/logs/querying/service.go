@@ -322,9 +322,7 @@ func (s *LogQueryService) ExecuteContext(
 	return logs_core.GetLogCoreRepository().ExecuteContext(ctx, projectID, request)
 }
 
-// maxSQLQueryLength caps the raw SQL text: a huge string burns server time
-// before segments.ValidateSingleStatementSelect even scans it.
-const maxSQLQueryLength = 10_000
+const maxSQLQueryLength = logs_core.MaxSQLQueryLength
 
 // ExecuteSQLQuery is SQL mode (see logs_querier.ExecuteSQLQuery for the
 // security model); it shares ExecuteQuery's limiter and time-range rules.

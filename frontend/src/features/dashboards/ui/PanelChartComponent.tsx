@@ -4,7 +4,10 @@ import type { ECharts } from 'echarts/core';
 import React, { useEffect, useRef, useState } from 'react';
 
 import { type Panel, dashboardApi, effectivePanelSource } from '../../../entity/dashboards';
-import type { AggregationBucket } from '../../../entity/dashboards/model/AggregationResponse';
+import type {
+  AggregationBucket,
+  PanelTable,
+} from '../../../entity/dashboards/model/AggregationResponse';
 import { useTheme } from '../../../shared/theme';
 import { Sparkline } from '../../../shared/ui/v2';
 import type { TimeRange } from '../../query';
@@ -22,10 +25,12 @@ import {
   valuesByGroup,
   valuesOnGrid,
 } from '../lib/panelKinds';
+import { sqlPanelData } from '../lib/sqlPanel';
 import {
   DonutView,
   GaugeView,
   RankedListView,
+  SqlTableView,
   StackedFooter,
   StatTrendView,
   StatusStripView,
@@ -72,6 +77,9 @@ export const PanelChartComponent = ({
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // A logs_sql panel's result, and why it can't be drawn as this kind.
+  const [table, setTable] = useState<PanelTable | null>(null);
+  const [sqlProblem, setSqlProblem] = useState<string | null>(null);
 
   const [previousValue, setPreviousValue] = useState<WindowValue>(undefined);
   // Only a span duration needs its own un-bucketed total; anything else is
@@ -100,6 +108,8 @@ export const PanelChartComponent = ({
     // partitions is read, newest first; anything else arrives at once.
     const totals = new Map<string, AggregationBucket>();
     setBuckets([]);
+    setTable(null);
+    setSqlProblem(null);
     dashboardApi
       .streamPanelQuery(
         projectId,
@@ -111,6 +121,13 @@ export const PanelChartComponent = ({
           if (!cancelled) setBuckets(mergeBuckets(totals, received));
         },
         abort.signal,
+        (received) => {
+          if (cancelled) return;
+          const data = sqlPanelData(panel.type, received);
+          setTable(received);
+          setSqlProblem(data.problem);
+          setBuckets(data.buckets);
+        },
       )
       .catch((e: unknown) => {
         if (!cancelled) setError((e as Error).message);
@@ -225,6 +242,18 @@ export const PanelChartComponent = ({
         <Spin size="small" />
       </div>
     );
+  }
+
+  if (sqlProblem) {
+    return (
+      <div className="flex h-full items-center justify-center px-2 text-center text-sm text-gray-500 dark:text-gray-400">
+        {sqlProblem}
+      </div>
+    );
+  }
+
+  if (table && panel.type === 'table') {
+    return <SqlTableView table={table} />;
   }
 
   const isMetrics = effectivePanelSource(panel) === 'metrics';

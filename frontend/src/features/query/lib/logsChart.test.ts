@@ -23,9 +23,6 @@ import {
   rankNumericFields,
   ratioText,
   seriesOnGrid,
-  sqlChartShape,
-  sqlSeries,
-  sqlTopRows,
   timeGrid,
   topRows,
   usesRollups,
@@ -205,49 +202,6 @@ describe('compare', () => {
     expect(ratioText(50, 100)).toBe('2× lower');
     expect(ratioText(100, 100)).toBe('about the same');
     expect(ratioText(null, 100)).toBeNull();
-  });
-});
-
-describe('SQL results', () => {
-  it('offers a time series for a time column and top values for a label', () => {
-    const columns = ['bucket', 'service_name', 'errors'];
-    const rows = [
-      ['2026-11-18 10:01:00', 'checkout', 3],
-      ['2026-11-18 10:00:00', 'checkout', 2],
-      ['2026-11-18 10:00:00', 'search', '1'],
-    ];
-    const shape = sqlChartShape(columns, rows);
-    expect(shape).toEqual({
-      kinds: ['series', 'top', 'donut'],
-      timeColumn: 0,
-      labelColumn: 1,
-      valueColumns: [2],
-    });
-    expect(sqlSeries(shape, columns, rows)[0]).toEqual({
-      key: 'checkout',
-      points: [
-        [Date.parse('2026-11-18 10:00:00'), 2],
-        [Date.parse('2026-11-18 10:01:00'), 3],
-      ],
-    });
-    const top = sqlChartShape(
-      ['service_name', 'errors'],
-      [
-        ['a', 5],
-        ['b', 9],
-      ],
-    );
-    expect(top.kinds).toEqual(['top', 'donut']);
-    expect(
-      sqlTopRows(top, [
-        ['a', 5],
-        ['b', 9],
-      ]),
-    ).toEqual([
-      { key: 'b', value: 9 },
-      { key: 'a', value: 5 },
-    ]);
-    expect(sqlChartShape(['message'], [['x']]).kinds).toEqual([]);
   });
 });
 

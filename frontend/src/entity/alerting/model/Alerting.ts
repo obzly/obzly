@@ -1,13 +1,16 @@
 import type { QueryNode } from '../../query';
 
 // ai_cost rules are kept by AI budgets only; cloud_cost rules by cost budgets and anomaly alerts.
-export type RuleSource = 'metrics' | 'logs' | 'log_patterns' | 'traces' | 'ai_cost' | 'cloud_cost';
+export type RuleSource =
+  'metrics' | 'logs' | 'log_patterns' | 'logs_sql' | 'traces' | 'ai_cost' | 'cloud_cost';
 export type Comparison = '>' | '>=' | '<' | '<=' | '==' | '!=';
 export type ChannelKind = 'webhook' | 'slack' | 'pagerduty' | 'email';
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
 
 export interface RuleQuery {
   promql?: string;
+  /** logs_sql: one SELECT over the logs table; each row is a series (label columns and a number). */
+  sql?: string;
   logs?: QueryNode;
   groupBy?: string;
   metric?: string;

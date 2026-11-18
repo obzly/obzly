@@ -1,6 +1,7 @@
 import type { Panel } from './Panel';
 
-export type PanelSource = 'logs' | 'spans' | 'metrics';
+// logs_sql: the panel's `sql` over SQL mode's "logs" table; its data is columns and rows.
+export type PanelSource = 'logs' | 'spans' | 'metrics' | 'logs_sql';
 
 // Older panels have no `source`; they mean 'logs'.
 export function effectivePanelSource(panel: Pick<Panel, 'source'>): PanelSource {

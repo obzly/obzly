@@ -26,6 +26,7 @@ import {
   queryApi,
 } from '../../../entity/query';
 import type { UserProfile } from '../../../entity/users/model/UserProfile';
+import type { SqlChartKind } from '../../../shared/lib/sqlResultShape';
 import { Card, PageHeader } from '../../../shared/ui/v2';
 import { withHiddenLevels } from '../lib/logLevels';
 import { useLogsViewSettings } from '../lib/logsViewSettings';
@@ -72,6 +73,7 @@ import {
 import { ToggleGroupComponent } from './ToggleGroupComponent';
 import { LogsChartViewComponent } from './charts/LogsChartViewComponent';
 import type { ChartFilter } from './charts/LogsHeatmapComponent';
+import { SQLResultActionsComponent } from './charts/SQLResultActionsComponent';
 import { SQLResultsChartComponent } from './charts/SQLResultsChartComponent';
 import { useAnomalyCount } from './useAnomalyCount';
 
@@ -172,6 +174,10 @@ export const QueryComponentComponent = ({
   const [queryResults, setQueryResults] = useState<LogItem[]>([]);
   const [totalResults, setTotalResults] = useState(0);
   const [sqlResponse, setSqlResponse] = useState<SQLQueryResponse | null>(null);
+  // The SQL that produced sqlResponse: Save to dashboard and Create alert use
+  // it, not whatever is in the editor now.
+  const [executedSql, setExecutedSql] = useState('');
+  const [sqlChartKind, setSqlChartKind] = useState<SqlChartKind | null>(null);
   const [hasExecuted, setHasExecuted] = useState(false);
   const [hasMoreResults, setHasMoreResults] = useState(false);
   const [frozenTimeRange, setFrozenTimeRange] = useState<TimeRange | null>(null);
@@ -579,14 +585,16 @@ export const QueryComponentComponent = ({
         return;
       }
 
+      const sql = sqlText;
       const response = await queryApi.executeSQLQuery(projectId, {
-        sql: sqlText,
+        sql,
         timeRange: {
           from: timeRangeToUse.from.toISOString(),
           to: timeRangeToUse.to.toISOString(),
         },
       });
       setSqlResponse(response);
+      setExecutedSql(sql);
       setHasExecuted(true);
       setHasSearched(true);
 
@@ -1687,10 +1695,28 @@ export const QueryComponentComponent = ({
           <Card
             title="Results"
             className="!p-4"
-            extra={sqlResponse && viewSwitchFor(sqlView, true)}
+            extra={
+              sqlResponse && (
+                <>
+                  {viewSwitchFor(sqlView, true)}
+                  <SQLResultActionsComponent
+                    projectId={projectId}
+                    sql={executedSql}
+                    response={sqlResponse}
+                    view={sqlView}
+                    pickedKind={sqlChartKind}
+                    onCreateAlert={onCreateAlert}
+                  />
+                </>
+              )
+            }
           >
             {sqlView === 'chart' && sqlResponse ? (
-              <SQLResultsChartComponent response={sqlResponse} />
+              <SQLResultsChartComponent
+                response={sqlResponse}
+                picked={sqlChartKind}
+                onPick={setSqlChartKind}
+              />
             ) : (
               <SQLResultsTableComponent response={sqlResponse} isExecuting={isExecuting} />
             )}

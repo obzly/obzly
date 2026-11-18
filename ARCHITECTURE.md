@@ -724,6 +724,16 @@ New subsystem, not tied to one signal:
   is currently selected (`computeAutoBucketMs`, snapped to a "nice" list of widths), the same idea as
   Grafana's `$__interval` — a fixed width baked in at Overview-generation time would look wrong once the
   viewer picks a different range.
+- **SQL panels** (source `logs_sql`, field `sql`): one SELECT over SQL mode's `logs` table, saved from
+  Logs › SQL results › Save to dashboard or written in the panel editor. Saving runs SQL mode's static
+  checks (`logs_core.ValidateSavedSQL`: single SELECT, keyword and function blocklists, 10,000 characters)
+  and allows only `line`, `rankedList`, `donut`, `table` and `stat`. `/query` and `/query/stream` run it
+  through SQL mode's executor over the dashboard's range (same sandbox, scan budget, timeouts and
+  10,000-row cap) and answer `table: {columns, rows, truncated}` instead of buckets; the stream sends its
+  headers first, so heartbeats cover materializing the range. The frontend draws it with the SQL results
+  card's shape inference (`shared/lib/sqlResultShape.ts`): a time column and numbers for a line, a label
+  and a number for a ranked list or donut, the first number of the first row for a stat. Dashboard
+  variables and filters are not substituted into SQL.
 
 ## Runtime packaging (Phase 2h)
 
@@ -1905,11 +1915,15 @@ design, project-scoped), `alert_states` (per rule and label fingerprint), `notif
   logs matching a query - usually errors - that is new against the baseline before the window, an
   hour to 7 days, or whose rate rose to at least the threshold times the baseline's; the value is
   that ratio, a very large number for a new pattern; `minCount` skips rare ones;
-  `ExecutePatternChanges` underneath) or `traces` (count, errors, avg/p50/p95/p99 duration
+  `ExecutePatternChanges` underneath), `logs_sql` (`query.sql`, one SELECT over SQL mode's `logs`
+  table for the window, validated on save like a SQL panel: each result row is a series, its value the
+  column named `value` or else the last numeric one, its labels the other columns as text; with a time
+  column only each label set's latest row counts; at most 100 series, and a result past the row cap is
+  an error) or `traces` (count, errors, avg/p50/p95/p99 duration
   of a service/operation's spans in a window, optionally per service/name/status/kind), compared to
   a threshold. `interval` (>= 15 s), `for`, `repeat` (re-notify while firing; 0 = once), labels and
   a summary. A preview endpoint (project owners and admins) runs the query once without changing
-  anything. Logs, log-pattern and trace rules run under the `QUERY_MAX_SCAN_GB` budget.
+  anything. Logs, log-pattern, logs SQL and trace rules run under the `QUERY_MAX_SCAN_GB` budget.
 - Evaluation: `ALERT_EVAL_SHARDS` loops in `worker`/`all`, each under leader lock
   `alert-eval-<n>-of-<shards>` (renewed while a pass runs; a pass that loses it is cancelled),
   ticking every 10 s and running the shard's due rules (`fnv(rule id) % shards`), 8 at once. Each

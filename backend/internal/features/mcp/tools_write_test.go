@@ -301,6 +301,10 @@ func Test_BuildPanel_ValidatesLikeADashboardSave(t *testing.T) {
 		"bad spans metric":       {Title: "x", Metric: "p42"},
 		"unknown source":         {Title: "x", Source: "events"},
 		"unknown unit":           {Title: "x", Unit: "furlongs"},
+		"sql on logs":            {Title: "x", Source: "logs", SQL: "SELECT 1"},
+		"sql with groupField":    {Title: "x", SQL: "SELECT 1", GroupField: "level"},
+		"sql gauge":              {Title: "x", Type: "gauge", SQL: "SELECT 1 AS value"},
+		"refused sql function":   {Title: "x", Type: "table", SQL: "SELECT * FROM read_csv('x')"},
 	}
 	for name, arg := range refused {
 		_, err := buildPanel(arg)
@@ -322,6 +326,12 @@ func Test_BuildPanel_ValidatesLikeADashboardSave(t *testing.T) {
 	spans, err := buildPanel(panelArg{Title: "p95", Type: "stat", Service: "api", Metric: "p95_duration_ms"})
 	require.NoError(t, err)
 	assert.Equal(t, "spans", string(spans.Source))
+
+	sql, err := buildPanel(panelArg{Title: "Levels", Type: "donut", SQL: " SELECT level, count(*) FROM logs GROUP BY 1 "})
+	require.NoError(t, err)
+	assert.Equal(t, "logs_sql", string(sql.Source))
+	assert.Equal(t, "SELECT level, count(*) FROM logs GROUP BY 1", sql.SQL)
+	assert.Equal(t, "logs SQL: SELECT level, count(*) FROM logs GROUP BY 1", describePanelQuery(sql))
 }
 
 func newFakeSite(t *testing.T) *fakeSite {

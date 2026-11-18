@@ -9,6 +9,7 @@ import type {
 } from '../../../entity/dashboards';
 import type { ChangeTone, StripState } from '../../../shared/ui/v2';
 import { formatByUnit } from '../ui/echartsOption';
+import { SQL_PANEL_TYPES } from './sqlPanel';
 
 // What each panel kind needs from its query, and the pure maths behind the v2
 // kinds (ranked list, donut, gauge, stacked bars, status strips, stat with trend).
@@ -42,6 +43,9 @@ export const kindUnavailableReason = (
   source: PanelSource,
   metric: SpanMetric | undefined,
 ): string | null => {
+  if (source === 'logs_sql' && !SQL_PANEL_TYPES.includes(type)) {
+    return 'a SQL result draws a line, ranked list, donut, table or single number';
+  }
   const isDuration = source === 'spans' && !ADDITIVE_SPAN_METRICS.includes(metric ?? 'count');
   if (isDuration && type === 'stackedBar') return "durations don't add up; use a line chart";
   if (isDuration && type === 'donut') return "durations aren't parts of a whole";

@@ -2,7 +2,11 @@ import { getApiBase } from '../../../constants';
 import RequestOptions from '../../../shared/api/RequestOptions';
 import { apiHelper } from '../../../shared/api/apiHelper';
 import { StreamUnavailableError, streamNdjson } from '../../../shared/api/ndjsonStream';
-import type { AggregationBucket, AggregationResponse } from '../model/AggregationResponse';
+import type {
+  AggregationBucket,
+  AggregationResponse,
+  PanelTable,
+} from '../model/AggregationResponse';
 import type { Dashboard } from '../model/Dashboard';
 import type {
   CreateDashboardRequest,
@@ -19,6 +23,7 @@ import type { Folder } from '../model/Folder';
 interface PanelFrame {
   type: 'buckets' | 'heartbeat' | 'done' | 'error';
   buckets?: AggregationBucket[];
+  table?: PanelTable;
   error?: string;
 }
 
@@ -96,12 +101,14 @@ export const dashboardApi = {
   },
 
   // Buckets arrive per partition group, newest first; onBuckets must add them
-  // up since the same bucket can come again. Falls back to executePanelQuery.
+  // up since the same bucket can come again. A logs_sql panel's result comes
+  // once, to onTable. Falls back to executePanelQuery.
   async streamPanelQuery(
     projectId: string,
     request: PanelQueryRequest,
     onBuckets: (buckets: AggregationBucket[]) => void,
     signal: AbortSignal,
+    onTable?: (table: PanelTable) => void,
   ): Promise<void> {
     try {
       await streamNdjson<PanelFrame, true>(
@@ -110,6 +117,7 @@ export const dashboardApi = {
         signal,
         (frame) => {
           if (frame.type === 'buckets' && frame.buckets?.length) onBuckets(frame.buckets);
+          if (frame.type === 'buckets' && frame.table) onTable?.(frame.table);
           return frame.type === 'done' ? true : undefined;
         },
       );
@@ -117,6 +125,7 @@ export const dashboardApi = {
       if (!(error instanceof StreamUnavailableError)) throw error;
       const response = await dashboardApi.executePanelQuery(projectId, request, signal);
       onBuckets(response.buckets);
+      if (response.table) onTable?.(response.table);
     }
   },
 

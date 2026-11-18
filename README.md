@@ -75,7 +75,8 @@ One place for all three signals, correlated by the same project/API key:
 - **Metrics**: OTLP + Prometheus remote-write ingestion, queryable via a PromQL-compatible API -
   point an existing Grafana Prometheus datasource at it. 5-minute and 1-hour rollups keep long
   ranges fast and can outlive raw samples
-- **Dashboards**: build your own, or import an existing Grafana or OpenObserve dashboard JSON
+- **Dashboards**: build your own (a log SQL result can be saved as a panel), or import an existing
+  Grafana or OpenObserve dashboard JSON
 - **Incidents**: error logs, failed spans and their shared traces grouped into incident sessions
 - **AI Observability**: Claude Code usage per project - cost, tokens, cache use and sessions;
   LLM apps instrumented with OpenTelemetry `gen_ai.*` (calls, tokens, latency, errors, estimated
@@ -83,8 +84,8 @@ One place for all three signals, correlated by the same project/API key:
 
 ### 🚨 **Alerting**
 
-Rules over metrics (PromQL), logs (counts of a search, optionally per field) or traces (count,
-errors, latency percentiles of a service or operation), with `for` durations, repeat intervals,
+Rules over metrics (PromQL), logs (counts of a search, optionally per field, or your own SQL with
+one series per row) or traces (count, errors, latency percentiles of a service or operation), with `for` durations, repeat intervals,
 labels and a live preview. Notifications go to webhooks, Slack, PagerDuty or email, through an
 outbox with retries and silences. Outgoing requests only reach public addresses unless you allow
 more. Rule to notification takes about 15 seconds. Channels and the email relay are defined once

@@ -259,3 +259,35 @@ func Test_Scan_FieldsTheGeneratedEnvoyAndHAProxyConfigsWrite_AreReadAsTheyAre(t 
 		assert.NotContains(t, key.src, "haproxy")
 	}
 }
+
+func Test_Scan_WhenMostLinesAreNotJSON_StillCountsTheAccessLogs(t *testing.T) {
+	projectID := uuid.New()
+	hour := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	var items []*logs_core.LogItem
+	for i := range 6000 {
+		at := hour.Add(time.Duration(i) * 500 * time.Millisecond)
+		switch i % 6 {
+		case 0:
+			items = append(items, accessLog(at, "/", map[string]any{"service_name": "web"}))
+		case 1:
+			items = append(items, accessLog(at, "    at V2010.throwException (/app/node_modules/twilio/lib/x.js:1:2)",
+				map[string]any{"service_name": "web"}))
+		case 2:
+			items = append(items, accessLog(at, `{"level":"info","msg":"ok"}`, map[string]any{"service_name": "web"}))
+		case 3:
+			items = append(items, accessLog(at, `{broken json`, map[string]any{"service_name": "web"}))
+		case 4:
+			items = append(items, accessLog(at, `[1,2]`, map[string]any{"service_name": "web"}))
+		default:
+			items = append(items, accessLog(at, "", map[string]any{"service_name": "nginx", "host_name": "web-1",
+				"remote_addr": "198.51.100.23", "method": "GET", "path": "/catalog", "status": "200"}))
+		}
+	}
+	storeLogs(t, projectID, items...)
+
+	result := scanHour(t, projectID, hour, scanOptions{ipMode: ipModeTruncate,
+		staticExtensions: defaultStaticExtensions})
+	result.finish(nil, true)
+
+	assert.Equal(t, int64(1000), totalsFor(t, result, "service\n\nnginx\nweb-1").requests)
+}

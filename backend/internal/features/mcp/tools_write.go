@@ -144,7 +144,7 @@ type expireSilenceArgs struct {
 type panelArg struct {
 	Title         string   `json:"title"                   jsonschema:"Panel title"`
 	Type          string   `json:"type,omitempty"          jsonschema:"line (default), bar, pie, stat, table, statTrend, rankedList, donut, gauge, stackedBar or statusStrip"`
-	Source        string   `json:"source,omitempty"        jsonschema:"logs, spans or metrics. Default: metrics when promql is set, spans when service or metric is set, else logs."`
+	Source        string   `json:"source,omitempty"        jsonschema:"logs, spans, metrics or logs_sql. Default: logs_sql when sql is set, metrics when promql is set, spans when service or metric is set, else logs."`
 	Query         string   `json:"query,omitempty"         jsonschema:"Logs: search_logs syntax filter (empty = all logs)"`
 	GroupField    string   `json:"groupField,omitempty"    jsonschema:"Logs: any field; spans: service_name, name, status_code or kind"`
 	Service       string   `json:"service,omitempty"       jsonschema:"Spans: only this service"`
@@ -152,6 +152,7 @@ type panelArg struct {
 	Metric        string   `json:"metric,omitempty"        jsonschema:"Spans: count (default), error_count, avg_duration_ms, p50_duration_ms, p95_duration_ms or p99_duration_ms"`
 	RootSpansOnly bool     `json:"rootSpansOnly,omitempty" jsonschema:"Spans: only root spans"`
 	PromQL        string   `json:"promql,omitempty"        jsonschema:"Metrics: PromQL expression"`
+	SQL           string   `json:"sql,omitempty"           jsonschema:"Logs SQL: one SELECT over the logs table, as in query_logs_sql, run over the dashboard's time range. Type line (a time column and numbers), rankedList or donut (a label and a number), table or stat (first number of the first row)."`
 	Unit          string   `json:"unit,omitempty"          jsonschema:"Display unit: bytes or percent (0-1 fraction); empty = plain numbers"`
 	Limit         int      `json:"limit,omitempty"         jsonschema:"Max groups or rows shown"`
 	Width         int      `json:"width,omitempty"         jsonschema:"Width in grid columns, 1-12 (default 6)"`
@@ -844,6 +845,8 @@ func buildPanel(arg panelArg) (dashboards_models.Panel, error) {
 	source := dashboards_models.PanelSource(strings.ToLower(strings.TrimSpace(arg.Source)))
 	if source == "" {
 		switch {
+		case strings.TrimSpace(arg.SQL) != "":
+			source = dashboards_models.PanelSourceLogsSQL
 		case strings.TrimSpace(arg.PromQL) != "":
 			source = dashboards_models.PanelSourceMetrics
 		case arg.Service != "" || arg.Operation != "" || arg.Metric != "" || arg.RootSpansOnly:
@@ -871,7 +874,16 @@ func buildPanel(arg panelArg) (dashboards_models.Panel, error) {
 	}
 
 	spansFields := arg.Service != "" || arg.Operation != "" || arg.Metric != "" || arg.RootSpansOnly
+	if arg.SQL != "" && source != dashboards_models.PanelSourceLogsSQL {
+		return dashboards_models.Panel{}, errors.New("sql is for a logs_sql panel")
+	}
 	switch source {
+	case dashboards_models.PanelSourceLogsSQL:
+		if arg.Query != "" || spansFields || arg.PromQL != "" || arg.GroupField != "" {
+			return dashboards_models.Panel{}, errors.New("a logs_sql panel takes sql only (group with " +
+				"GROUP BY in the statement)")
+		}
+		panel.SQL = arg.SQL
 	case dashboards_models.PanelSourceLogs:
 		if spansFields || arg.PromQL != "" {
 			return dashboards_models.Panel{}, errors.New("a logs panel takes query and groupField, not service, " +
@@ -899,7 +911,8 @@ func buildPanel(arg panelArg) (dashboards_models.Panel, error) {
 			return dashboards_models.Panel{}, errors.New("a metrics panel needs promql")
 		}
 	default:
-		return dashboards_models.Panel{}, fmt.Errorf("invalid panel source %q: use logs, spans or metrics", source)
+		return dashboards_models.Panel{}, fmt.Errorf("invalid panel source %q: use logs, spans, metrics or logs_sql",
+			source)
 	}
 
 	validated, err := dashboards_services.ValidatePanel(panel)
@@ -915,6 +928,9 @@ func describePanelQuery(panel dashboards_models.Panel) string {
 	switch panel.EffectiveSource() {
 	case dashboards_models.PanelSourceMetrics:
 		return "metrics: " + panel.PromQuery
+	case dashboards_models.PanelSourceLogsSQL:
+		sql, _ := truncateUTF8(panel.SQL, 200)
+		return "logs SQL: " + sql
 	case dashboards_models.PanelSourceSpans:
 		parts := []string{"spans"}
 		for _, part := range []string{panel.ServiceName, panel.OperationName, panel.Metric} {

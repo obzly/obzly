@@ -68,6 +68,9 @@ export const SyntheticsComponent = ({ contentHeight, canManage }: Props) => {
   // nothing changed, so monitor queries don't restart.
   const windowsKey = useRef<string>(undefined);
   const occurrencesKeyRef = useRef<string>(undefined);
+  // Monitor queries wait for the first maintenance load: starting them on
+  // [] and again on the loaded list cancelled and re-sent every query.
+  const [maintenanceLoaded, setMaintenanceLoaded] = useState(false);
 
   // A new checks array restarts every monitor query, so keep the old one
   // when nothing changed. Resolves to whether the list changed.
@@ -128,6 +131,8 @@ export const SyntheticsComponent = ({ contentHeight, canManage }: Props) => {
       }
     } catch (reason) {
       message.error(`Couldn't load maintenance windows: ${(reason as Error).message}`);
+    } finally {
+      setMaintenanceLoaded(true);
     }
   }, [message]);
 
@@ -157,7 +162,13 @@ export const SyntheticsComponent = ({ contentHeight, canManage }: Props) => {
   }, [polling, tick]);
 
   const allChecks = useMemo(() => checks ?? [], [checks]);
-  const result = useMonitorData(allChecks, range, refresh, occurrences, polling);
+  const result = useMonitorData(
+    allChecks,
+    range,
+    refresh,
+    occurrences,
+    polling && maintenanceLoaded,
+  );
   const locations = useMemo(() => {
     const names = new Set<string>(probes.map((probe) => probe.location));
     for (const check of allChecks) check.locations.forEach((location) => names.add(location));

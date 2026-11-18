@@ -955,6 +955,8 @@ definitions:
         type: boolean
       serviceName:
         type: string
+      sql:
+        type: string
     type: object
   alerting.RuleRequest:
     properties:
@@ -2231,6 +2233,8 @@ definitions:
         type: string
       status:
         type: integer
+      table:
+        $ref: '#/definitions/dashboards_dto.PanelTableDTO'
       type:
         type: string
     type: object
@@ -2247,6 +2251,22 @@ definitions:
         items:
           $ref: '#/definitions/dashboards_dto.PanelBucketDTO'
         type: array
+      table:
+        $ref: '#/definitions/dashboards_dto.PanelTableDTO'
+    type: object
+  dashboards_dto.PanelTableDTO:
+    properties:
+      columns:
+        items:
+          type: string
+        type: array
+      rows:
+        items:
+          items: {}
+          type: array
+        type: array
+      truncated:
+        type: boolean
     type: object
   dashboards_dto.RenameFolderRequestDTO:
     properties:
@@ -2411,6 +2431,11 @@ definitions:
         type: string
       source:
         $ref: '#/definitions/dashboards_models.PanelSource'
+      sql:
+        description: |-
+          Logs-SQL-source only: one SELECT over SQL mode's "logs" table.
+          Dashboard variables are not substituted into it.
+        type: string
       thresholds:
         $ref: '#/definitions/dashboards_models.PanelThresholds'
       title:
@@ -2437,11 +2462,13 @@ definitions:
     - logs
     - spans
     - metrics
+    - logs_sql
     type: string
     x-enum-varnames:
     - PanelSourceLogs
     - PanelSourceSpans
     - PanelSourceMetrics
+    - PanelSourceLogsSQL
   dashboards_models.PanelThresholds:
     properties:
       critical:
@@ -16706,7 +16733,8 @@ paths:
       consumes:
       - application/json
       description: Executes a panel definition (saved or still being edited) against
-        the project's logs and returns chart-ready buckets
+        the project's logs, traces or metrics and returns chart-ready buckets; a logs_sql
+        panel returns its SQL result as table (columns and rows) instead
       parameters:
       - description: Project ID
         in: path
@@ -16762,9 +16790,10 @@ paths:
       description: Same request as /query; the answer is newline-delimited JSON frames.
         A time-bucketed logs panel is read partition group by partition group, newest
         first, and each "buckets" frame's buckets add to the earlier ones' (the same
-        bucket and group can come again); any other panel is one "buckets" frame.
-        Then "done", or "error" with status. "heartbeat" frames keep the connection
-        alive. A refused query (403, 400) is a plain JSON error before any frame.
+        bucket and group can come again); any other panel is one "buckets" frame (a
+        logs_sql panel's carries table, its columns and rows). Then "done", or "error"
+        with status. "heartbeat" frames keep the connection alive. A refused query
+        (403, 400) is a plain JSON error before any frame.
       parameters:
       - description: Project ID
         in: path

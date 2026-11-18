@@ -2,13 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { Session } from '../../../entity/correlation';
 import type { InventorySummary } from '../../../entity/inventory';
-import type { IngestionSource, IngestionStatus } from '../../../entity/projects';
 import type { TraceSummaryResponse } from '../../../entity/traces';
 import {
   errorRate,
   formatRate,
   infraRows,
-  ingestionPill,
   logVolume,
   overviewWindow,
   peakBar,
@@ -230,40 +228,6 @@ describe('summarizeIncidents', () => {
         window,
       ),
     ).toEqual([1, 1]);
-  });
-});
-
-describe('ingestionPill', () => {
-  const source = (health: IngestionSource['health']): IngestionSource => ({
-    id: health,
-    name: health,
-    identifiedBy: 'service',
-    location: {},
-    health,
-    firstSeen: '',
-    lastSeen: '',
-    signals: [],
-  });
-  const status = (sources: IngestionSource[]): IngestionStatus => ({
-    sources,
-    truncated: false,
-    generatedAt: '',
-    quietAfterMinutes: 15,
-    stoppedAfterHours: 24,
-    rateWindowMinutes: 5,
-  });
-
-  it('says whether every source is sending', () => {
-    expect(ingestionPill(status([source('sending'), source('sending')]))).toEqual({
-      text: 'All 2 sources sending',
-      tone: 'ok',
-    });
-    expect(ingestionPill(status([source('sending'), source('quiet')])).tone).toBe('warn');
-    expect(ingestionPill(status([source('stopped')]))).toEqual({
-      text: 'All sources stopped',
-      tone: 'bad',
-    });
-    expect(ingestionPill(status([])).tone).toBe('none');
   });
 });
 

@@ -12,6 +12,7 @@ import (
 
 	"obzly/internal/authz"
 	"obzly/internal/features/audit_logs"
+	logs_core "obzly/internal/features/logs/core"
 	metrics_promql "obzly/internal/features/metrics/promql"
 	spans_core "obzly/internal/features/spans/core"
 	users_models "obzly/internal/features/users/models"
@@ -409,6 +410,12 @@ func (s *Service) applyRule(rule *AlertRule, request RuleRequest) error {
 		request.Query = RuleQuery{PromQL: request.Query.PromQL}
 	case SourceLogs:
 		request.Query = RuleQuery{Logs: request.Query.Logs, GroupBy: strings.TrimSpace(request.Query.GroupBy)}
+	case SourceLogsSQL:
+		sql, err := logs_core.ValidateSavedSQL(request.Query.SQL)
+		if err != nil {
+			return err
+		}
+		request.Query = RuleQuery{SQL: sql}
 	case SourceLogPatterns:
 		baseline := request.Query.BaselineSeconds
 		if baseline == 0 {
@@ -433,7 +440,7 @@ func (s *Service) applyRule(rule *AlertRule, request RuleRequest) error {
 		}
 		request.Query.PromQL, request.Query.Logs = "", nil
 	default:
-		return errors.New("source must be metrics, logs, log_patterns or traces")
+		return errors.New("source must be metrics, logs, log_patterns, logs_sql or traces")
 	}
 	if len(request.ChannelIDs) > 0 && rule.ProjectID != uuid.Nil {
 		count, err := s.repo.countChannels(rule.ProjectID, request.ChannelIDs)

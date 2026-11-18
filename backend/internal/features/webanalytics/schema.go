@@ -284,10 +284,13 @@ func tableSQL(opts scanOptions) (string, []any) {
 	fieldList := sqlStringList(layout.fieldPaths)
 	messageList := sqlStringList(layout.messagePaths)
 
+	// DuckDB may evaluate a CASE branch on rows the condition excludes (seen
+	// over thousands of non-JSON lines), so the JSON argument itself is
+	// guarded too: json_extract_string fails on anything that isn't JSON.
+	jsonMessage := "CASE WHEN starts_with(message, '{') AND json_valid(message) THEN message END"
 	level1 := "SELECT CAST(timestamp AS TIMESTAMP) AS ts, message, " +
-		"json_extract_string(fields, " + fieldList + ") AS fv, " +
-		"CASE WHEN starts_with(message, '{') AND json_valid(message) THEN json_extract_string(message, " +
-		messageList + ") END AS mv FROM raw"
+		"json_extract_string(CASE WHEN json_valid(fields) THEN fields END, " + fieldList + ") AS fv, " +
+		"json_extract_string(" + jsonMessage + ", " + messageList + ") AS mv FROM raw"
 
 	statusKnown := []string{}
 	for _, position := range layout.fieldPositions[fieldStatus] {

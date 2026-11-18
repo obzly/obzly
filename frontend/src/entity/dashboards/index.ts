@@ -1,6 +1,10 @@
 export { dashboardApi } from './api/dashboardApi';
 
-export type { AggregationBucket, AggregationResponse } from './model/AggregationResponse';
+export type {
+  AggregationBucket,
+  AggregationResponse,
+  PanelTable,
+} from './model/AggregationResponse';
 export type { Dashboard } from './model/Dashboard';
 export type {
   CreateDashboardRequest,

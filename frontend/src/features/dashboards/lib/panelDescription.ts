@@ -25,6 +25,7 @@ export const SOURCE_OPTIONS: { value: PanelSource; label: string }[] = [
   { value: 'logs', label: 'Logs' },
   { value: 'spans', label: 'Traces' },
   { value: 'metrics', label: 'Metrics' },
+  { value: 'logs_sql', label: 'Logs SQL' },
 ];
 
 export const SPAN_METRIC_OPTIONS: { value: SpanMetric; label: string }[] = [
@@ -61,6 +62,8 @@ export const describePanel = (panel: Panel): string => {
     }
   } else if (source === 'metrics') {
     parts.push('PromQL');
+  } else if (source === 'logs_sql') {
+    parts.push('SQL');
   } else if (panel.groupField) {
     parts.push(`grouped by ${panel.groupField}`);
   }

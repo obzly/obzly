@@ -189,6 +189,8 @@ func (q *LogQuerier) openLogsSandbox(
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sandboxed duckdb handle: %w", err)
 	}
+	// TEMP tables and SET are per connection: one keeps every step on it.
+	sandboxDB.SetMaxOpenConns(1)
 	// Before prepareLogsTable turns off external access (temp_directory
 	// can't be set after that). Each sandbox spills to its own directory.
 	spillDir, err := segments.ConfigureMemory(sandboxDB, q.memoryLimit, filepath.Join(q.queryDir, "spill"))
@@ -243,12 +245,11 @@ func (q *LogQuerier) prepareLogsTable(
 			rawArgs = append(rawArgs, shape.messagePrefix)
 		}
 	}
-	createTableSQL := "CREATE TEMP TABLE logs AS " + rawSQL
-	if shape.table != "" {
-		createTableSQL = "CREATE TEMP TABLE logs AS WITH raw AS (" + rawSQL + ") " + shape.table
-		rawArgs = append(rawArgs, shape.tableArgs...)
-	}
-	if _, err := sandboxDB.ExecContext(ctx, createTableSQL, rawArgs...); err != nil {
+	if shape.table == "" {
+		if _, err := sandboxDB.ExecContext(ctx, "CREATE TEMP TABLE logs AS "+rawSQL, rawArgs...); err != nil {
+			return fmt.Errorf("failed to prepare logs table: %w", err)
+		}
+	} else if err := createShapedTable(ctx, sandboxDB, rawSQL, rawArgs, shape); err != nil {
 		return fmt.Errorf("failed to prepare logs table: %w", err)
 	}
 
@@ -259,6 +260,31 @@ func (q *LogQuerier) prepareLogsTable(
 		}
 	}
 
+	return nil
+}
+
+// createShapedTable materializes the raw rows first (filters pushed into the
+// Parquet scan), then shape.table over them with filter pushdown off. In one
+// statement DuckDB pushed the shape's final WHERE down through its
+// projections, inlining every column it reads: Web analytics' filter became
+// 432 copies of an 87-path json_extract_string per row, past 4 GB for one
+// thread where the two steps fit in 256 MB.
+func createShapedTable(ctx context.Context, sandboxDB *sql.DB, rawSQL string, rawArgs []any, shape tableShape) error {
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{"CREATE TEMP TABLE raw AS " + rawSQL, rawArgs},
+		{"SET disabled_optimizers = 'filter_pushdown'", nil},
+		{"CREATE TEMP TABLE logs AS " + shape.table, shape.tableArgs},
+		{"RESET disabled_optimizers", nil},
+		{"DROP TABLE raw", nil},
+	}
+	for _, statement := range statements {
+		if _, err := sandboxDB.ExecContext(ctx, statement.sql, statement.args...); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
