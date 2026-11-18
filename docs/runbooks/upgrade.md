@@ -386,6 +386,17 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
   - **Verify:** worker working set stays under its limit, and
     `sum(increase(obzly_leader_task_runs_total{task="inventory-build",result="ok"}[1h]))` is about
     12 across all workers.
+- **v1.2.1** (fixes, SQL panels and alerts, ingestion status tile - see
+  [the release notes](../releases/v1.2.1.md)). Upgrade the Sites, the control plane, then the
+  probes.
+  - **Migration:** one, additive: `alert_rules` accepts the `logs_sql` source. Before rolling back
+    to v1.2.0, delete Logs SQL alert rules and SQL dashboard panels (v1.2.0 doesn't know them).
+  - **Worker memory:** no new settings. Web analytics now stages an hour's raw rows in its sandbox
+    (spilling to the query spill directory past the cap) before shaping them, and the inventory
+    reads series times and labels in two passes. Workers at 4 GiB or less can still run out on
+    very large hours or series files.
+  - **Verify:** no "inventory build failed" or "web analytics rollups failed" lines in the worker
+    logs, and the inventory-build query above is about 12 again.
 
 ## Order
 

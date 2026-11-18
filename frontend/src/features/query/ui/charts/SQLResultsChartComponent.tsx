@@ -1,14 +1,23 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 
 import type { SQLQueryResponse } from '../../../../entity/query';
+import {
+  type SqlChartKind,
+  resolveSqlChartKind,
+  sqlChartShape,
+  sqlSeries,
+  sqlTopRows,
+} from '../../../../shared/lib/sqlResultShape';
 import { useTheme } from '../../../../shared/theme';
 import { Donut, RankedList } from '../../../../shared/ui/v2';
-import { type SqlChartKind, sqlChartShape, sqlSeries, sqlTopRows } from '../../lib/logsChart';
 import { ToggleGroupComponent } from '../ToggleGroupComponent';
 import { LogsLineChartComponent } from './LogsLineChartComponent';
 
 interface Props {
   response: SQLQueryResponse;
+  /** The kind the user picked (null: the first that fits); held by the page so Save to dashboard saves it. */
+  picked: SqlChartKind | null;
+  onPick: (kind: SqlChartKind) => void;
 }
 
 const KIND_LABELS: Record<SqlChartKind, string> = {
@@ -22,14 +31,17 @@ const MAX_ROWS = 20;
 const formatNumber = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 /** A SQL result drawn as the chart its shape fits (Lines / Chart on SQL results). */
-export const SQLResultsChartComponent = ({ response }: Props): React.JSX.Element => {
+export const SQLResultsChartComponent = ({
+  response,
+  picked,
+  onPick,
+}: Props): React.JSX.Element => {
   const { chartColors } = useTheme();
   const shape = useMemo(
     () => sqlChartShape(response.columns, response.rows),
     [response.columns, response.rows],
   );
-  const [picked, setPicked] = useState<SqlChartKind | null>(null);
-  const kind = picked && shape.kinds.includes(picked) ? picked : shape.kinds[0];
+  const kind = resolveSqlChartKind(shape, picked);
   const color = (i: number) => chartColors[i % chartColors.length];
 
   if (!kind) {
@@ -56,7 +68,7 @@ export const SQLResultsChartComponent = ({ response }: Props): React.JSX.Element
             label: KIND_LABELS[k],
             pressed: kind === k,
           }))}
-          onToggle={setPicked}
+          onToggle={onPick}
         />
       </div>
       {kind === 'series' && (

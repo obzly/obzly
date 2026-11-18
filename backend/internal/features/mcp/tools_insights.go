@@ -138,7 +138,8 @@ func (t *toolSet) registerInsights(server *mcp.Server, add func(name, descriptio
 		wrap("log_health_map", untrusted(t.logHealthMap)))
 	mcp.AddTool(server, add("query_dashboard_panel",
 		"Run one saved dashboard panel (logs, spans or metrics) over a window and return its data points "+
-			"(at most 500). Without panelId it lists the dashboard's panels. One panel per call; window default "+
+			"(at most 500); a logs_sql panel returns columns and rows (at most 200). Without panelId it lists "+
+			"the dashboard's panels. One panel per call; window default "+
 			"1h, at most 31 days."+untrustedNote),
 		wrap("query_dashboard_panel", untrusted(t.queryDashboardPanel)))
 }
@@ -422,17 +423,28 @@ func (t *toolSet) queryDashboardPanel(
 
 	var response struct {
 		Buckets []map[string]any `json:"buckets"`
+		// Table: a logs_sql panel's result.
+		Table *struct {
+			Columns []string `json:"columns"`
+			Rows    [][]any  `json:"rows"`
+		} `json:"table"`
 	}
 	if err := t.exec.siteCall(ctx, user, args.Site, http.MethodPost, "/projects/dashboards/"+projectID+"/query",
 		nil, map[string]any{"panel": panel, "timeRange": window}, &response); err != nil {
 		return nil, err
 	}
-	buckets := response.Buckets[:min(len(response.Buckets), maxPanelBuckets)]
-	return listResult("buckets", buckets, len(response.Buckets), maxPanelBuckets, map[string]any{
+	extra := map[string]any{
 		"window": windowSummary(window), "dashboard": dashboard.Title,
 		"panel": map[string]any{"id": panel["id"], "title": panel["title"], "type": panel["type"],
 			"source": orDefault(asString(panel["source"]), "logs"), "unit": panel["unit"]},
-	}), nil
+	}
+	if response.Table != nil {
+		extra["columns"] = response.Table.Columns
+		rows := response.Table.Rows[:min(len(response.Table.Rows), maxRows)]
+		return listResult("rows", rows, len(response.Table.Rows), maxRows, extra), nil
+	}
+	buckets := response.Buckets[:min(len(response.Buckets), maxPanelBuckets)]
+	return listResult("buckets", buckets, len(response.Buckets), maxPanelBuckets, extra), nil
 }
 
 // variableToken is a dashboard variable reference, ${key}, substituted like the frontend does

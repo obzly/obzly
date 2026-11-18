@@ -313,6 +313,20 @@ func (e *Evaluator) query(ctx context.Context, rule *AlertRule, now time.Time) (
 			samples = []sample{{labels: Labels{}, value: 0}}
 		}
 		return samples, nil
+	case SourceLogsSQL:
+		response, err := logs_core.GetLogCoreRepository().
+			ExecuteSQLQueryContext(ctx, rule.ProjectID, &logs_core.ExecuteSQLQueryRequestDTO{
+				SQL: rule.Query.SQL, TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &now},
+				ScanBudget: config.GetEnv().QueryMaxScanBytes,
+			})
+		if err != nil {
+			return nil, err
+		}
+		if response.Truncated {
+			return nil, fmt.Errorf("the query returns more than %d rows; aggregate it to one row per series",
+				response.RowCount)
+		}
+		return sqlSamples(response.Columns, response.Rows)
 	case SourceLogPatterns:
 		baselineFrom := from.Add(-time.Duration(rule.Query.BaselineSeconds) * time.Second)
 		baselineTo := from.Add(-time.Nanosecond)

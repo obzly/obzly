@@ -45,6 +45,10 @@ export interface Panel {
   // metrics-source only: PromQL, run as a range query over the panel's window.
   promQuery?: string;
 
+  // logs_sql-source only: one SELECT over SQL mode's "logs" table, run over the
+  // panel's window. Dashboard variables are not substituted into it.
+  sql?: string;
+
   // Shared by both sources.
   groupField?: string;
   bucketMs?: number;

@@ -8790,7 +8790,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Executes a panel definition (saved or still being edited) against the project's logs and returns chart-ready buckets",
+                "description": "Executes a panel definition (saved or still being edited) against the project's logs, traces or metrics and returns chart-ready buckets; a logs_sql panel returns its SQL result as table (columns and rows) instead",
                 "consumes": [
                     "application/json"
                 ],
@@ -8872,7 +8872,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Same request as /query; the answer is newline-delimited JSON frames. A time-bucketed logs panel is read partition group by partition group, newest first, and each \"buckets\" frame's buckets add to the earlier ones' (the same bucket and group can come again); any other panel is one \"buckets\" frame. Then \"done\", or \"error\" with status. \"heartbeat\" frames keep the connection alive. A refused query (403, 400) is a plain JSON error before any frame.",
+                "description": "Same request as /query; the answer is newline-delimited JSON frames. A time-bucketed logs panel is read partition group by partition group, newest first, and each \"buckets\" frame's buckets add to the earlier ones' (the same bucket and group can come again); any other panel is one \"buckets\" frame (a logs_sql panel's carries table, its columns and rows). Then \"done\", or \"error\" with status. \"heartbeat\" frames keep the connection alive. A refused query (403, 400) is a plain JSON error before any frame.",
                 "consumes": [
                     "application/json"
                 ],
@@ -21508,6 +21508,9 @@ const docTemplate = `{
                 },
                 "serviceName": {
                     "type": "string"
+                },
+                "sql": {
+                    "type": "string"
                 }
             }
         },
@@ -23404,6 +23407,9 @@ const docTemplate = `{
                 "status": {
                     "type": "integer"
                 },
+                "table": {
+                    "$ref": "#/definitions/dashboards_dto.PanelTableDTO"
+                },
                 "type": {
                     "type": "string"
                 }
@@ -23428,6 +23434,30 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/dashboards_dto.PanelBucketDTO"
                     }
+                },
+                "table": {
+                    "$ref": "#/definitions/dashboards_dto.PanelTableDTO"
+                }
+            }
+        },
+        "dashboards_dto.PanelTableDTO": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {}
+                    }
+                },
+                "truncated": {
+                    "type": "boolean"
                 }
             }
         },
@@ -23643,6 +23673,10 @@ const docTemplate = `{
                 "source": {
                     "$ref": "#/definitions/dashboards_models.PanelSource"
                 },
+                "sql": {
+                    "description": "Logs-SQL-source only: one SELECT over SQL mode's \"logs\" table.\nDashboard variables are not substituted into it.",
+                    "type": "string"
+                },
                 "thresholds": {
                     "$ref": "#/definitions/dashboards_models.PanelThresholds"
                 },
@@ -23678,12 +23712,14 @@ const docTemplate = `{
             "enum": [
                 "logs",
                 "spans",
-                "metrics"
+                "metrics",
+                "logs_sql"
             ],
             "x-enum-varnames": [
                 "PanelSourceLogs",
                 "PanelSourceSpans",
-                "PanelSourceMetrics"
+                "PanelSourceMetrics",
+                "PanelSourceLogsSQL"
             ]
         },
         "dashboards_models.PanelThresholds": {

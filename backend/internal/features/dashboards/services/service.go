@@ -291,7 +291,7 @@ func (s *DashboardService) ExecutePanelQuery(
 	if err := s.requireAccess(projectID, user); err != nil {
 		return nil, err
 	}
-	if err := validatePanelTimeRange(request); err != nil {
+	if err := validatePanelQuery(request); err != nil {
 		return nil, err
 	}
 	release, err := s.panelQueryLimiter.Acquire(ctx, user.ID)
@@ -301,6 +301,8 @@ func (s *DashboardService) ExecutePanelQuery(
 	defer release()
 
 	switch request.Panel.EffectiveSource() {
+	case dashboards_models.PanelSourceLogsSQL:
+		return s.executeSQLPanelQuery(ctx, projectID, request)
 	case dashboards_models.PanelSourceSpans:
 		return s.executeSpanPanelQuery(projectID, request)
 	case dashboards_models.PanelSourceMetrics:
@@ -319,20 +321,22 @@ func (s *DashboardService) StreamPanelQuery(
 	request *dashboards_dto.PanelQueryRequestDTO,
 	user *users_models.User,
 	start func(),
-	emit func([]dashboards_dto.PanelBucketDTO) error,
+	emit func(*dashboards_dto.PanelQueryResponseDTO) error,
 ) error {
-	if request.Panel.EffectiveSource() != dashboards_models.PanelSourceLogs || request.Panel.BucketMs <= 0 {
+	source := request.Panel.EffectiveSource()
+	bucketedLogs := source == dashboards_models.PanelSourceLogs && request.Panel.BucketMs > 0
+	if !bucketedLogs && source != dashboards_models.PanelSourceLogsSQL {
 		response, err := s.ExecutePanelQuery(ctx, projectID, request, user)
 		if err != nil {
 			return err
 		}
 		start()
-		return emit(response.Buckets)
+		return emit(response)
 	}
 	if err := s.requireAccess(projectID, user); err != nil {
 		return err
 	}
-	if err := validatePanelTimeRange(request); err != nil {
+	if err := validatePanelQuery(request); err != nil {
 		return err
 	}
 	release, err := s.panelQueryLimiter.Acquire(ctx, user.ID)
@@ -340,13 +344,33 @@ func (s *DashboardService) StreamPanelQuery(
 		return err
 	}
 	defer release()
+	// Started before a SQL panel runs: materializing its window can take
+	// longer than a proxy waits for a silent response, and heartbeats cover it.
 	start()
+	if source == dashboards_models.PanelSourceLogsSQL {
+		response, err := s.executeSQLPanelQuery(ctx, projectID, request)
+		if err != nil {
+			return err
+		}
+		return emit(response)
+	}
 	_, err = logs_core.GetLogCoreRepository().StreamAggregation(ctx, projectID, logAggregationRequest(request),
-		func(buckets []logs_core.AggregationBucketDTO) error { return emit(panelBuckets(buckets)) })
+		func(buckets []logs_core.AggregationBucketDTO) error {
+			return emit(&dashboards_dto.PanelQueryResponseDTO{Buckets: panelBuckets(buckets)})
+		})
 	if err != nil {
 		return fmt.Errorf("failed to execute panel query: %w", err)
 	}
 	return nil
+}
+
+// validatePanelQuery checks what a query needs before it runs: the time
+// range, and for an (often unsaved) SQL panel the same checks as a save.
+func validatePanelQuery(request *dashboards_dto.PanelQueryRequestDTO) error {
+	if err := validatePanelTimeRange(request); err != nil {
+		return err
+	}
+	return normalizeSQLPanel(&request.Panel)
 }
 
 // validatePanelTimeRange requires a logs or spans panel's range to be
@@ -799,6 +823,9 @@ func normalizePanels(panels []dashboards_models.Panel) (dashboards_models.Panels
 			return nil, err
 		}
 		if err := validatePanelLogOptions(panel); err != nil {
+			return nil, err
+		}
+		if err := normalizeSQLPanel(&panel); err != nil {
 			return nil, err
 		}
 		if len(panel.PromQuery) > maxTextBytes {

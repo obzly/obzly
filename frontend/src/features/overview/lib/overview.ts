@@ -3,7 +3,6 @@
 import type { Session } from '../../../entity/correlation';
 import type { AggregationBucket } from '../../../entity/dashboards';
 import type { AssetHealth, AssetKind, InventorySummary } from '../../../entity/inventory';
-import type { IngestionStatus } from '../../../entity/projects';
 import type { ServiceErrorsResponse, TraceSummaryResponse } from '../../../entity/traces';
 import type { ChangeTone } from '../../../shared/ui/v2';
 
@@ -287,30 +286,6 @@ export const formatMinutes = (minutes?: number): string => {
   if (minutes < 1) return 'under a minute';
   if (minutes < 90) return `${Math.round(minutes)} min`;
   return `${(minutes / 60).toFixed(1)} h`;
-};
-
-export type IngestionTone = 'ok' | 'warn' | 'bad' | 'none';
-
-/** The header pill: are this project's sources still sending? */
-export const ingestionPill = (status: IngestionStatus): { text: string; tone: IngestionTone } => {
-  const total = status.sources.length;
-  if (total === 0) return { text: 'No data received yet', tone: 'none' };
-  const sending = status.sources.filter((source) => source.health === 'sending').length;
-  const stopped = status.sources.filter((source) => source.health === 'stopped').length;
-  const more = status.truncated ? '+' : '';
-  if (sending === total) {
-    return {
-      text: total === 1 ? 'Source sending' : `All ${total}${more} sources sending`,
-      tone: 'ok',
-    };
-  }
-  if (sending === 0) {
-    return {
-      text: stopped === total ? 'All sources stopped' : 'No source sending now',
-      tone: 'bad',
-    };
-  }
-  return { text: `${sending} of ${total}${more} sources sending`, tone: 'warn' };
 };
 
 export interface InfraRow {

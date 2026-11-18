@@ -1,43 +1,107 @@
 import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Tooltip } from 'antd';
-import { type JSX, useEffect, useRef, useState } from 'react';
+import { type JSX, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   type IngestionHealth,
+  type IngestionSource,
   type IngestionStatus,
   projectApi,
 } from '../../../../entity/projects';
 import { Card } from '../../../../shared/ui/v2';
-import { Pill, type PillTone } from '../ProjectPageShell';
-import { DataSourceIcon } from './DataSourceIcon';
+import { IngestionSourcesDrawer } from './IngestionSourcesDrawer';
 import { dataSourceCatalog } from './catalog';
-import { HEALTH_LABEL, formatAgo, locationText, signalChip } from './ingestionStatusFormat';
+import { type HealthFilter, healthCounts, needingAttention } from './ingestionSources';
+import { HEALTH_LABEL } from './ingestionStatusFormat';
+import { HEALTH_COLOR } from './ingestionTone';
 
 interface Props {
   projectId: string;
+  /** Outside Data sources: the empty state links there instead of "below". */
+  onAddSource?: () => void;
 }
 
 const REFRESH_MS = 30_000;
 
-// Good is green, bad is red: stopped is the bad state, quiet a warning.
-const HEALTH_TONE: Record<IngestionHealth, PillTone> = {
-  sending: 'ok',
-  quiet: 'warn',
-  stopped: 'bad',
-};
+const HEALTH_ORDER: IngestionHealth[] = ['sending', 'quiet', 'stopped'];
 
 const catalogNames = new Map(dataSourceCatalog.map((d) => [d.id, d.name]));
 
+interface WidgetProps {
+  label: string;
+  value: number;
+  note: string;
+  ariaLabel: string;
+  onClick: () => void;
+  dot?: string;
+  valueColor?: string;
+  children?: ReactNode;
+}
+
+/** One clickable count of the ingestion status tile. */
+const Widget = ({
+  label,
+  value,
+  note,
+  ariaLabel,
+  onClick,
+  dot,
+  valueColor,
+  children,
+}: WidgetProps): JSX.Element => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-label={ariaLabel}
+    className="hover:border-accent-400 flex min-w-0 cursor-pointer flex-col gap-1.5 rounded-xl border border-gray-200 px-4 py-3 text-left transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/40"
+  >
+    <span className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-gray-500 uppercase dark:text-gray-400">
+      {dot && <span className="inline-block h-2 w-2 rounded-full" style={{ background: dot }} />}
+      {label}
+    </span>
+    <span
+      className="text-2xl font-semibold text-gray-900 tabular-nums dark:text-gray-50"
+      style={valueColor ? { color: valueColor } : undefined}
+    >
+      {value.toLocaleString()}
+    </span>
+    {children}
+    <span className="truncate text-xs text-gray-500 dark:text-gray-400" title={note}>
+      {note}
+    </span>
+  </button>
+);
+
+// Quiet and stopped name the most recently lost source, so the tile says
+// which one without opening the list.
+const healthNote = (
+  health: IngestionHealth,
+  status: IngestionStatus,
+  attention: IngestionSource[],
+): string => {
+  if (health === 'sending') return `data in the last ${status.quietAfterMinutes} min`;
+  const lost = attention.filter((source) => source.health === health);
+  if (lost.length === 0)
+    return health === 'quiet'
+      ? `none silent for ${status.quietAfterMinutes} min`
+      : `none silent for ${status.stoppedAfterHours} h`;
+  return lost.length === 1 ? lost[0].name : `${lost[0].name} +${lost.length - 1} more`;
+};
+
+const typeName = (source: IngestionSource) =>
+  source.dataSource ? catalogNames.get(source.dataSource) : undefined;
+
 /**
- * What is sending to the project right now: one card per source with its
- * health, signals, recent rate and last data. Refreshes every 30 s while the
- * tab is visible.
+ * What is sending to the project right now: one tile of counts (sources,
+ * sending, quiet, stopped), each opening a filterable table of the sources.
+ * Refreshes every 30 s while the tab is visible.
  */
-export const IngestionStatusComponent = ({ projectId }: Props): JSX.Element => {
+export const IngestionStatusComponent = ({ projectId, onAddSource }: Props): JSX.Element => {
   const [status, setStatus] = useState<IngestionStatus | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
+  const [drawer, setDrawer] = useState<HealthFilter>();
   const requestId = useRef(0);
 
   const load = async () => {
@@ -87,24 +151,21 @@ export const IngestionStatusComponent = ({ projectId }: Props): JSX.Element => {
     };
   }, [projectId]);
 
-  const sources = status?.sources ?? [];
-  const sending = sources.filter((s) => s.health === 'sending').length;
+  const sources = useMemo(() => status?.sources ?? [], [status]);
+  const counts = useMemo(() => healthCounts(sources), [sources]);
+  const attention = useMemo(() => needingAttention(sources), [sources]);
+  const open = (health: HealthFilter) => setDrawer(health);
 
   return (
     <Card
       title="Ingestion status"
       subtitle={
         status
-          ? `Each source sending to this project, its health and its rate over the last ${status.rateWindowMinutes} minutes. Quiet: nothing for ${status.quietAfterMinutes} minutes; stopped: nothing for ${status.stoppedAfterHours} hours.`
-          : 'Each source sending to this project, its health and its recent rate.'
+          ? `Sources sending to this project. Quiet: nothing for ${status.quietAfterMinutes} minutes; stopped: nothing for ${status.stoppedAfterHours} hours.`
+          : 'Sources sending to this project and their health.'
       }
       extra={
         <>
-          {status && sources.length > 0 && (
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              {sending} of {sources.length} sending
-            </span>
-          )}
           <Tooltip title="Refresh now">
             <Button
               size="small"
@@ -134,63 +195,74 @@ export const IngestionStatusComponent = ({ projectId }: Props): JSX.Element => {
 
       {status && sources.length === 0 && (
         <div className="rounded-xl border border-dashed border-gray-300 px-4 py-6 text-center text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
-          No data yet — pick a source below
-        </div>
-      )}
-
-      {sources.length > 0 && (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,250px),1fr))] gap-3">
-          {sources.map((source) => {
-            const typeName = source.dataSource ? catalogNames.get(source.dataSource) : undefined;
-            const where = locationText(source);
-            return (
-              <article
-                key={source.id}
-                aria-label={source.name}
-                className="flex min-w-0 flex-col gap-2 rounded-xl border border-gray-200 p-4 dark:border-gray-700"
+          {onAddSource ? (
+            <>
+              No data yet.{' '}
+              <button
+                type="button"
+                onClick={onAddSource}
+                className="text-accent-600 dark:text-accent-400 cursor-pointer hover:underline"
               >
-                <span className="flex items-start justify-between gap-2">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40">
-                    <DataSourceIcon sourceId={source.dataSource || 'custom-otlp'} size={18} />
-                  </span>
-                  <Pill tone={HEALTH_TONE[source.health]}>{HEALTH_LABEL[source.health]}</Pill>
-                </span>
-                <span className="min-w-0">
-                  <strong
-                    className="block truncate font-semibold text-gray-900 dark:text-gray-50"
-                    title={source.name}
-                  >
-                    {source.name}
-                  </strong>
-                  <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
-                    {[typeName, where].filter(Boolean).join(' · ') || 'Type and location unknown'}
-                  </span>
-                </span>
-                <span className="flex flex-wrap gap-1.5">
-                  {source.signals.map((signal) => (
-                    <Tooltip
-                      key={signal.signal}
-                      title={`${signal.recentCount.toLocaleString()} in the last ${status?.rateWindowMinutes ?? 15} min · last ${formatAgo(signal.lastSeen, now)}`}
-                    >
-                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 dark:bg-gray-700 dark:text-gray-200">
-                        {signalChip(signal)}
-                      </span>
-                    </Tooltip>
-                  ))}
-                </span>
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  last data {formatAgo(source.lastSeen, now)}
-                </span>
-              </article>
-            );
-          })}
+                Add a data source
+              </button>
+            </>
+          ) : (
+            'No data yet — pick a source below'
+          )}
         </div>
       )}
 
-      {status?.truncated && (
-        <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-          Showing the most active sources only.
+      {sources.length > 0 && status && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Widget
+            label="Sources"
+            value={sources.length}
+            note={`${Math.round((counts.sending / sources.length) * 100)}% sending`}
+            ariaLabel={`${sources.length} sources; show all`}
+            onClick={() => open('all')}
+          >
+            <span
+              className="flex h-1.5 overflow-hidden rounded-full bg-[var(--v2-track)]"
+              aria-hidden
+            >
+              {HEALTH_ORDER.map((health) =>
+                counts[health] > 0 ? (
+                  <span
+                    key={health}
+                    style={{
+                      width: `${(counts[health] / sources.length) * 100}%`,
+                      background: HEALTH_COLOR[health],
+                    }}
+                  />
+                ) : null,
+              )}
+            </span>
+          </Widget>
+          {HEALTH_ORDER.map((health) => (
+            <Widget
+              key={health}
+              label={HEALTH_LABEL[health]}
+              dot={HEALTH_COLOR[health]}
+              value={counts[health]}
+              valueColor={
+                health !== 'sending' && counts[health] > 0 ? HEALTH_COLOR[health] : undefined
+              }
+              note={healthNote(health, status, attention)}
+              ariaLabel={`${counts[health]} ${HEALTH_LABEL[health].toLowerCase()}; show them`}
+              onClick={() => open(health)}
+            />
+          ))}
         </div>
+      )}
+
+      {status && drawer && (
+        <IngestionSourcesDrawer
+          status={status}
+          now={now}
+          initialHealth={drawer}
+          typeName={typeName}
+          onClose={() => setDrawer(undefined)}
+        />
       )}
     </Card>
   );

@@ -132,6 +132,9 @@ describe('isAdditive and kindUnavailableReason', () => {
     expect(kindUnavailableReason('donut', 'spans', 'count')).toBeNull();
     expect(kindUnavailableReason('rankedList', 'spans', 'p95_duration_ms')).toBeNull();
     expect(kindUnavailableReason('stackedBar', 'metrics', undefined)).toBeNull();
+    expect(kindUnavailableReason('gauge', 'logs_sql', undefined)).toMatch(/SQL result/);
+    expect(kindUnavailableReason('statTrend', 'logs_sql', undefined)).toMatch(/SQL result/);
+    expect(kindUnavailableReason('rankedList', 'logs_sql', undefined)).toBeNull();
   });
 });
 

@@ -16,7 +16,7 @@ import { FiredBarsComponent } from './FiredBarsComponent';
 import { RuleEditorDrawerComponent } from './RuleEditorDrawerComponent';
 import { SeverityPill } from './SeverityPill';
 import { Chip, Pill } from './bits';
-import { BUDGET_TIP, SYNTHETICS_TIP, errorMessage, toRequest } from './lib';
+import { errorMessage, managedRuleInfo, ruleSqlSummary, toRequest } from './lib';
 
 interface Props {
   projectId: string;
@@ -163,7 +163,7 @@ export const RulesComponent = ({ projectId, canEdit, onChanged, initialDraft }: 
                 );
                 // A disabled switch fires no mouse events, so the tooltip sits on a wrapper.
                 return rule.managedBy ? (
-                  <Tooltip title={isBudgetRule(rule) ? BUDGET_TIP : SYNTHETICS_TIP}>
+                  <Tooltip title={managedRuleInfo(rule)?.tip}>
                     <span className="inline-flex">{toggleSwitch}</span>
                   </Tooltip>
                 ) : (
@@ -173,37 +173,38 @@ export const RulesComponent = ({ projectId, canEdit, onChanged, initialDraft }: 
             },
             {
               title: 'Rule',
-              render: (_, rule) => (
-                <div className="flex flex-col gap-0.5">
-                  <div className="flex flex-wrap items-center gap-1.5 font-medium text-gray-900 dark:text-gray-50">
-                    {rule.name}
-                    {rule.managedBy && isBudgetRule(rule) && (
-                      <Tooltip title={BUDGET_TIP}>
-                        <Pill tone="purple" tabIndex={0}>
-                          Budget
-                        </Pill>
-                      </Tooltip>
-                    )}
-                    {rule.managedBy && !isBudgetRule(rule) && (
-                      <Tooltip title={SYNTHETICS_TIP}>
-                        <Pill tone="info" tabIndex={0}>
-                          Synthetics
-                        </Pill>
-                      </Tooltip>
-                    )}
+              render: (_, rule) => {
+                const managed = managedRuleInfo(rule);
+                return (
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex flex-wrap items-center gap-1.5 font-medium text-gray-900 dark:text-gray-50">
+                      {rule.name}
+                      {managed && (
+                        <Tooltip title={managed.tip}>
+                          <Pill tone={managed.tone} tabIndex={0}>
+                            {managed.label}
+                          </Pill>
+                        </Tooltip>
+                      )}
+                    </div>
+                    <div className="font-mono text-[11.5px] text-gray-500 dark:text-gray-400">
+                      {isBudgetRule(rule) ? (
+                        rule.summary
+                      ) : rule.source === 'logs_sql' ? (
+                        <span title={rule.query.sql}>
+                          {ruleSqlSummary(rule.query.sql ?? '')} {rule.comparison} {rule.threshold}
+                          {rule.forSeconds > 0 && ` for ${rule.forSeconds}s`}
+                        </span>
+                      ) : (
+                        <>
+                          {rule.source} {rule.comparison} {rule.threshold}
+                          {rule.forSeconds > 0 && ` for ${rule.forSeconds}s`}
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="font-mono text-[11.5px] text-gray-500 dark:text-gray-400">
-                    {isBudgetRule(rule) ? (
-                      rule.summary
-                    ) : (
-                      <>
-                        {rule.source} {rule.comparison} {rule.threshold}
-                        {rule.forSeconds > 0 && ` for ${rule.forSeconds}s`}
-                      </>
-                    )}
-                  </div>
-                </div>
-              ),
+                );
+              },
             },
             {
               title: 'Severity',

@@ -272,6 +272,11 @@ export const QueryResultsComponent = ({
     if (isLoadingMore.current || !hasMoreResults || isExecuting) {
       return;
     }
+    // Hidden behind another Logs view or the Chart view the page is short,
+    // so "near the bottom" is always true and pages would load forever.
+    if (!containerRef.current || containerRef.current.getClientRects().length === 0) {
+      return;
+    }
 
     const scrollContainer = containerRef.current?.closest('.overflow-y-auto') as HTMLElement;
     if (!scrollContainer) {
@@ -311,11 +316,15 @@ export const QueryResultsComponent = ({
   useEffect(() => {
     const scroller = getScrollElement();
     if (!scroller || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => updateScrollMargin());
+    // Also re-checks loading when the list is shown again (it had no size).
+    const observer = new ResizeObserver(() => {
+      updateScrollMargin();
+      handleScroll();
+    });
     for (const child of Array.from(scroller.children)) observer.observe(child);
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [getScrollElement, updateScrollMargin, hasExecuted]);
+  }, [getScrollElement, updateScrollMargin, handleScroll, hasExecuted]);
 
   // Rows are measured dynamically since wrapped rows vary in height.
   // eslint-disable-next-line react-hooks/incompatible-library

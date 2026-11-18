@@ -504,7 +504,7 @@ func (c *DashboardController) DeleteDashboard(ctx *gin.Context) {
 
 // ExecutePanelQuery
 // @Summary Run one panel's aggregation query
-// @Description Executes a panel definition (saved or still being edited) against the project's logs and returns chart-ready buckets
+// @Description Executes a panel definition (saved or still being edited) against the project's logs, traces or metrics and returns chart-ready buckets; a logs_sql panel returns its SQL result as table (columns and rows) instead
 // @Tags dashboards
 // @Accept json
 // @Produce json
@@ -551,7 +551,7 @@ const panelHeartbeatInterval = 10 * time.Second
 
 // StreamPanelQuery
 // @Summary Run one panel's aggregation query, streamed
-// @Description Same request as /query; the answer is newline-delimited JSON frames. A time-bucketed logs panel is read partition group by partition group, newest first, and each "buckets" frame's buckets add to the earlier ones' (the same bucket and group can come again); any other panel is one "buckets" frame. Then "done", or "error" with status. "heartbeat" frames keep the connection alive. A refused query (403, 400) is a plain JSON error before any frame.
+// @Description Same request as /query; the answer is newline-delimited JSON frames. A time-bucketed logs panel is read partition group by partition group, newest first, and each "buckets" frame's buckets add to the earlier ones' (the same bucket and group can come again); any other panel is one "buckets" frame (a logs_sql panel's carries table, its columns and rows). Then "done", or "error" with status. "heartbeat" frames keep the connection alive. A refused query (403, 400) is a plain JSON error before any frame.
 // @Tags dashboards
 // @Accept json
 // @Produce application/x-ndjson
@@ -627,8 +627,10 @@ func (c *DashboardController) StreamPanelQuery(ctx *gin.Context) {
 			}
 		})
 	}
-	emit := func(buckets []dashboards_dto.PanelBucketDTO) error {
-		return writeFrame(dashboards_dto.PanelFrameDTO{Type: dashboards_dto.PanelFrameBuckets, Buckets: buckets})
+	emit := func(response *dashboards_dto.PanelQueryResponseDTO) error {
+		return writeFrame(dashboards_dto.PanelFrameDTO{
+			Type: dashboards_dto.PanelFrameBuckets, Buckets: response.Buckets, Table: response.Table,
+		})
 	}
 
 	err := c.dashboardService.StreamPanelQuery(ctx.Request.Context(), projectID, &request, user, start, emit)

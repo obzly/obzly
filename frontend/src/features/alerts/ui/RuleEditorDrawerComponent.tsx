@@ -26,7 +26,7 @@ import { QueryBuilderComponent } from '../../query';
 import { SEVERITIES } from '../lib/messageTemplates';
 import { Pill } from './bits';
 import { LabelTags } from './labels';
-import { BUDGET_TIP, SYNTHETICS_TIP, errorMessage } from './lib';
+import { errorMessage, managedRuleInfo } from './lib';
 
 interface Props {
   projectId: string;
@@ -79,6 +79,7 @@ const SOURCES: { value: RuleSource; label: string }[] = [
   { value: 'metrics', label: 'Metrics (PromQL)' },
   { value: 'logs', label: 'Logs (count)' },
   { value: 'log_patterns', label: 'Log patterns (new or spiking)' },
+  { value: 'logs_sql', label: 'Logs SQL' },
   { value: 'traces', label: 'Traces' },
 ];
 
@@ -190,7 +191,9 @@ export const RuleEditorDrawerComponent = ({
             ? {}
             : source === 'log_patterns'
               ? { logs: ERROR_LOGS, baselineSeconds: 86400, minCount: 5 }
-              : { metric: 'error_count' },
+              : source === 'logs_sql'
+                ? { sql: '' }
+                : { metric: 'error_count' },
       // A pattern rule's value is its rate over the baseline's: new
       // patterns, and ones that tripled.
       ...(source === 'log_patterns' ? { comparison: '>=' as const, threshold: 3 } : {}),
@@ -218,13 +221,7 @@ export const RuleEditorDrawerComponent = ({
       }
     >
       <fieldset disabled={!canEdit} className="flex min-w-0 flex-col gap-4">
-        {rule?.managedBy && (
-          <Alert
-            type="info"
-            showIcon
-            title={rule.managedBy.startsWith('ai-budget:') ? BUDGET_TIP : SYNTHETICS_TIP}
-          />
-        )}
+        {rule?.managedBy && <Alert type="info" showIcon title={managedRuleInfo(rule)?.tip} />}
         <div>
           {fieldLabel('Name')}
           <Input
@@ -278,6 +275,23 @@ export const RuleEditorDrawerComponent = ({
               />
             </div>
           </>
+        )}
+
+        {draft.source === 'logs_sql' && (
+          <div>
+            {fieldLabel(
+              'SQL',
+              "One row per series: label columns and a number (the column named value, else the last number). Runs over the window below; with a time column only each series' latest row counts.",
+            )}
+            <Input.TextArea
+              rows={5}
+              className="font-mono !text-[12.5px]"
+              aria-label="SQL"
+              placeholder="SELECT json_extract_string(fields, '$.service_name') AS service, count(*) AS value FROM logs WHERE lower(level) = 'error' GROUP BY 1"
+              value={draft.query.sql}
+              onChange={(e) => setQuery({ sql: e.target.value })}
+            />
+          </div>
         )}
 
         {draft.source === 'log_patterns' && (

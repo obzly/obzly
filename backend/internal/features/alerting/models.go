@@ -25,6 +25,9 @@ const (
 	// that are new against the baseline before the window, or whose rate
 	// rose to at least Threshold times it - one series per pattern.
 	SourceLogPatterns = "log_patterns"
+	// SourceLogsSQL: Query.SQL over SQL mode's "logs" table for the window;
+	// each result row is one series (see sqlSamples).
+	SourceLogsSQL = "logs_sql"
 	// SourceAICost: an AI budget's spend this period (managed rules only;
 	// see SetAICostSource).
 	SourceAICost = "ai_cost"
@@ -167,8 +170,10 @@ func (r *AlertRule) BeforeSave(*gorm.DB) error {
 // Log patterns: each pattern of the logs matching Logs in the window
 // against the BaselineSeconds before it (MinCount: fewest logs to count);
 // the value is its rate over the baseline's, very large when it's new.
+// Logs SQL: SQL's rows over the window, one series per row (see sqlSamples).
 type RuleQuery struct {
 	PromQL          string               `json:"promql,omitempty"`
+	SQL             string               `json:"sql,omitempty"`
 	Logs            *logs_core.QueryNode `json:"logs,omitempty"`
 	GroupBy         string               `json:"groupBy,omitempty"`
 	Metric          string               `json:"metric,omitempty"`

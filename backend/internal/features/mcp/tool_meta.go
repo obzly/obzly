@@ -244,6 +244,8 @@ var toolMetas = map[string]toolMeta{
 		"window": windowField, "dashboard": text("Dashboard title"), "hint": text(""),
 		"panels": listField("Without panelId: the dashboard's panels"),
 		"panel":  anyValue("The panel run"), "buckets": listField("The panel's data points"),
+		"columns": listField("A logs_sql panel: its result's columns"),
+		"rows":    listField("A logs_sql panel: its result's rows"),
 	})},
 
 	"ingestion_status": {"Ingestion status", pagedOutput("sources", jsonSchema{

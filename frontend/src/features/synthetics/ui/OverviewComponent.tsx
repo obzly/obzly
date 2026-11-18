@@ -187,6 +187,64 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
         ))}
       </section>
 
+      {/* Outages and expiring certificates come first: they need action now. */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Active outages" subtitle="Monitors failing or degraded now">
+          {outages.length === 0 && (
+            <div className="text-sm text-gray-500">None. Everything is passing.</div>
+          )}
+          {outages.map((check) => {
+            const failing = (data.get(check.id)?.state.locations ?? []).filter(
+              (state) => locationStatus(state) !== 'up',
+            );
+            return (
+              <div
+                key={check.id}
+                className="flex cursor-pointer items-center justify-between gap-3 border-b border-gray-100 py-2.5 last:border-0 dark:border-gray-700"
+                onClick={() => onOpen(check)}
+              >
+                <span className="min-w-0">
+                  <span className="font-semibold">{check.name}</span>
+                  <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
+                    {failing
+                      .map(
+                        (state) =>
+                          `${state.location}: ${STATUS_LABEL[locationStatus(state)].toLowerCase()}`,
+                      )
+                      .join(', ')}
+                  </span>
+                </span>
+                <StatusBadge status={statusOf(check)} />
+              </div>
+            );
+          })}
+        </Panel>
+        <Panel title="Certificates expiring soon" subtitle="Within 30 days">
+          {certificates.length === 0 && (
+            <div className="text-sm text-gray-500">None within 30 days.</div>
+          )}
+          {certificates.map((check) => {
+            const days = Math.floor(data.get(check.id)?.certDays ?? 0);
+            const status: MonitorStatus = days < 7 ? 'down' : days < 21 ? 'warn' : 'up';
+            return (
+              <div
+                key={check.id}
+                className="flex cursor-pointer items-center justify-between gap-3 border-b border-gray-100 py-2.5 last:border-0 dark:border-gray-700"
+                onClick={() => onOpen(check)}
+              >
+                <span className="min-w-0 truncate">{check.name}</span>
+                <span
+                  className="rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"
+                  style={{ color: STATUS_COLOR[status], background: `${STATUS_COLOR[status]}1f` }}
+                >
+                  {days} days
+                </span>
+              </div>
+            );
+          })}
+        </Panel>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Status" subtitle="Every monitor, now">
           <div className="flex flex-wrap items-center gap-5">
@@ -356,63 +414,6 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
               };
             })}
           />
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Active outages" subtitle="Monitors failing or degraded now">
-          {outages.length === 0 && (
-            <div className="text-sm text-gray-500">None. Everything is passing.</div>
-          )}
-          {outages.map((check) => {
-            const failing = (data.get(check.id)?.state.locations ?? []).filter(
-              (state) => locationStatus(state) !== 'up',
-            );
-            return (
-              <div
-                key={check.id}
-                className="flex cursor-pointer items-center justify-between gap-3 border-b border-gray-100 py-2.5 last:border-0 dark:border-gray-700"
-                onClick={() => onOpen(check)}
-              >
-                <span className="min-w-0">
-                  <span className="font-semibold">{check.name}</span>
-                  <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
-                    {failing
-                      .map(
-                        (state) =>
-                          `${state.location}: ${STATUS_LABEL[locationStatus(state)].toLowerCase()}`,
-                      )
-                      .join(', ')}
-                  </span>
-                </span>
-                <StatusBadge status={statusOf(check)} />
-              </div>
-            );
-          })}
-        </Panel>
-        <Panel title="Certificates expiring soon" subtitle="Within 30 days">
-          {certificates.length === 0 && (
-            <div className="text-sm text-gray-500">None within 30 days.</div>
-          )}
-          {certificates.map((check) => {
-            const days = Math.floor(data.get(check.id)?.certDays ?? 0);
-            const status: MonitorStatus = days < 7 ? 'down' : days < 21 ? 'warn' : 'up';
-            return (
-              <div
-                key={check.id}
-                className="flex cursor-pointer items-center justify-between gap-3 border-b border-gray-100 py-2.5 last:border-0 dark:border-gray-700"
-                onClick={() => onOpen(check)}
-              >
-                <span className="min-w-0 truncate">{check.name}</span>
-                <span
-                  className="rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"
-                  style={{ color: STATUS_COLOR[status], background: `${STATUS_COLOR[status]}1f` }}
-                >
-                  {days} days
-                </span>
-              </div>
-            );
-          })}
         </Panel>
       </div>
     </div>

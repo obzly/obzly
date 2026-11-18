@@ -175,3 +175,29 @@ func Test_ExecuteSQLQueryContext_CancelledContext_StopsTheQuery(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+func Test_ExecuteScopedSQL_WithAShapedTable_FiltersOnItsDerivedColumnsAndDropsRaw(t *testing.T) {
+	now := time.Now().UTC()
+	projectID, querier := seedProject(t, []*logs_core.LogItem{
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "a", Fields: map[string]any{"status": "200"}},
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "b", Fields: map[string]any{"status": "503"}},
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "c", Fields: map[string]any{"other": "x"}},
+	})
+
+	// The final WHERE reads a column two projections up, as Web analytics' table does.
+	table := "SELECT message, status FROM (SELECT message, TRY_CAST(fv[1] AS INTEGER) AS status FROM " +
+		"(SELECT message, json_extract_string(fields, ['$.status']) AS fv FROM raw) l1) l2 WHERE status >= ?"
+	results, err := querier.ExecuteScopedSQL(projectID, &logs_core.ScopedSQLRequestDTO{
+		From: now.Add(-time.Hour), To: now.Add(time.Hour), Table: table, TableArgs: []any{500},
+		Statements: []logs_core.ScopedSQLStatement{{SQL: "SELECT message, status FROM logs"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, [][]any{{"b", int32(503)}}, results[0].Rows)
+
+	_, err = querier.ExecuteScopedSQL(projectID, &logs_core.ScopedSQLRequestDTO{
+		From: now.Add(-time.Hour), To: now.Add(time.Hour), Table: "SELECT message FROM raw",
+		Statements: []logs_core.ScopedSQLStatement{{SQL: "SELECT count(*) FROM raw"}},
+	})
+	require.Error(t, err, "statements see only the shaped table")
+}

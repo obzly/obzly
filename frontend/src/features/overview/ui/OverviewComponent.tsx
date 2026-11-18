@@ -24,6 +24,7 @@ import { traceApi } from '../../../entity/traces';
 import { useVisibleInterval } from '../../../shared/lib';
 import { useTheme } from '../../../shared/theme';
 import { KpiTile, PageHeader } from '../../../shared/ui/v2';
+import { IngestionStatusComponent } from '../../projects';
 import {
   type GaugeModel,
   aiBudgetGauge,
@@ -38,7 +39,6 @@ import {
   errorRate,
   formatMs,
   formatRate,
-  ingestionPill,
   logVolume,
   overviewWindow,
   percentChange,
@@ -93,13 +93,6 @@ const readRange = (): OverviewRange => {
 };
 
 const iso = (ms: number) => new Date(ms).toISOString();
-
-const PILL_CLASS = {
-  ok: 'bg-[var(--v2-green-soft,rgba(16,185,129,0.14))] text-[var(--v2-green,#10b981)]',
-  warn: 'bg-amber-500/15 text-[var(--v2-orange)]',
-  bad: 'bg-red-500/15 text-[var(--v2-red)]',
-  none: 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300',
-};
 
 export const OverviewComponent = ({
   projectId,
@@ -160,7 +153,6 @@ export const OverviewComponent = ({
     deps,
   );
   const alerts = useLoad(() => alertingApi.getSummary(projectId), deps);
-  const ingestion = useLoad(() => projectApi.getIngestionStatus(projectId), deps);
   const inventory = useLoad((signal) => inventoryApi.summary(siteId, signal), [siteId, refresh]);
 
   const aiBudget = useLoad<GaugeModel>(async () => {
@@ -231,7 +223,6 @@ export const OverviewComponent = ({
   const rate = volume ? formatRate(volume.rate) : undefined;
   const incidents = inRange ? summarizeIncidents(inRange, period.to) : undefined;
   const opened = inRange?.filter((session) => Date.parse(session.windowStart) >= period.from);
-  const pill = ingestion.data ? ingestionPill(ingestion.data) : undefined;
 
   const loadingValue = (loading: boolean) => (loading ? '…' : 'n/a');
 
@@ -246,22 +237,6 @@ export const OverviewComponent = ({
           subtitle={`${projectName} · ${RANGE_TEXT[range]} · every number links to the view behind it`}
           actions={
             <>
-              <Tooltip
-                title={
-                  ingestion.error
-                    ? `Couldn't read the ingestion status: ${ingestion.error}`
-                    : 'Whether this project’s sources are still sending; opens Data sources'
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => onNavigate('data-sources')}
-                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border-0 px-2.5 py-1 text-[13px] font-medium ${PILL_CLASS[pill?.tone ?? 'none']}`}
-                >
-                  <span className="h-[7px] w-[7px] rounded-full bg-current" />
-                  {pill?.text ?? (ingestion.loading ? 'Checking sources…' : 'Ingestion n/a')}
-                </button>
-              </Tooltip>
               <Segmented
                 aria-label="Time range"
                 value={range}
@@ -367,6 +342,11 @@ export const OverviewComponent = ({
           onClick={() => onNavigate('incidents')}
         />
       </section>
+
+      <IngestionStatusComponent
+        projectId={projectId}
+        onAddSource={() => onNavigate('data-sources')}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
         <ServiceErrorsPanel

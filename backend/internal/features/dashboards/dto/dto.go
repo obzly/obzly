@@ -77,8 +77,18 @@ type PanelBucketDTO struct {
 	Value     float64    `json:"value"`
 }
 
+// PanelTableDTO is a logs_sql panel's result: user SQL can project any
+// columns, so it is not reduced to buckets.
+type PanelTableDTO struct {
+	Columns   []string `json:"columns"`
+	Rows      [][]any  `json:"rows"`
+	Truncated bool     `json:"truncated,omitempty"`
+}
+
+// PanelQueryResponseDTO: Table is set (and Buckets empty) for a logs_sql panel.
 type PanelQueryResponseDTO struct {
 	Buckets []PanelBucketDTO `json:"buckets"`
+	Table   *PanelTableDTO   `json:"table,omitempty"`
 }
 
 // Streamed panel query frames (/query/stream).
@@ -90,10 +100,12 @@ const (
 )
 
 // PanelFrameDTO is one line of a streamed panel query: "buckets" (to add to
-// the earlier frames' buckets), "heartbeat", "done", or "error".
+// the earlier frames' buckets; a logs_sql panel's one frame carries Table),
+// "heartbeat", "done", or "error".
 type PanelFrameDTO struct {
 	Type    string           `json:"type"`
 	Buckets []PanelBucketDTO `json:"buckets,omitempty"`
+	Table   *PanelTableDTO   `json:"table,omitempty"`
 	Status  int              `json:"status,omitempty"`
 	Error   string           `json:"error,omitempty"`
 }

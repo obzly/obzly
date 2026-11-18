@@ -5,6 +5,15 @@ export interface AggregationBucket {
   value: number;
 }
 
+// A logs_sql panel's result: its SQL can project any columns.
+export interface PanelTable {
+  columns: string[];
+  rows: unknown[][];
+  truncated?: boolean;
+}
+
 export interface AggregationResponse {
   buckets: AggregationBucket[];
+  // Set (and buckets empty) for a logs_sql panel.
+  table?: PanelTable;
 }

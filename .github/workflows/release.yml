@@ -50,6 +50,7 @@ jobs:
             grep -qx "appVersion: \"${VERSION}\"" "$chart" || { echo "::error file=$chart::appVersion isn't \"${VERSION}\""; stale=1; }
           done
           grep -qx "OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"" install-obzly.sh || { echo "::error file=install-obzly.sh::OBZLY_DEFAULT_IMAGE_TAG isn't v${VERSION}"; stale=1; }
+          grep -qx "OBZLY_IMAGE_TAG=v${VERSION}" deploy/docker/.env.example || { echo "::error file=deploy/docker/.env.example::OBZLY_IMAGE_TAG isn't v${VERSION}"; stale=1; }
           while IFS= read -r line; do
             echo "::error::${line} (expected :v${VERSION})"; stale=1
           done < <(grep -rnE "image: ghcr\.io/obzly/obzly(-probe)?:" deploy/kubernetes | grep -v ":v${VERSION}\$" || true)
