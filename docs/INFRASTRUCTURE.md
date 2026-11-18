@@ -84,6 +84,8 @@ and which signals it was seen in (metrics, logs, traces, later cloud).
   - Runs are left out of the change feed's "new" and state entries; a failure still shows as a
     health change.
 - A change feed records new assets, terminations, restarts and health changes (kept 7 days).
+- Hourly counts per kind and health (`inventory_counts_hourly`, kept 30 days) give the Overview's
+  kind tiles a 7-day sparkline and a change against 24 hours ago.
 
 ### Health
 
@@ -117,7 +119,9 @@ evaluator. Each run:
    containers' summed, and the 24 h restart counts are refreshed at most hourly;
 4. matches active alerts by labels;
 5. writes the assets whose stored fields changed, moves `last_seen` of the rest in one statement,
-   and appends changes to `inventory_changes`.
+   and appends changes to `inventory_changes`;
+6. replaces the project's row set for the current hour in `inventory_counts_hourly` (the last
+   build in an hour wins; kind `''` holds the total, so an hour without assets still has a row).
 
 The cost is a handful of small queries per project per 5 minutes, and only the discovery reads
 (steps 1 and 2's services) for a project with nothing reporting; nothing reads raw samples or raw
@@ -125,7 +129,8 @@ logs.
 
 ### API (Site, through the CP proxy)
 
-- `GET /api/v1/inventory/summary`: counts by kind, health and state.
+- `GET /api/v1/inventory/summary`: counts by kind, health and state; `history=true` adds the last
+  7 days' hourly counts by kind and those of the newest hour at least 24 hours old.
 - `GET /api/v1/inventory/assets`: filters (kind, health, state, project, cluster, namespace,
   search), sort, cursor paging. Only projects the user can read.
 - `GET /api/v1/inventory/assets/:id`: attributes, parent chain, children, health reasons, recent

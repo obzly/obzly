@@ -44,7 +44,8 @@ const (
 type Writer struct {
 	dataDir string
 	schema  Schema
-	db      *sql.DB
+	// db is the process's shared writer database (writerHandle).
+	db *sql.DB
 
 	maxRows  int
 	maxBytes int64
@@ -113,7 +114,7 @@ func NewWriter(dataDir string, schema Schema, opts ...Option) (*Writer, error) {
 		return nil, fmt.Errorf("failed to create segment directory %q: %w", streamDir, err)
 	}
 
-	db, err := sql.Open("duckdb", "")
+	db, err := writerHandle.acquire(filepath.Join(dataDir, "spill", "writer"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open duckdb handle: %w", err)
 	}
@@ -130,7 +131,6 @@ func NewWriter(dataDir string, schema Schema, opts ...Option) (*Writer, error) {
 	for _, opt := range opts {
 		opt(w)
 	}
-	telemetry.RegisterDuckDB("writer_"+schema.Stream, db)
 
 	return w, nil
 }
@@ -348,8 +348,7 @@ func (w *Writer) Close() error {
 		logger.GetLogger().Error("final segment flush failed, unflushed rows are lost",
 			"stream", w.schema.Stream, "droppedRows", dropped, "error", flushErr)
 	}
-	telemetry.UnregisterDuckDB(w.db)
-	return errors.Join(flushErr, w.db.Close())
+	return errors.Join(flushErr, writerHandle.release())
 }
 
 func newWriterMetrics(stream string) writerMetrics {
@@ -456,6 +455,11 @@ func (w *Writer) writeSegment(
 	minTime, maxTime time.Time,
 ) (*Segment, error) {
 	tempTable := "flush_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	// The query tail empties its directory after opening its writers, and the
+	// shared spill directory may be in it; DuckDB creates only the last level.
+	if err := os.MkdirAll(writerHandle.spillDirectory(), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create the writer's spill directory: %w", err)
+	}
 
 	ddl := w.createTableDDL(tempTable)
 	if _, err := w.db.Exec(ddl); err != nil {

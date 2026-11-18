@@ -42,6 +42,16 @@ func (q *LogQuerier) ExecuteSQLQuery(
 	projectID uuid.UUID,
 	request *logs_core.ExecuteSQLQueryRequestDTO,
 ) (*logs_core.SQLQueryResponseDTO, error) {
+	return q.ExecuteSQLQueryContext(context.Background(), projectID, request)
+}
+
+// ExecuteSQLQueryContext is ExecuteSQLQuery stopping when ctx ends (the
+// client left), on top of its own timeouts.
+func (q *LogQuerier) ExecuteSQLQueryContext(
+	parent context.Context,
+	projectID uuid.UUID,
+	request *logs_core.ExecuteSQLQueryRequestDTO,
+) (*logs_core.SQLQueryResponseDTO, error) {
 	startTime := time.Now()
 
 	statement, err := segments.ValidateSingleStatementSelect(request.SQL)
@@ -53,15 +63,15 @@ func (q *LogQuerier) ExecuteSQLQuery(
 	}
 
 	from, to := resolveTimeRange(request.TimeRange)
-	prepareCtx, cancelPrepare := context.WithTimeout(context.Background(), sqlPrepareTimeout)
+	prepareCtx, cancelPrepare := context.WithTimeout(parent, sqlPrepareTimeout)
 	defer cancelPrepare()
-	sandbox, err := q.openLogsSandbox(prepareCtx, projectID, from, to, "", request.ScanBudget)
+	sandbox, err := q.openLogsSandbox(prepareCtx, projectID, from, to, tableShape{}, request.ScanBudget)
 	if err != nil {
 		return nil, err
 	}
 	defer sandbox.close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), sqlQueryTimeout)
+	ctx, cancel := context.WithTimeout(parent, sqlQueryTimeout)
 	defer cancel()
 
 	rows, err := sandbox.db.QueryContext(ctx, statement)
@@ -70,7 +80,7 @@ func (q *LogQuerier) ExecuteSQLQuery(
 	}
 	defer func() { _ = rows.Close() }()
 
-	columns, resultRows, truncated, err := scanSQLRows(rows)
+	columns, resultRows, truncated, err := scanSQLRows(rows, maxSQLResultRows)
 	if err != nil {
 		return nil, err
 	}
@@ -95,13 +105,22 @@ func (q *LogQuerier) ExecuteScopedSQL(
 	to := clampToRepresentableRange(request.To)
 	prepareCtx, cancelPrepare := context.WithTimeout(context.Background(), sqlPrepareTimeout)
 	defer cancelPrepare()
-	sandbox, err := q.openLogsSandbox(prepareCtx, projectID, from, to, request.MessagePrefix, request.ScanBudget)
+	shape := tableShape{messagePrefix: request.MessagePrefix, table: request.Table, tableArgs: request.TableArgs}
+	sandbox, err := q.openLogsSandbox(prepareCtx, projectID, from, to, shape, request.ScanBudget)
 	if err != nil {
 		return nil, err
 	}
 	defer sandbox.close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), sqlQueryTimeout)
+	timeout := sqlQueryTimeout
+	if request.Timeout > 0 {
+		timeout = request.Timeout
+	}
+	maxRows := maxSQLResultRows
+	if request.MaxRows > 0 {
+		maxRows = request.MaxRows
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	results := make([]*logs_core.SQLQueryResponseDTO, 0, len(request.Statements))
@@ -111,7 +130,7 @@ func (q *LogQuerier) ExecuteScopedSQL(
 		if err != nil {
 			return nil, fmt.Errorf("query execution failed: %w", err)
 		}
-		columns, resultRows, truncated, err := scanSQLRows(rows)
+		columns, resultRows, truncated, err := scanSQLRows(rows, maxRows)
 		_ = rows.Close()
 		if err != nil {
 			return nil, err
@@ -126,6 +145,14 @@ func (q *LogQuerier) ExecuteScopedSQL(
 	}
 
 	return results, nil
+}
+
+// tableShape narrows the materialized "logs" table: rows whose message
+// starts with messagePrefix, or table, a trusted SELECT over "raw".
+type tableShape struct {
+	messagePrefix string
+	table         string
+	tableArgs     []any
 }
 
 // logsSandbox is a single-use DuckDB handle holding the "logs" table.
@@ -144,7 +171,7 @@ func (s *logsSandbox) close() {
 // configuration locked. The table exists even when empty. scanBudget (0: none)
 // refuses a larger range.
 func (q *LogQuerier) openLogsSandbox(
-	ctx context.Context, projectID uuid.UUID, from, to time.Time, messagePrefix string, scanBudget int64,
+	ctx context.Context, projectID uuid.UUID, from, to time.Time, shape tableShape, scanBudget int64,
 ) (*logsSandbox, error) {
 	records, err := q.segmentRepo.ListByTimeRange(projectID, q.stream, from, to)
 	if err != nil {
@@ -165,12 +192,18 @@ func (q *LogQuerier) openLogsSandbox(
 	// Before prepareLogsTable turns off external access (temp_directory
 	// can't be set after that). Each sandbox spills to its own directory.
 	spillDir, err := segments.ConfigureMemory(sandboxDB, q.memoryLimit, filepath.Join(q.queryDir, "spill"))
+	if err == nil {
+		err = segments.SetHandleLimits(sandboxDB, "", q.threads)
+	}
 	if err != nil {
 		_ = sandboxDB.Close()
+		if spillDir != "" {
+			_ = os.RemoveAll(spillDir)
+		}
 		return nil, err
 	}
 	sandbox := &logsSandbox{db: sandboxDB, spillDir: spillDir}
-	if err := q.prepareLogsTable(ctx, sandboxDB, records, projectID, from, to, messagePrefix); err != nil {
+	if err := q.prepareLogsTable(ctx, sandboxDB, records, projectID, from, to, shape); err != nil {
 		sandbox.close()
 		return nil, err
 	}
@@ -184,7 +217,7 @@ func (q *LogQuerier) prepareLogsTable(
 	records []*segments.SegmentRecord,
 	projectID uuid.UUID,
 	from, to time.Time,
-	messagePrefix string,
+	shape tableShape,
 ) error {
 	if err := segments.RegisterNormalizationFunctions(sandboxDB); err != nil {
 		return fmt.Errorf("failed to prepare sandboxed duckdb handle: %w", err)
@@ -196,28 +229,27 @@ func (q *LogQuerier) prepareLogsTable(
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("failed to prepare logs table: %w", err)
 	}
+	rawSQL := "SELECT CAST(NULL AS TIMESTAMP_NS) AS timestamp, CAST(NULL AS VARCHAR) AS level, " +
+		"CAST(NULL AS VARCHAR) AS message, CAST(NULL AS VARCHAR) AS client_ip, CAST(NULL AS VARCHAR) AS trace_id, " +
+		"CAST(NULL AS VARCHAR) AS span_id, CAST(NULL AS VARCHAR) AS fields WHERE false"
+	var rawArgs []any
 	if len(paths) > 0 {
 		fromExpr, fileArgs := segments.SourceExpr(q.stream, paths)
-
-		createTableSQL := "CREATE TEMP TABLE logs AS SELECT timestamp, level, message, client_ip, " +
-			"trace_id, span_id, fields FROM " + fromExpr +
+		rawSQL = "SELECT timestamp, level, message, client_ip, trace_id, span_id, fields FROM " + fromExpr +
 			" WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?"
-		createArgs := append(append([]any{}, fileArgs...), projectID.String(), from, to)
-		if messagePrefix != "" {
-			createTableSQL += " AND starts_with(message, ?)"
-			createArgs = append(createArgs, messagePrefix)
+		rawArgs = append(append([]any{}, fileArgs...), projectID.String(), from, to)
+		if shape.messagePrefix != "" {
+			rawSQL += " AND starts_with(message, ?)"
+			rawArgs = append(rawArgs, shape.messagePrefix)
 		}
-
-		if _, err := sandboxDB.ExecContext(ctx, createTableSQL, createArgs...); err != nil {
-			return fmt.Errorf("failed to prepare logs table: %w", err)
-		}
-	} else {
-		emptyTableSQL := "CREATE TEMP TABLE logs (" +
-			"timestamp TIMESTAMP_NS, level VARCHAR, message VARCHAR, client_ip VARCHAR, " +
-			"trace_id VARCHAR, span_id VARCHAR, fields VARCHAR)"
-		if _, err := sandboxDB.ExecContext(ctx, emptyTableSQL); err != nil {
-			return fmt.Errorf("failed to prepare empty logs table: %w", err)
-		}
+	}
+	createTableSQL := "CREATE TEMP TABLE logs AS " + rawSQL
+	if shape.table != "" {
+		createTableSQL = "CREATE TEMP TABLE logs AS WITH raw AS (" + rawSQL + ") " + shape.table
+		rawArgs = append(rawArgs, shape.tableArgs...)
+	}
+	if _, err := sandboxDB.ExecContext(ctx, createTableSQL, rawArgs...); err != nil {
+		return fmt.Errorf("failed to prepare logs table: %w", err)
 	}
 
 	// lock_configuration last: it also blocks enable_external_access.
@@ -230,7 +262,7 @@ func (q *LogQuerier) prepareLogsTable(
 	return nil
 }
 
-func scanSQLRows(rows *sql.Rows) ([]string, [][]any, bool, error) {
+func scanSQLRows(rows *sql.Rows, maxRows int) ([]string, [][]any, bool, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to read result columns: %w", err)
@@ -239,7 +271,7 @@ func scanSQLRows(rows *sql.Rows) ([]string, [][]any, bool, error) {
 	resultRows := make([][]any, 0)
 	truncated := false
 	for rows.Next() {
-		if len(resultRows) >= maxSQLResultRows {
+		if len(resultRows) >= maxRows {
 			truncated = true
 			break
 		}

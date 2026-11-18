@@ -98,6 +98,30 @@ func (unavailableRepository) ExecuteSQLQuery(
 	return nil, errRepositoryUnavailable
 }
 
+func (unavailableRepository) ExecuteQueryForProjectContext(
+	context.Context,
+	uuid.UUID,
+	*LogQueryRequestDTO,
+) (*LogQueryResponseDTO, error) {
+	return nil, errRepositoryUnavailable
+}
+
+func (unavailableRepository) ExecuteSQLQueryContext(
+	context.Context,
+	uuid.UUID,
+	*ExecuteSQLQueryRequestDTO,
+) (*SQLQueryResponseDTO, error) {
+	return nil, errRepositoryUnavailable
+}
+
+func (unavailableRepository) ExecutePatternsContext(
+	context.Context,
+	uuid.UUID,
+	*PatternsRequestDTO,
+) (*PatternsResponseDTO, error) {
+	return nil, errRepositoryUnavailable
+}
+
 func (unavailableRepository) ExecuteScopedSQL(
 	uuid.UUID,
 	*ScopedSQLRequestDTO,
@@ -142,6 +166,14 @@ func (unavailableRepository) ExecutePatternChanges(
 	uuid.UUID,
 	*PatternChangesRequestDTO,
 ) (*PatternChangesResponseDTO, error) {
+	return nil, errRepositoryUnavailable
+}
+
+func (unavailableRepository) ExecutePatternSamples(
+	context.Context,
+	uuid.UUID,
+	*PatternSamplesRequestDTO,
+) (map[string]PatternSampleDTO, error) {
 	return nil, errRepositoryUnavailable
 }
 

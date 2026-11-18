@@ -63,7 +63,7 @@ export const ProjectSelectionComponent = ({
         <Button
           type="primary"
           onClick={onCreateProject}
-          className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
         >
           Create project
         </Button>
@@ -135,7 +135,7 @@ export const ProjectSelectionComponent = ({
 
             <div className="border-t border-gray-100">
               <div
-                className="cursor-pointer px-3 py-2 text-sm text-emerald-600 hover:bg-gray-50 hover:text-emerald-700 dark:bg-gray-900 dark:hover:bg-gray-700"
+                className="text-accent-600 hover:text-accent-700 cursor-pointer px-3 py-2 text-sm hover:bg-gray-50 dark:bg-gray-900 dark:hover:bg-gray-700"
                 onClick={() => {
                   onCreateProject();
                   setIsDropdownOpen(false);

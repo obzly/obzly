@@ -26,8 +26,8 @@ type cloudProjectArgs struct {
 
 type costExploreArgs struct {
 	cloudProjectArgs
-	From        string   `json:"from"                  jsonschema:"First day, YYYY-MM-DD"`
-	To          string   `json:"to"                    jsonschema:"Last day, YYYY-MM-DD (inclusive)"`
+	From        string   `json:"from"                  jsonschema:"First day, YYYY-MM-DD (an RFC3339 time means its UTC day)"`
+	To          string   `json:"to"                    jsonschema:"Last day, YYYY-MM-DD (inclusive; an RFC3339 time means its UTC day)"`
 	Granularity string   `json:"granularity,omitempty" jsonschema:"daily (ranges up to 92 days), monthly (default), quarterly or yearly"`
 	GroupBy     string   `json:"groupBy,omitempty"     jsonschema:"provider, account, region, service (default), resource, charge, or tag:<key> for a tracked tag"`
 	Metric      string   `json:"metric,omitempty"      jsonschema:"effective (amortized, default) or billed"`
@@ -54,6 +54,7 @@ type costRecommendationsArgs struct {
 	Status string `json:"status,omitempty" jsonschema:"open (default), planned, done, dismissed or all"`
 	Kind   string `json:"kind,omitempty"   jsonschema:"rightsizing, idle, modernize or storage; omit for all"`
 	Limit  int    `json:"limit,omitempty"  jsonschema:"Max recommendations, largest savings first (default 50, max 200)"`
+	Cursor string `json:"cursor,omitempty" jsonschema:"nextCursor from the previous page (same other arguments)"`
 }
 
 type postureFindingsArgs struct {
@@ -63,34 +64,37 @@ type postureFindingsArgs struct {
 	Standard []string `json:"standard,omitempty" jsonschema:"aws-fsbp, cis-aws, mcsb, cis-azure, obzly-baseline"`
 	Search   string   `json:"search,omitempty"   jsonschema:"Matches the title, control or resource"`
 	Limit    int      `json:"limit,omitempty"    jsonschema:"Max findings, most severe first (default 50, max 200)"`
+	Cursor   string   `json:"cursor,omitempty"   jsonschema:"nextCursor from the previous page (same other arguments)"`
 }
 
 func (t *toolSet) registerCloud(server *mcp.Server, add func(name, description string) *mcp.Tool) {
 	mcp.AddTool(server, add("cost_summary",
 		"Cloud cost per currency: month to date, forecast, last month, the last 90 days and open anomalies. "+
 			"Amounts are never summed across currencies."+cloudDataNote),
-		wrap("cost_summary", t.costSummary))
+		wrap("cost_summary", untrusted(t.costSummary)))
 	mcp.AddTool(server, add("cost_explore",
 		"Cloud cost over a range grouped by one dimension, per period and currency (top groups; the rest add up "+
 			"as other). Periods without data are marked, not zero."+cloudDataNote),
-		wrap("cost_explore", t.costExplore))
+		wrap("cost_explore", untrusted(t.costExplore)))
 	mcp.AddTool(server, add("cost_anomalies",
 		"Days whose cost for a service or account was far from the usual for that weekday."+cloudDataNote),
-		wrap("cost_anomalies", t.costAnomalies))
+		wrap("cost_anomalies", untrusted(t.costAnomalies)))
 	mcp.AddTool(server, add("cost_budgets",
 		"A project's monthly cost budgets with this month's spend and projection."),
 		wrap("cost_budgets", t.costBudgets))
 	mcp.AddTool(server, add("cost_recommendations",
 		"Savings recommendations (rightsizing, idle, modernize, storage) with their status and expected savings, "+
-			"plus existing commitments flagged unused or ending soon. Obzly never changes anything."+cloudDataNote),
-		wrap("cost_recommendations", t.costRecommendations))
+			"plus existing commitments flagged unused or ending soon. Obzly never changes anything."+paged+
+			cloudDataNote),
+		wrap("cost_recommendations", untrusted(t.costRecommendations)))
 	mcp.AddTool(server, add("posture_scores",
 		"Cloud posture: each standard's score (passed of evaluated controls), open findings by severity and "+
 			"coverage."),
 		wrap("posture_scores", t.postureScores))
 	mcp.AddTool(server, add("posture_findings",
-		"Cloud posture findings, most severe first, with resource, control, source and status."+cloudDataNote),
-		wrap("posture_findings", t.postureFindings))
+		"Cloud posture findings, most severe first, with resource, control, source and status."+paged+
+			cloudDataNote),
+		wrap("posture_findings", untrusted(t.postureFindings)))
 	mcp.AddTool(server, add("posture_coverage",
 		"Per connection, account and region: whether posture is read natively, by the Obzly baseline, or not "+
 			"covered, and why."),
@@ -107,7 +111,15 @@ func (t *toolSet) costSummary(ctx context.Context, user *users_models.User, args
 }
 
 func (t *toolSet) costExplore(ctx context.Context, user *users_models.User, args costExploreArgs) (any, error) {
-	if args.From == "" || args.To == "" {
+	from, err := dayArg("from", args.From)
+	if err != nil {
+		return nil, err
+	}
+	to, err := dayArg("to", args.To)
+	if err != nil {
+		return nil, err
+	}
+	if from == "" || to == "" {
 		return nil, errors.New("from and to are required (YYYY-MM-DD)")
 	}
 	query, err := t.cloudQuery(ctx, user, args.cloudProjectArgs)
@@ -115,7 +127,7 @@ func (t *toolSet) costExplore(ctx context.Context, user *users_models.User, args
 		return nil, err
 	}
 	body := map[string]any{
-		"from": args.From, "to": args.To, "granularity": orDefault(args.Granularity, "monthly"),
+		"from": from, "to": to, "granularity": orDefault(args.Granularity, "monthly"),
 		"groupBy": orDefault(args.GroupBy, "service"), "metric": orDefault(args.Metric, "effective"),
 		"filters": map[string]any{"provider": args.Provider, "account": args.Account, "region": args.Region,
 			"service": args.Service},
@@ -131,7 +143,15 @@ func (t *toolSet) costAnomalies(ctx context.Context, user *users_models.User, ar
 	if err != nil {
 		return nil, err
 	}
-	for name, value := range map[string]string{"from": args.From, "to": args.To, "status": args.Status} {
+	from, err := dayArg("from", args.From)
+	if err != nil {
+		return nil, err
+	}
+	to, err := dayArg("to", args.To)
+	if err != nil {
+		return nil, err
+	}
+	for name, value := range map[string]string{"from": from, "to": to, "status": args.Status} {
 		if value != "" {
 			query.Set(name, value)
 		}
@@ -167,18 +187,18 @@ func (t *toolSet) costRecommendations(
 		return nil, err
 	}
 	status := orDefault(args.Status, "open")
-	limit := clampRows(args.Limit, defaultRows)
-	items := make([]map[string]any, 0, limit)
-	total := 0
+	items := make([]map[string]any, 0, len(recommendations.Items))
 	for _, item := range recommendations.Items {
 		if (status != "all" && item["status"] != status) || (args.Kind != "" && item["kind"] != args.Kind) {
 			continue
 		}
-		total++
-		if len(items) < limit {
-			delete(item, "evidence")
-			items = append(items, item)
-		}
+		delete(item, "evidence")
+		items = append(items, item)
+	}
+	filter := costRecommendationsArgs{cloudProjectArgs: args.cloudProjectArgs, Status: args.Status, Kind: args.Kind}
+	page, offset, err := pageOf("cost_recommendations", filter, args.Cursor, items, clampRows(args.Limit, defaultRows))
+	if err != nil {
+		return nil, err
 	}
 	var commitments struct {
 		Commitments []map[string]any `json:"commitments"`
@@ -191,8 +211,9 @@ func (t *toolSet) costRecommendations(
 	flagged := slices.DeleteFunc(commitments.Commitments, func(c map[string]any) bool {
 		return c["unused"] != true && c["endingSoon"] != true
 	})
-	return map[string]any{"total": total, "recommendations": items, "flaggedCommitments": flagged,
-		"coverage": commitments.Coverage, "refreshes": recommendations.Sections}, nil
+	return pageResult("cost_recommendations", filter, "recommendations", page, offset, len(items), map[string]any{
+		"flaggedCommitments": flagged, "coverage": commitments.Coverage, "refreshes": recommendations.Sections,
+	}), nil
 }
 
 func (t *toolSet) postureScores(ctx context.Context, user *users_models.User, args cloudProjectArgs) (any, error) {
@@ -209,6 +230,12 @@ func (t *toolSet) postureFindings(ctx context.Context, user *users_models.User, 
 	if err != nil {
 		return nil, err
 	}
+	filter := args
+	filter.Cursor, filter.Limit = "", 0
+	position, err := decodeCursor("posture_findings", filter, args.Cursor)
+	if err != nil {
+		return nil, err
+	}
 	status := orDefault(args.Status, "open")
 	if status == "all" {
 		status = ""
@@ -216,11 +243,18 @@ func (t *toolSet) postureFindings(ctx context.Context, user *users_models.User, 
 	body := map[string]any{
 		"filters": map[string]any{"status": status, "severity": args.Severity, "standard": args.Standard,
 			"search": args.Search},
-		"sort": "severity", "limit": clampRows(args.Limit, defaultRows),
+		"sort": "severity", "limit": clampRows(args.Limit, defaultRows), "offset": position.Offset,
 	}
-	var response any
-	return response, t.exec.siteCall(ctx, user, args.Site, http.MethodPost, "/posture/findings", query, body,
-		&response)
+	var response struct {
+		Total    int              `json:"total"`
+		Findings []map[string]any `json:"findings"`
+	}
+	if err := t.exec.siteCall(ctx, user, args.Site, http.MethodPost, "/posture/findings", query, body,
+		&response); err != nil {
+		return nil, err
+	}
+	return pageResult("posture_findings", filter, "findings", response.Findings, position.Offset, response.Total,
+		nil), nil
 }
 
 func (t *toolSet) postureCoverage(ctx context.Context, user *users_models.User, args cloudProjectArgs) (any, error) {

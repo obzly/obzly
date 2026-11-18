@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,9 @@ const (
 	TokenPrefix      = "obz_pat_"
 	OAuthTokenPrefix = "obz_oat_"
 	ScopeMCPRead     = "mcp:read"
+	// ScopeMCPWrite is opt-in: it adds the MCP write tools to a token that
+	// always has ScopeMCPRead too.
+	ScopeMCPWrite    = "mcp:write"
 	maxActivePerUser = 20
 	tokenRandomBytes = 32
 )
@@ -43,6 +47,10 @@ var (
 	ErrMFACodeInvalid  = errors.New("invalid MFA code")
 	ErrTooManyTokens   = fmt.Errorf("at most %d active access tokens per user - revoke one first", maxActivePerUser)
 	ErrTokenNotFound   = errors.New("access token not found")
+	// ErrWriteRequiresMFA: write access needs a creating session that passed MFA.
+	ErrWriteRequiresMFA = errors.New(
+		"write access needs two-factor authentication: turn it on in your profile (or sign in through a " +
+			"provider that enforces it), then create the token again")
 )
 
 // Create issues a personal access token. sessionSatisfiesMFA is whether the
@@ -54,6 +62,14 @@ func (s *AccessTokenService) Create(
 ) (*CreateAccessTokenResponseDTO, error) {
 	if err := s.requireMFAIfEnabled(user, request.MFACode); err != nil {
 		return nil, err
+	}
+	mfaSatisfied := user.MFAEnabled || sessionSatisfiesMFA
+	if request.Write && !mfaSatisfied {
+		return nil, ErrWriteRequiresMFA
+	}
+	scopes := ScopeMCPRead
+	if request.Write {
+		scopes = ScopeMCPRead + " " + ScopeMCPWrite
 	}
 
 	now := time.Now().UTC()
@@ -76,20 +92,24 @@ func (s *AccessTokenService) Create(
 		Name:        strings.TrimSpace(request.Name),
 		TokenPrefix: fullToken[:len(TokenPrefix)+6] + "...",
 		TokenHash:   hashToken(fullToken),
-		Scopes:      ScopeMCPRead,
+		Scopes:      scopes,
 		ExpiresAt:   now.AddDate(0, 0, request.ExpiresInDays),
 		CreatedAt:   now,
 		Kind:        KindPersonal,
 		// A Member's token must not later stand in for MFA once they
 		// are promoted to Admin.
-		MFASatisfied: user.MFAEnabled || sessionSatisfiesMFA,
+		MFASatisfied: mfaSatisfied,
 	}
 	if err := s.repository.Create(token); err != nil {
 		return nil, fmt.Errorf("failed to create access token: %w", err)
 	}
 
+	access := "read-only"
+	if request.Write {
+		access = "read and write"
+	}
 	s.auditLogService.WriteAuditLog(
-		fmt.Sprintf("Access token created: %s (%s)", token.Name, token.TokenPrefix), &user.ID, nil,
+		fmt.Sprintf("Access token created: %s (%s), %s", token.Name, token.TokenPrefix, access), &user.ID, nil,
 	)
 
 	return &CreateAccessTokenResponseDTO{Token: fullToken, AccessToken: toDTO(token)}, nil
@@ -237,6 +257,11 @@ func HashToken(token string) string {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+// HasScope reports whether a space-separated scope list holds scope.
+func HasScope(scopes []string, scope string) bool {
+	return slices.Contains(scopes, scope)
 }
 
 func splitScopes(scopes string) []string {

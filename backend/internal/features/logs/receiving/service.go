@@ -12,6 +12,7 @@ import (
 
 	"obzly/internal/broker"
 	api_keys "obzly/internal/features/api_keys"
+	"obzly/internal/features/ingestion"
 	logs_core "obzly/internal/features/logs/core"
 	logs_livetail "obzly/internal/features/logs/livetail"
 	projects_models "obzly/internal/features/projects/models"
@@ -78,10 +79,13 @@ func (s *LogReceivingService) SubmitLogs(
 	// Sampled-out logs still count as accepted: dropping them is policy,
 	// not an error the sender should retry.
 	accepted := len(validLogs)
+	sent := validLogs
 	validLogs = sampleLogs(validLogs, projects_services.GetRetentionPolicyService().LogSampleRules(projectID))
 	if err := s.queueValidLogs(validLogs, project); err != nil {
 		return nil, err
 	}
+	// What the source sent, sampled-out logs included.
+	ingestion.GetTracker().ObserveLogs(projectID, sent)
 	system_metrics.RecordIngestion(len(validLogs), acceptedBytes)
 	telemetry.IngestAcceptedRows.WithLabelValues(telemetry.SignalLogs).Add(float64(len(validLogs)))
 	telemetry.IngestRejectedRows.WithLabelValues(telemetry.SignalLogs).Add(float64(len(errors)))
@@ -611,7 +615,7 @@ func withoutAIEvents(items []*logs_core.LogItem) []*logs_core.LogItem {
 }
 
 // sampleLogs applies the project's log sampling rules: the first rule matching
-// a log's service and level sets the rate, decided by trace id when present
+// a log's service, level and pattern sets the rate, decided by trace id when present
 // (so a trace's logs go together, as with trace sampling), else by log id.
 func sampleLogs(logs []*logs_core.LogItem, rules projects_models.LogSampleRules) []*logs_core.LogItem {
 	if len(rules) == 0 {
@@ -620,7 +624,7 @@ func sampleLogs(logs []*logs_core.LogItem, rules projects_models.LogSampleRules)
 	kept := logs[:0:0]
 	for _, log := range logs {
 		service, _ := log.Fields["service_name"].(string)
-		rate := rules.RateFor(service, string(log.Level))
+		rate := rules.RateFor(service, string(log.Level), func() string { return logs_core.PatternHash(log.Message) })
 		key := log.TraceID
 		if key == "" {
 			key = log.ID.String()

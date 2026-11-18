@@ -1,6 +1,7 @@
 package servicemap_tests
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -104,6 +105,72 @@ func SetUpProjectWithSpansAndNetworkMetrics(
 		map[uuid.UUID][]*metrics_core.MetricSample{project.ID: networkSamples},
 	))
 	require.NoError(t, metrics_core.GetMetricCoreRepository().ForceFlush())
+
+	return owner, project
+}
+
+// SetUpProjectWithRedSpans seeds two traces: gateway (root SERVER, 900 ms)
+// calls payments over a traced client span (server.address
+// payments.prod.svc), orders-db (postgresql) and cache-1 (redis); payments
+// produces to kafka. Trace 2's payments span fails, and trace 1's call from
+// gateway to an untraced external API fails too.
+func SetUpProjectWithRedSpans(
+	t *testing.T,
+	router *gin.Engine,
+	testName string,
+) (owner *users_dto.SignInResponseDTO, project *projects_models.Project) {
+	t.Helper()
+
+	owner = users_testing.CreateTestUser(users_enums.UserRoleMember)
+	project, _ = projects_testing.CreateTestProjectWithToken(testName, owner.Token, router)
+
+	base := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	var spanList []*spans_core.Span
+	add := func(
+		traceID, spanID, parentID, service string,
+		kind spans_core.SpanKind,
+		status spans_core.StatusCode,
+		offset, duration time.Duration,
+		attributes map[string]any,
+	) {
+		spanList = append(spanList, &spans_core.Span{
+			ID: uuid.New(), ProjectID: project.ID, TraceID: traceID, SpanID: spanID, ParentSpanID: parentID,
+			Name: "op-" + spanID, ServiceName: service, Kind: kind,
+			StartTime: base.Add(offset), EndTime: base.Add(offset + duration),
+			StatusCode: status, Attributes: attributes,
+		})
+	}
+
+	ok, failed := spans_core.StatusCodeOK, spans_core.StatusCodeError
+	for i, paymentsStatus := range []spans_core.StatusCode{ok, failed} {
+		traceID := uuid.NewString()
+		p := fmt.Sprintf("t%d-", i)
+		at := time.Duration(i) * time.Second
+		add(traceID, p+"root", "", "gateway", spans_core.SpanKindServer, ok, at, 900*time.Millisecond, nil)
+		add(traceID, p+"call-pay", p+"root", "gateway", spans_core.SpanKindClient, ok,
+			at+10*time.Millisecond, 50*time.Millisecond, map[string]any{"server.address": "payments.prod.svc"})
+		add(traceID, p+"pay", p+"call-pay", "payments", spans_core.SpanKindServer, paymentsStatus,
+			at+15*time.Millisecond, 40*time.Millisecond, nil)
+		add(traceID, p+"pay-work", p+"pay", "payments", spans_core.SpanKindInternal, ok,
+			at+16*time.Millisecond, 5*time.Millisecond, nil)
+		add(traceID, p+"produce", p+"pay", "payments", spans_core.SpanKindProducer, ok,
+			at+20*time.Millisecond, 2*time.Millisecond, map[string]any{"messaging.system": "kafka"})
+		add(traceID, p+"db", p+"root", "gateway", spans_core.SpanKindClient, ok,
+			at+100*time.Millisecond, 10*time.Millisecond,
+			map[string]any{"db.system": "postgresql", "server.address": "orders-db"})
+		add(traceID, p+"cache", p+"root", "gateway", spans_core.SpanKindClient, ok,
+			at+200*time.Millisecond, time.Millisecond,
+			map[string]any{"db.system": "redis", "server.address": "cache-1"})
+		if i == 0 {
+			add(traceID, p+"ext", p+"root", "gateway", spans_core.SpanKindClient, failed,
+				at+300*time.Millisecond, 300*time.Millisecond, map[string]any{"server.address": "api.fabrikam.example"})
+		}
+	}
+
+	require.NoError(t, spans_core.GetSpanCoreRepository().StoreSpansBatch(
+		map[uuid.UUID][]*spans_core.Span{project.ID: spanList},
+	))
+	require.NoError(t, spans_core.GetSpanCoreRepository().ForceFlush())
 
 	return owner, project
 }

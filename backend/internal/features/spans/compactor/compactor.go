@@ -53,7 +53,9 @@ func NewSpanCompactor(dataDir string, opts ...Option) (*SpanCompactor, error) {
 		opt(&cfg)
 	}
 
-	compactor, err := segments.NewCompactor(segments.WithSpillDir(filepath.Join(dataDir, "spill")))
+	compactor, err := segments.NewCompactor(
+		segments.WithSpillDir(filepath.Join(dataDir, "spill")), segments.WithSharedHandle(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create segment compactor: %w", err)
 	}

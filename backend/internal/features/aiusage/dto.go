@@ -2,6 +2,10 @@ package aiusage
 
 import "time"
 
+// ComparePrevious (compare=previous) adds the totals of the equally long window just
+// before the range, for change pills.
+const ComparePrevious = "previous"
+
 type UsageFilter struct {
 	From     time.Time
 	To       time.Time
@@ -15,6 +19,8 @@ type OverviewRequest struct {
 	BucketSeconds int64
 	// GroupBy splits the timeseries: "model" (default) or "user".
 	GroupBy string
+	// Compare is "" or ComparePrevious.
+	Compare string
 }
 
 type EventsRequest struct {
@@ -111,6 +117,8 @@ type OverviewResponseDTO struct {
 	Tools         []ToolRowDTO         `json:"tools"`
 	Errors        []ErrorRowDTO        `json:"errors"`
 	FilterOptions FilterOptionsDTO     `json:"filterOptions"`
+	// Previous: the summary of the equally long window before the range (compare=previous only).
+	Previous *UsageSummaryDTO `json:"previous,omitempty"`
 }
 
 type SessionRowDTO struct {

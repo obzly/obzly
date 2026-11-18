@@ -53,6 +53,13 @@ jobs:
           while IFS= read -r line; do
             echo "::error::${line} (expected :v${VERSION})"; stale=1
           done < <(grep -rnE "image: ghcr\.io/obzly/obzly(-probe)?:" deploy/kubernetes | grep -v ":v${VERSION}\$" || true)
+          # The notes become the GitHub Release body, where repo-relative links don't resolve.
+          notes="docs/releases/v${VERSION}.md"
+          if [ -f "$notes" ]; then
+            while IFS= read -r line; do
+              echo "::error file=${notes}::relative link, use a full https://github.com/obzly/obzly/blob/main/... URL: ${line}"; stale=1
+            done < <(grep -nP '\]\((?!https?://|mailto:|#)' "$notes" || true)
+          fi
           exit $stale
 
   images:
@@ -123,7 +130,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache: false
 
       # Static binaries named without the version, so

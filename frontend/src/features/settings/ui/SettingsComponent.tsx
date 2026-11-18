@@ -1,8 +1,18 @@
 // On a control plane, Sites lives here instead of the sidebar.
-import { Tabs } from 'antd';
-import { useState } from 'react';
+import {
+  AppstoreOutlined,
+  BellOutlined,
+  CloudOutlined,
+  CloudSyncOutlined,
+  ClusterOutlined,
+  FileSearchOutlined,
+  SafetyCertificateOutlined,
+  SettingOutlined,
+} from '@ant-design/icons';
+import { type ReactNode, useState } from 'react';
 
 import { IS_CLOUD, IS_CONTROL_PLANE, SITE_NAME, getApplicationServer } from '../../../constants';
+import { PageHeader } from '../../../shared/ui/v2';
 import { NotificationSettingsComponent } from '../../alerts';
 import { CloudConnectionsComponent } from '../../infrastructure';
 import { SitesComponent } from '../../sites';
@@ -16,6 +26,17 @@ import { UpdatesComponent } from './UpdatesComponent';
 interface Props {
   contentHeight: number;
 }
+
+const TAB_ICON: Record<SettingsTab, ReactNode> = {
+  overview: <AppstoreOutlined />,
+  general: <SettingOutlined />,
+  sites: <ClusterOutlined />,
+  cloud: <CloudOutlined />,
+  notifications: <BellOutlined />,
+  identity: <SafetyCertificateOutlined />,
+  updates: <CloudSyncOutlined />,
+  audit: <FileSearchOutlined />,
+};
 
 export function SettingsComponent({ contentHeight }: Props) {
   const [tab, setTab] = useState<SettingsTab>(readSettingsTab);
@@ -36,45 +57,68 @@ export function SettingsComponent({ contentHeight }: Props) {
   })();
   const role = IS_CONTROL_PLANE ? 'control plane' : SITE_NAME ? `Site ${SITE_NAME}` : 'standalone';
 
-  const panes: { key: SettingsTab; children: React.ReactNode }[] = [
-    { key: 'overview', children: <SettingsOverviewComponent onNavigate={open} /> },
-    { key: 'general', children: <GeneralSettingsComponent /> },
+  const panes: { key: SettingsTab; render: () => ReactNode }[] = [
+    { key: 'overview', render: () => <SettingsOverviewComponent onNavigate={open} /> },
+    { key: 'general', render: () => <GeneralSettingsComponent /> },
     ...(IS_CONTROL_PLANE
       ? [
-          { key: 'sites' as const, children: <SitesComponent focusSiteId={focusSiteId} /> },
+          { key: 'sites' as const, render: () => <SitesComponent focusSiteId={focusSiteId} /> },
           // Shared by every use of a connection (inventory, cost, posture).
-          { key: 'cloud' as const, children: <CloudConnectionsComponent canManage /> },
+          { key: 'cloud' as const, render: () => <CloudConnectionsComponent canManage /> },
         ]
       : []),
-    { key: 'notifications', children: <NotificationSettingsComponent /> },
-    { key: 'identity', children: <IdentityAccessComponent /> },
-    { key: 'updates', children: <UpdatesComponent /> },
-    { key: 'audit', children: <AuditLogsComponent /> },
+    { key: 'notifications', render: () => <NotificationSettingsComponent /> },
+    { key: 'identity', render: () => <IdentityAccessComponent /> },
+    { key: 'updates', render: () => <UpdatesComponent /> },
+    { key: 'audit', render: () => <AuditLogsComponent /> },
   ];
+  // Only the active section is mounted, like the tabs it replaced.
+  const active = panes.find((pane) => pane.key === tab) ?? panes[0];
 
   return (
-    <div className="flex grow pl-3">
+    <div className="flex grow">
       <div
-        className="w-full grow overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
+        className="w-full grow overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
         style={{ height: contentHeight }}
       >
-        <div className="mb-1 flex flex-wrap items-baseline gap-3">
-          <h1 className="m-0 text-2xl font-bold">Obzly settings</h1>
-          <span className="text-sm text-gray-500 dark:text-gray-400">
-            {role} · {host}
-            {IS_CLOUD && ' · Obzly Cloud'}
-          </span>
+        <div className="flex flex-col gap-5">
+          <PageHeader
+            title="Obzly settings"
+            subtitle={
+              <>
+                {role} · {host}
+                {IS_CLOUD && ' · Obzly Cloud'}
+              </>
+            }
+          />
+          <div className="flex flex-wrap items-start gap-4">
+            <nav
+              aria-label="Settings sections"
+              className="flex max-w-full flex-[1_1_200px] flex-col gap-0.5 rounded-2xl border border-gray-200 bg-white p-2.5 lg:max-w-[240px] dark:border-gray-700 dark:bg-gray-800"
+            >
+              {panes.map((pane) => {
+                const selected = pane.key === active.key;
+                return (
+                  <button
+                    key={pane.key}
+                    type="button"
+                    aria-current={selected ? 'page' : undefined}
+                    onClick={() => open(pane.key)}
+                    className={`flex cursor-pointer items-center gap-2.5 rounded-[10px] border-0 px-3 py-2.5 text-left text-sm ${
+                      selected
+                        ? 'bg-[var(--v2-ok-soft)] font-semibold text-[var(--v2-accent)]'
+                        : 'bg-transparent text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700/40'
+                    }`}
+                  >
+                    {TAB_ICON[pane.key]}
+                    <span>{TAB_LABEL[pane.key]}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="flex min-w-0 flex-[999_1_640px] flex-col gap-4">{active.render()}</div>
+          </div>
         </div>
-        <Tabs
-          activeKey={tab}
-          onChange={(key) => open(key as SettingsTab)}
-          destroyOnHidden
-          items={panes.map((pane) => ({
-            key: pane.key,
-            label: TAB_LABEL[pane.key],
-            children: pane.children,
-          }))}
-        />
       </div>
     </div>
   );

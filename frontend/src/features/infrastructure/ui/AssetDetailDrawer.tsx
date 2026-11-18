@@ -136,14 +136,18 @@ export const AssetDetailDrawer = ({
       destroyOnHidden
       title={
         asset ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <HealthDot health={asset.health} size={14} />
-            <span className="text-lg font-semibold">{asset.name}</span>
-            <span className="inline-flex items-center gap-1.5 text-xs font-normal text-gray-500 dark:text-gray-400">
-              <KindIcon asset={asset} />
-              {kindLabel(asset)}
-            </span>
-            <LifecycleTag state={asset.state} />
+          <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <HealthDot health={asset.health} size={12} />
+              <KindIcon asset={asset} size={28} />
+              <span className="font-mono text-lg font-semibold text-gray-900 dark:text-gray-50">
+                {asset.name}
+              </span>
+              <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                {kindLabel(asset)}
+              </span>
+              <LifecycleTag state={asset.state} />
+            </div>
             <span className="font-mono text-xs font-normal text-gray-500 dark:text-gray-400">
               {[multiSite ? siteName : '', asset.projectName, asset.cluster, asset.namespace]
                 .filter(Boolean)
@@ -203,7 +207,7 @@ export const AssetDetailDrawer = ({
                   {asset.reasons.map((reason, index) => (
                     <li
                       key={index}
-                      className="flex items-baseline gap-2 rounded-md bg-gray-50 px-2.5 py-2 text-sm dark:bg-gray-700/40"
+                      className="flex items-baseline gap-2 rounded-xl bg-gray-50 px-3 py-2 text-sm dark:bg-gray-900"
                     >
                       <HealthDot health={reason.health} size={8} />
                       {reason.text}
@@ -243,9 +247,13 @@ export const AssetDetailDrawer = ({
                     key={child.id}
                     type="button"
                     onClick={() => onOpenAsset(siteId, siteName, child.id)}
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-0.5 text-xs hover:border-emerald-500 dark:border-gray-600 dark:bg-gray-800"
+                    className="hover:border-accent-500 inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs dark:border-gray-700 dark:bg-gray-900"
                   >
                     <HealthDot health={child.health} size={7} />
+                    <KindIcon
+                      asset={{ kind: child.kind, subtype: child.subtype, attributes: {} }}
+                      size={14}
+                    />
                     {child.name}
                   </button>
                 ))}
@@ -257,23 +265,32 @@ export const AssetDetailDrawer = ({
           </div>
 
           {queries.length > 0 && (
-            <div>
-              <div className="mb-2 flex justify-end">
+            <Panel
+              title="Usage"
+              subtitle={`${queries.map((chart) => chart.title).join(', ')} over the range`}
+              extra={
                 <Segmented<RangeKey>
                   size="small"
                   value={range}
                   onChange={setRange}
                   options={['1h', '6h', '24h', '7d']}
                 />
-              </div>
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              }
+            >
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
                 {queries.map((chart) => (
-                  <Panel key={chart.key} title={chart.title} subtitle={chart.subtitle}>
+                  <div key={chart.key} className="flex min-w-0 flex-col gap-0.5">
+                    <strong className="text-sm font-semibold text-gray-900 dark:text-gray-50">
+                      {chart.title}
+                    </strong>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {chart.subtitle}
+                    </span>
                     <LineChart chart={chart} series={series} window={chartWindow} />
-                  </Panel>
+                  </div>
                 ))}
               </div>
-            </div>
+            </Panel>
           )}
 
           {asset.attributes.cloud_resource_id && (
@@ -356,16 +373,16 @@ const Stats = ({ asset }: { asset: SiteAsset }) => {
     ['Last seen', since(asset.lastSeen)],
   ];
   return (
-    <div className="grid grid-cols-2 rounded-lg border border-gray-200 bg-white sm:grid-cols-4 lg:grid-cols-7 dark:border-gray-700 dark:bg-gray-800">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
       {items.map(([label, value]) => (
         <div
           key={label}
-          className="border-gray-200 px-3.5 py-2.5 lg:border-r lg:last:border-r-0 dark:border-gray-700"
+          className="flex min-w-0 flex-col gap-1 rounded-2xl border border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-800"
         >
-          <div className="text-[11px] tracking-wider text-gray-500 uppercase dark:text-gray-400">
-            {label}
+          <div className="text-xs text-gray-500 dark:text-gray-400">{label}</div>
+          <div className="text-lg font-semibold text-gray-900 tabular-nums dark:text-gray-50">
+            {value}
           </div>
-          <div className="text-lg font-semibold tabular-nums">{value}</div>
         </div>
       ))}
     </div>
@@ -376,7 +393,7 @@ const RefLink = ({ item, onClick }: { item: AssetRef; onClick: () => void }) => 
   <button
     type="button"
     onClick={onClick}
-    className="inline-flex cursor-pointer items-center gap-1 border-b border-dashed border-gray-300 text-gray-900 hover:border-emerald-500 hover:text-emerald-600 dark:border-gray-600 dark:text-gray-100"
+    className="hover:border-accent-500 hover:text-accent-600 inline-flex cursor-pointer items-center gap-1 border-b border-dashed border-gray-300 text-gray-900 dark:border-gray-600 dark:text-gray-100"
   >
     <KindIcon asset={{ kind: item.kind, subtype: item.subtype, attributes: {} }} size={14} />
     {item.name}
@@ -413,8 +430,6 @@ const Attribute = ({ name, value }: { name: string; value: string }) => (
   </>
 );
 
-const LINE_COLORS = ['#059669', '#3b82f6', '#f59e0b', '#a855f7'];
-
 const LineChart = ({
   chart,
   series,
@@ -436,7 +451,7 @@ const LineChart = ({
           showSymbol: false,
           smooth: true,
           lineStyle: { width: 1.6 },
-          color: LINE_COLORS[(index + n) % LINE_COLORS.length],
+          color: colors.series[(index + n) % colors.series.length],
           data: s.points.map((point) => [new Date(point.timestamp).getTime(), point.value]),
         })),
       ),

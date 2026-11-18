@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"obzly/internal/config"
+	"obzly/internal/features/alerting"
 	correlation_core "obzly/internal/features/correlation/core"
 	logs_core "obzly/internal/features/logs/core"
 	projects_services "obzly/internal/features/projects/services"
@@ -119,13 +120,13 @@ func (s *CorrelationBackgroundService) correlationWorker() {
 			return
 
 		case <-ticker.C:
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "correlation-scan",
-				correlationInterval,
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "correlation-scan",
+				correlationInterval, correlationInterval,
 				func(ctx context.Context) error { return s.correlateAllProjects() })
 			if err != nil {
 				s.logger.Error("Error during correlation scan", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping correlation pass - another replica holds the lock")
+				s.logger.Debug("Skipping correlation pass - ran or is running on another replica this interval")
 			}
 		}
 	}
@@ -148,6 +149,10 @@ func (s *CorrelationBackgroundService) correlateAllProjects() error {
 				slog.String("error", err.Error()))
 		}
 		processed++
+	}
+
+	if err := alerting.EndQuietIncidents(time.Now().UTC()); err != nil {
+		s.logger.Error("Failed to end quiet incidents", slog.String("error", err.Error()))
 	}
 
 	s.logger.Info("Correlation scan completed",
@@ -186,13 +191,22 @@ func (s *CorrelationBackgroundService) correlateProject(projectID uuid.UUID) err
 		return fmt.Errorf("failed to scan project signals: %w", err)
 	}
 
+	observed := make([]alerting.ObservedSession, 0, len(groups))
 	for _, group := range groups {
 		session, signals := group.toSession(projectID)
 		if err := correlation_core.GetIncidentSessionRepository().CreateSession(session, signals); err != nil {
 			s.logger.Error("Failed to persist incident session",
 				slog.String("projectId", projectID.String()),
 				slog.String("error", err.Error()))
+			continue
 		}
+		observed = append(observed, group.observed(session))
+	}
+	// Incident notifications never fail the scan: the sessions are stored.
+	if err := alerting.ObserveIncidentSessions(projectID, observed, time.Now().UTC()); err != nil {
+		s.logger.Error("Failed to queue incident notifications",
+			slog.String("projectId", projectID.String()),
+			slog.String("error", err.Error()))
 	}
 
 	if budgetExceeded {
@@ -278,6 +292,27 @@ func (g *sessionGroup) toSession(
 	}
 
 	return session, signals
+}
+
+// observed is the stored session as incident notifications see it.
+func (g *sessionGroup) observed(session *correlation_core.IncidentSession) alerting.ObservedSession {
+	services := make([]string, 0, len(g.services))
+	for name := range g.services {
+		services = append(services, name)
+	}
+	sort.Strings(services)
+	result := alerting.ObservedSession{
+		ID: session.ID, Services: services, WindowStart: session.WindowStart, WindowEnd: session.WindowEnd,
+	}
+	for _, sig := range g.signals {
+		switch sig.Type {
+		case correlation_core.SignalTypeLog:
+			result.ErrorLogs++
+		case correlation_core.SignalTypeSpan:
+			result.ErrorSpans++
+		}
+	}
+	return result
 }
 
 // primaryService is the lexicographically first member: a session has one

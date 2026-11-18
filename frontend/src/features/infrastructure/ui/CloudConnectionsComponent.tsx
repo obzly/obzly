@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { type CloudConnection, cloudConnectionsApi } from '../../../entity/cloud';
 import { type Destination, type Probe, syntheticsApi } from '../../../entity/synthetics';
+import { Card } from '../../../shared/ui/v2';
 import { IconAction } from '../../synthetics';
 import { HEALTH_COLOR } from '../lib/assets';
 import { CloudWizard } from './CloudWizard';
@@ -180,7 +181,7 @@ export const CloudConnectionsComponent = ({ canManage, onManage }: Props) => {
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <Card bodyClassName="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
         <span className="max-w-3xl flex-1 text-sm text-gray-500 dark:text-gray-400">
           Read-only access to AWS accounts and Azure subscriptions. A probe group scans each one and
@@ -244,9 +245,12 @@ export const CloudConnectionsComponent = ({ canManage, onManage }: Props) => {
               const status = statusOf(connection);
               return (
                 <Tooltip title={status.detail}>
-                  <span className="inline-flex items-center gap-2 text-sm">
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap"
+                    style={{ color: status.color, background: `${status.color}1f` }}
+                  >
                     <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      className="inline-block h-2 w-2 rounded-full"
                       style={{ background: status.color }}
                     />
                     {status.label}
@@ -260,9 +264,13 @@ export const CloudConnectionsComponent = ({ canManage, onManage }: Props) => {
             key: 'name',
             render: (_, connection) => (
               <span className="inline-flex items-center gap-2">
-                <ProviderLogo provider={connection.provider} />
+                <span className="inline-flex h-9 w-12 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900">
+                  <ProviderLogo provider={connection.provider} />
+                </span>
                 <span>
-                  <span className="font-medium">{connection.name}</span>
+                  <span className="font-semibold text-gray-900 dark:text-gray-50">
+                    {connection.name}
+                  </span>
                   <span className="block font-mono text-xs text-gray-500 dark:text-gray-400">
                     {connection.scope.replace('_', ' ')} {connection.scopeId}
                   </span>
@@ -275,7 +283,11 @@ export const CloudConnectionsComponent = ({ canManage, onManage }: Props) => {
             key: 'uses',
             width: 130,
             render: (_, connection) =>
-              connection.scanTypes.map((use) => <Tag key={use}>{USE_LABEL[use] ?? use}</Tag>),
+              connection.scanTypes.map((use) => (
+                <Tag key={use} className="rounded-lg">
+                  {USE_LABEL[use] ?? use}
+                </Tag>
+              )),
           },
           {
             title: 'Access',
@@ -492,6 +504,6 @@ export const CloudConnectionsComponent = ({ canManage, onManage }: Props) => {
           }}
         />
       )}
-    </div>
+    </Card>
   );
 };

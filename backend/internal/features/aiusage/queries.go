@@ -42,23 +42,7 @@ func overviewStatements(request *OverviewRequest) []logs_core.ScopedSQLStatement
 
 	cte, args := eventsCTE(&request.UsageFilter)
 	req := quote(eventAPIRequest)
-
-	summary := cte + `SELECT
-	count(*) FILTER (WHERE ev = ` + req + `),
-	coalesce(sum(` + num("cost_usd_micros") + `) FILTER (WHERE ev = ` + req + `), 0) / 1e6,
-	coalesce(sum(` + num("input_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
-	coalesce(sum(` + num("output_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
-	coalesce(sum(` + num("cache_read_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
-	coalesce(sum(` + num("cache_creation_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
-	count(DISTINCT ` + str("session_id") + `),
-	count(DISTINCT ` + str("user_email") + `),
-	count(*) FILTER (WHERE ev = ` + quote(eventUserPrompt) + `),
-	count(*) FILTER (WHERE ev = ` + quote(eventAPIError) + `),
-	count(*) FILTER (WHERE ev = ` + quote(eventToolResult) + `),
-	coalesce(avg(` + num("duration_ms") + `) FILTER (WHERE ev = ` + req + `), 0),
-	coalesce(quantile_cont(` + num("ttft_ms") + `, 0.5) FILTER (WHERE ev = ` + req + `), 0),
-	coalesce(epoch_ms(max(ts)::TIMESTAMP), 0)
-FROM e`
+	summary := summaryStatement(&request.UsageFilter)
 
 	timeseries := cte + `SELECT
 	epoch_ms(time_bucket(to_seconds(?::BIGINT), ts::TIMESTAMP)) AS bucket,
@@ -95,7 +79,7 @@ GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT ` + fmt.Sprint(maxErrorRows)
 FROM logs`
 
 	return []logs_core.ScopedSQLStatement{
-		{SQL: summary, Args: args},
+		summary,
 		{SQL: timeseries, Args: append(append([]any{}, args...), request.BucketSeconds)},
 		{SQL: breakdownSQL(cte, "user_email"), Args: args},
 		{SQL: breakdownSQL(cte, "model"), Args: args},
@@ -103,6 +87,28 @@ FROM logs`
 		{SQL: errors, Args: args},
 		{SQL: options},
 	}
+}
+
+// summaryStatement is the overview's one-row total: the columns summaryOf reads.
+func summaryStatement(filter *UsageFilter) logs_core.ScopedSQLStatement {
+	cte, args := eventsCTE(filter)
+	req := quote(eventAPIRequest)
+	return logs_core.ScopedSQLStatement{SQL: cte + `SELECT
+	count(*) FILTER (WHERE ev = ` + req + `),
+	coalesce(sum(` + num("cost_usd_micros") + `) FILTER (WHERE ev = ` + req + `), 0) / 1e6,
+	coalesce(sum(` + num("input_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
+	coalesce(sum(` + num("output_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
+	coalesce(sum(` + num("cache_read_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
+	coalesce(sum(` + num("cache_creation_tokens") + `) FILTER (WHERE ev = ` + req + `), 0),
+	count(DISTINCT ` + str("session_id") + `),
+	count(DISTINCT ` + str("user_email") + `),
+	count(*) FILTER (WHERE ev = ` + quote(eventUserPrompt) + `),
+	count(*) FILTER (WHERE ev = ` + quote(eventAPIError) + `),
+	count(*) FILTER (WHERE ev = ` + quote(eventToolResult) + `),
+	coalesce(avg(` + num("duration_ms") + `) FILTER (WHERE ev = ` + req + `), 0),
+	coalesce(quantile_cont(` + num("ttft_ms") + `, 0.5) FILTER (WHERE ev = ` + req + `), 0),
+	coalesce(epoch_ms(max(ts)::TIMESTAMP), 0)
+FROM e`, Args: args}
 }
 
 func sessionsStatements(request *SessionsRequest) []logs_core.ScopedSQLStatement {

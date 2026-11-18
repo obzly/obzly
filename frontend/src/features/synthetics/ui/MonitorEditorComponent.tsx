@@ -287,8 +287,8 @@ export const MonitorEditorComponent = ({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 pb-3 dark:border-gray-700">
-        <Button type="text" icon={<ArrowLeftOutlined />} onClick={leave}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button icon={<ArrowLeftOutlined />} onClick={leave}>
           Monitors
         </Button>
         <span className="text-gray-500 dark:text-gray-400">

@@ -18,6 +18,17 @@ type wireFragment struct {
 	SQL      string                    `json:"sql"`
 	Args     []wireArg                 `json:"args"`
 	Tokens   []string                  `json:"tokens,omitempty"`
+	// Shipped are the coordinator's local files, uploaded to the executor
+	// (Results/Ship) before the fragment: read first, as LocalFiles are.
+	// Only executors advertising shipCapability are sent any - an older one
+	// would ignore the field and silently miss those rows.
+	Shipped []wireShipped `json:"shipped,omitempty"`
+}
+
+// wireShipped is one shipped file: the id Results/Ship returned for it.
+type wireShipped struct {
+	ID     string `json:"id"`
+	Legacy bool   `json:"legacy,omitempty"`
 }
 
 // wireArg keeps an argument's type, so a time binds as a timestamp rather
@@ -34,11 +45,15 @@ type wireReply struct {
 	Empty    bool   `json:"empty,omitempty"`
 }
 
-func encodeFragment(fragment Fragment) ([]byte, error) {
-	if len(fragment.LocalFiles) > 0 {
+// encodeFragment: shipped stands for fragment's LocalFiles, already on the
+// executor; local files not shipped can't run remotely.
+func encodeFragment(fragment Fragment, shipped []wireShipped) ([]byte, error) {
+	if len(fragment.LocalFiles) != len(shipped) {
 		return nil, fmt.Errorf("fragment %s has local files and cannot run remotely", fragment.ID)
 	}
-	wire := wireFragment{ID: fragment.ID, Stream: fragment.Stream, SQL: fragment.SQL, Tokens: fragment.Tokens}
+	wire := wireFragment{
+		ID: fragment.ID, Stream: fragment.Stream, SQL: fragment.SQL, Tokens: fragment.Tokens, Shipped: shipped,
+	}
 	for _, record := range fragment.Segments {
 		stripped := *record
 		stripped.Stats = nil
@@ -57,20 +72,22 @@ func encodeFragment(fragment Fragment) ([]byte, error) {
 	return json.Marshal(wire)
 }
 
-func decodeFragment(data []byte) (Fragment, error) {
+// decodeFragment also returns the fragment's shipped files, which the
+// executor turns into LocalFiles.
+func decodeFragment(data []byte) (Fragment, []wireShipped, error) {
 	var wire wireFragment
 	if err := json.Unmarshal(data, &wire); err != nil {
-		return Fragment{}, fmt.Errorf("invalid fragment: %w", err)
+		return Fragment{}, nil, fmt.Errorf("invalid fragment: %w", err)
 	}
 	fragment := Fragment{ID: wire.ID, Stream: wire.Stream, Segments: wire.Segments, SQL: wire.SQL, Tokens: wire.Tokens}
 	for _, arg := range wire.Args {
 		decoded, err := decodeArg(arg)
 		if err != nil {
-			return Fragment{}, err
+			return Fragment{}, nil, err
 		}
 		fragment.Args = append(fragment.Args, decoded)
 	}
-	return fragment, nil
+	return fragment, wire.Shipped, nil
 }
 
 func encodeArg(arg any) (wireArg, error) {

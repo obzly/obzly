@@ -6,6 +6,7 @@ import (
 
 	"obzly/internal/broker"
 	api_keys "obzly/internal/features/api_keys"
+	"obzly/internal/features/ingestion"
 	metrics_core "obzly/internal/features/metrics/core"
 	"obzly/internal/features/otlp"
 	"obzly/internal/ingest"
@@ -83,6 +84,7 @@ func (s *RemoteWriteService) Write(apiKey string, request *prompb.WriteRequest) 
 		return 0, 0, fmt.Errorf("failed to store metric samples: %w", err)
 	}
 
+	ingestion.GetTracker().ObserveSamples(resolved.ProjectID, converted)
 	telemetry.IngestAcceptedRows.WithLabelValues(telemetry.SignalMetrics).Add(float64(len(converted)))
 	return len(converted), 0, nil
 }

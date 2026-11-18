@@ -135,6 +135,38 @@ func (r *IncidentSessionRepository) GetSessionDetail(
 	}, nil
 }
 
+func (r *IncidentSessionRepository) GetSessionSignals(
+	projectID, sessionID uuid.UUID,
+) (*correlation_core.IncidentSession, []*correlation_core.IncidentSessionSignal, error) {
+	var session sessionRow
+	err := storage.GetDb().
+		Where("id = ? AND project_id = ?", sessionID, projectID).
+		First(&session).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, correlation_core.ErrSessionNotFound
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load incident session: %w", err)
+	}
+
+	var rows []signalRow
+	if err := storage.GetDb().Where("session_id = ?", sessionID).Find(&rows).Error; err != nil {
+		return nil, nil, fmt.Errorf("failed to load incident session signals: %w", err)
+	}
+
+	signals := make([]*correlation_core.IncidentSessionSignal, 0, len(rows))
+	for _, row := range rows {
+		signals = append(signals, &correlation_core.IncidentSessionSignal{
+			ID:         row.ID,
+			SessionID:  row.SessionID,
+			SignalType: correlation_core.SignalType(row.SignalType),
+			SignalRef:  row.SignalRef,
+			OccurredAt: row.OccurredAt,
+		})
+	}
+	return session.toModel(), signals, nil
+}
+
 // rehydrateSignal is best-effort: a row that is gone (e.g. retention) comes
 // back with Available: false rather than failing the response.
 func rehydrateSignal(projectID uuid.UUID, row signalRow) correlation_core.SignalDetailDTO {

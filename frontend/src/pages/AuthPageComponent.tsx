@@ -53,7 +53,7 @@ function SiteIdentityBanner(): React.JSX.Element | null {
           This is a local sign-in for this Site. Most users sign in through the{' '}
           <a
             href={CONTROL_PLANE_URL}
-            className="text-emerald-600 hover:underline"
+            className="text-accent-600 hover:underline"
             rel="noopener noreferrer"
           >
             control plane

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"obzly/internal/telemetry"
@@ -76,19 +77,28 @@ var selectsAll = regexp.MustCompile(`(?i)select\s+(distinct\s+)?\*|,\s*\*\s*(,|f
 // partialLocks serializes work on one partial file within this process.
 var partialLocks sync.Map // path -> *sync.Mutex
 
-// metadataDB reads Parquet footers (parquet_metadata).
+// metadataDB reads Parquet footers (parquet_metadata); footerOpened tells
+// the memory budget it is registered already.
 var (
 	metadataOnce sync.Once
 	metadataDB   *sql.DB
 	errMetadata  error
+	footerOpened atomic.Bool
 )
 
 func footerDB() (*sql.DB, error) {
 	metadataOnce.Do(func() {
 		metadataDB, errMetadata = sql.Open("duckdb", "")
-		if errMetadata == nil {
-			metadataDB.SetMaxOpenConns(2)
+		if errMetadata != nil {
+			return
 		}
+		metadataDB.SetMaxOpenConns(2)
+		if errMetadata = SetHandleLimits(metadataDB, metadataMemoryLimit, metadataThreads); errMetadata != nil {
+			_ = metadataDB.Close()
+			return
+		}
+		telemetry.RegisterDuckDB("parquet_footer", metadataDB, MemoryLimitBytes(metadataMemoryLimit))
+		footerOpened.Store(true)
 	})
 	return metadataDB, errMetadata
 }

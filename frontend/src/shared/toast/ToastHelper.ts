@@ -4,10 +4,10 @@ export class ToastHelper {
 
     if (rootDiv) {
       const div = document.createElement('div');
-      div.style.backgroundColor = '#fff';
-      div.style.color = '#000';
+      div.style.backgroundColor = 'var(--v2-panel)';
+      div.style.color = 'var(--v2-text)';
       div.style.padding = '10px';
-      div.style.border = '1px solid gainsboro';
+      div.style.border = '1px solid var(--v2-border)';
       div.style.position = 'fixed';
       div.style.bottom = '-100px';
       div.style.maxWidth = '350px';

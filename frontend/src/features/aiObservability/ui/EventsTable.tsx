@@ -5,7 +5,8 @@ import dayjs from 'dayjs';
 import React, { useEffect, useState } from 'react';
 
 import { type AiUsageFilter, type AiUsageSessionEvent, aiUsageApi } from '../../../entity/aiUsage';
-import { colorFor, describeEvent } from '../lib/describeEvent';
+import { describeEvent, toneFor } from '../lib/describeEvent';
+import { Pill } from './bits';
 
 interface Props {
   projectId: string;
@@ -18,7 +19,7 @@ type EventRow = AiUsageSessionEvent & { key: string };
 const PAGE_SIZE = 50;
 
 const FieldsTable = ({ fields }: { fields: Record<string, string> }): React.JSX.Element => (
-  <div className="grid grid-cols-[minmax(160px,max-content)_1fr] gap-x-4 gap-y-1 font-mono text-xs">
+  <div className="grid grid-cols-[minmax(160px,max-content)_1fr] gap-x-4 gap-y-1 rounded-lg bg-[var(--v2-panel2)] p-3 font-mono text-xs">
     {Object.keys(fields)
       .sort()
       .map((key) => (
@@ -85,7 +86,7 @@ export const EventsTable = ({ projectId, filter, refreshToken }: Props): React.J
       title: 'Event',
       dataIndex: 'event',
       width: 190,
-      render: (event: string, row) => <Tag color={colorFor(event, row.fields)}>{event}</Tag>,
+      render: (event: string, row) => <Pill tone={toneFor(event, row.fields)}>{event}</Pill>,
     },
     {
       title: 'Session',
@@ -94,7 +95,7 @@ export const EventsTable = ({ projectId, filter, refreshToken }: Props): React.J
       render: (_, row) =>
         row.fields.session_id ? (
           <a
-            className="font-mono text-xs"
+            className="font-mono text-xs !text-[var(--v2-accent)]"
             onClick={(e) => {
               e.stopPropagation();
               setSessionId(row.fields.session_id);
@@ -121,6 +122,9 @@ export const EventsTable = ({ projectId, filter, refreshToken }: Props): React.J
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h2 className="m-0 mr-1.5 text-[15px] font-semibold text-gray-900 dark:text-gray-50">
+          Events
+        </h2>
         <Select
           allowClear
           size="small"
@@ -146,7 +150,7 @@ export const EventsTable = ({ projectId, filter, refreshToken }: Props): React.J
           {total.toLocaleString()} events
         </span>
       </div>
-      {error && <div className="mb-2 text-sm text-red-600 dark:text-red-400">{error}</div>}
+      {error && <div className="mb-2 text-sm text-[var(--v2-red)]">{error}</div>}
       <Table<EventRow>
         size="small"
         columns={columns}

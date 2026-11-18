@@ -53,7 +53,7 @@ func ApplyManagedRules(alerts []sharedconfig.MonitorAlert) error {
 				rule.Query.PromQL != alert.PromQL || rule.Comparison != alert.Comparison ||
 				rule.Threshold != alert.Threshold || rule.RepeatSeconds != alert.RepeatSeconds ||
 				rule.IntervalSeconds != alert.IntervalSeconds || rule.Labels["severity"] != alert.Severity ||
-				rule.Labels["check_id"] != alert.CheckID ||
+				rule.Labels["check_id"] != alert.CheckID || rule.Severity != ruleSeverity("", Labels{"severity": alert.Severity}) ||
 				!sameChannels(tx, rule.ID, alert.ChannelIDs)
 			if !changed {
 				continue
@@ -67,6 +67,7 @@ func ApplyManagedRules(alerts []sharedconfig.MonitorAlert) error {
 			if alert.CheckID != "" {
 				rule.Labels["check_id"] = alert.CheckID
 			}
+			rule.Severity = ruleSeverity("", rule.Labels)
 			rule.Summary, rule.ChannelIDs, rule.UpdatedAt = alert.Summary, alert.ChannelIDs, now
 			rule.LastEvalAt = nil
 			if err := saveRuleTx(tx, rule); err != nil {

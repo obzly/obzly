@@ -11,6 +11,7 @@ import type {
   OrgPlanLimits,
   OrgRole,
   Organization,
+  SCIMEvent,
   SCIMToken,
   Team,
   TeamGrant,
@@ -29,14 +30,19 @@ export const organizationsApi = {
   createOrg: (name: string, slug: string): Promise<Organization> =>
     apiHelper.fetchPostJson(base(), withBody({ name, slug })),
   getOrg: (orgId: string): Promise<OrgDetail> =>
-    apiHelper.fetchGetJson(`${base()}/${orgId}`, new RequestOptions()),
+    apiHelper
+      .fetchGetJson<OrgDetail>(`${base()}/${orgId}`, new RequestOptions())
+      .then((org) => ({ ...org, sites: org.sites ?? [] })),
   renameOrg: (orgId: string, name: string): Promise<Organization> =>
     apiHelper.fetchPutJson(`${base()}/${orgId}`, withBody({ name })),
   deleteOrg: (orgId: string): Promise<{ message: string }> =>
     apiHelper.fetchDeleteJson(`${base()}/${orgId}`, new RequestOptions()),
 
+  // Go sends an empty list as null.
   listMembers: (orgId: string): Promise<OrgMember[]> =>
-    apiHelper.fetchGetJson(`${base()}/${orgId}/members`, new RequestOptions()),
+    apiHelper
+      .fetchGetJson<OrgMember[] | null>(`${base()}/${orgId}/members`, new RequestOptions())
+      .then((members) => members ?? []),
   setMember: (orgId: string, member: { userId?: string; email?: string; role: OrgRole }) =>
     apiHelper.fetchPostJson(`${base()}/${orgId}/members`, withBody(member)),
   removeMember: (orgId: string, userId: string) =>
@@ -48,7 +54,15 @@ export const organizationsApi = {
     ),
 
   listTeams: (orgId: string): Promise<Team[]> =>
-    apiHelper.fetchGetJson(`${base()}/${orgId}/teams`, new RequestOptions()),
+    apiHelper
+      .fetchGetJson<Team[] | null>(`${base()}/${orgId}/teams`, new RequestOptions())
+      .then((teams) =>
+        (teams ?? []).map((team) => ({
+          ...team,
+          members: team.members ?? [],
+          grants: team.grants ?? [],
+        })),
+      ),
   createTeam: (orgId: string, name: string): Promise<Team> =>
     apiHelper.fetchPostJson(`${base()}/${orgId}/teams`, withBody({ name })),
   deleteTeam: (orgId: string, teamId: string) =>
@@ -77,6 +91,14 @@ export const organizationsApi = {
     apiHelper.fetchPostJson(`${base()}/${orgId}/scim-tokens`, withBody({ name })),
   deleteSCIMToken: (orgId: string, tokenId: string) =>
     apiHelper.fetchDeleteJson(`${base()}/${orgId}/scim-tokens/${tokenId}`, new RequestOptions()),
+  /** The latest SCIM provisioning changes, newest first (owners and global admins). */
+  listSCIMEvents: (orgId: string, limit = 20): Promise<SCIMEvent[]> =>
+    apiHelper
+      .fetchGetJson<SCIMEvent[] | null>(
+        `${base()}/${orgId}/scim-events?limit=${limit}`,
+        new RequestOptions(),
+      )
+      .then((events) => events ?? []),
   /** The SCIM 2.0 base URL to give an IdP. */
   scimBaseUrl: () => `${getApplicationServer()}/scim/v2`,
   removeGrant: (orgId: string, teamId: string, grantId: string) =>

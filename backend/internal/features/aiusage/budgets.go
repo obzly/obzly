@@ -521,6 +521,7 @@ func budgetRule(budget *Budget) *alerting.ManagedRule {
 		IntervalSeconds: budgetEvalSeconds,
 		RepeatSeconds:   0,
 		Labels:          alerting.Labels{"source": "ai_budget"},
+		Severity:        alerting.SeverityHigh,
 		Summary: fmt.Sprintf("%s per %s for %s (%s). Spend past a threshold notifies once per period; "+
 			"budgets alert, they can't stop spending.", formatUSD(budget.AmountUSD), budget.Period, scope, budget.TimeZone),
 		ChannelIDs: budget.ChannelIDs,

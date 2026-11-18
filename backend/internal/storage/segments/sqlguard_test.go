@@ -195,3 +195,34 @@ func Test_ValidateSingleStatementSelect_BlockCommentMarkersInsideStringLiteral_N
 	require.NoError(t, err)
 	assert.Equal(t, `SELECT * FROM logs WHERE message = '/* not a comment */'`, stmt)
 }
+
+func Test_ValidateSingleStatementSelect_ServerStateOrFileFunction_Rejected(t *testing.T) {
+	for _, query := range []string{
+		"SELECT * FROM duckdb_settings()",
+		"SELECT * FROM main.duckdb_secrets ()",
+		`SELECT * FROM "duckdb_settings"()`,
+		"SELECT current_setting('secret_directory')",
+		"SELECT * FROM which_secret('s3://b/k', 's3')",
+		"SELECT getenv('HOME')",
+		"SELECT * FROM pragma_database_list()",
+		"SELECT * FROM read_text('/etc/hosts')",
+		"SELECT * FROM parquet_metadata('/tmp/x.parquet')",
+		"SELECT * FROM query('SELECT * FROM duckdb_settings()')",
+		"SELECT * FROM QUERY_TABLE('logs')",
+	} {
+		_, err := segments.ValidateSingleStatementSelect(query)
+		assert.ErrorContains(t, err, "disallowed function", query)
+	}
+}
+
+func Test_ValidateSingleStatementSelect_FunctionNamesAsDataOrColumns_Accepted(t *testing.T) {
+	for _, query := range []string{
+		"SELECT count(*) FROM logs WHERE message LIKE '%duckdb_settings()%'",
+		"SELECT json_extract_string(fields, '$.query') AS query FROM logs",
+		`SELECT "query" FROM logs`,
+		"SELECT read_count, glob_pattern FROM logs",
+	} {
+		_, err := segments.ValidateSingleStatementSelect(query)
+		assert.NoError(t, err, query)
+	}
+}

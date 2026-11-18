@@ -33,6 +33,10 @@ func (c *LogQueryController) RegisterRoutes(router *gin.RouterGroup) {
 	queryRoutes.POST("/context/:projectId", c.ExecuteContext)
 	queryRoutes.POST("/deploys/:projectId", c.ExecuteDeploys)
 	queryRoutes.POST("/changes/:projectId", c.ExecutePatternChanges)
+	queryRoutes.POST("/pattern-trends/:projectId", c.ExecutePatternTrends)
+	queryRoutes.POST("/explain/:projectId", c.ExecuteExplain)
+	queryRoutes.POST("/volume/:projectId", c.ExecuteVolume)
+	queryRoutes.POST("/health-map/:projectId", c.ExecuteHealthMap)
 	queryRoutes.GET("/fields/:projectId", c.GetQueryableFields)
 	queryRoutes.GET("/stats/:projectId", c.GetProjectStats)
 	queryRoutes.GET("/system-stats", c.GetSystemStats)
@@ -75,7 +79,7 @@ func (c *LogQueryController) ExecuteQuery(ctx *gin.Context) {
 		return
 	}
 
-	response, err := c.logQueryService.ExecuteQuery(projectID, &request, user)
+	response, err := c.logQueryService.ExecuteQuery(ctx.Request.Context(), projectID, &request, user)
 	if err != nil {
 		c.handleError(ctx, err)
 		return
@@ -225,7 +229,7 @@ func (c *LogQueryController) ExecutePatterns(ctx *gin.Context) {
 		return
 	}
 
-	response, err := c.logQueryService.ExecutePatterns(projectID, &request, user)
+	response, err := c.logQueryService.ExecutePatterns(ctx.Request.Context(), projectID, &request, user)
 	if err != nil {
 		c.handleError(ctx, err)
 		return
@@ -279,7 +283,7 @@ func (c *LogQueryController) ExecuteFieldValues(ctx *gin.Context) {
 
 // ExecutePatternChanges
 // @Summary Compare message patterns between two time ranges ("what changed?")
-// @Description Each message pattern's count in current against baseline, scaled to current's length: patterns new in current, spiking (at least twice their baseline) or dropping (at most half), with each one's template and newest log. Counts read per-minute counts where segments have them.
+// @Description Each message pattern's count in current against baseline, scaled to current's length: patterns new in current, spiking (at least twice their baseline) or dropping (at most half), with each one's template and newest log. Counts read per-minute counts where segments have them. With countOnly, only newCount/spikeCount/dropCount over whole minutes (cached briefly; counted is false when the query needs raw logs, e.g. a message search).
 // @Tags logs-query
 // @Accept json
 // @Produce json
@@ -431,7 +435,7 @@ func (c *LogQueryController) ExecuteSQLQuery(ctx *gin.Context) {
 		return
 	}
 
-	response, err := c.logQueryService.ExecuteSQLQuery(projectID, &request, user)
+	response, err := c.logQueryService.ExecuteSQLQuery(ctx.Request.Context(), projectID, &request, user)
 	if err != nil {
 		c.handleError(ctx, err)
 		return
@@ -589,6 +593,119 @@ func (c *LogQueryController) GetSystemDashboard(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
+// ExecutePatternTrends
+// @Summary Message patterns over time (Logs › Patterns)
+// @Description Lines per pattern per bucket over timeRange (from and to required, at most 31 days; cut to whole minutes), read from per-minute counts: the biggest patterns plus every new, spiking or dropping one, each with its template, newest log, main level, services, and lines in the same window 24 h earlier and in the 7 days before. New: not seen in those; spike: at least twice its count 24 h earlier; drop: at most half. Other is the rest per bucket. Cached for a minute.
+// @Tags logs-query
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID (UUID format)"
+// @Param request body logs_core.PatternTrendsRequestDTO true "Pattern trends request"
+// @Success 200 {object} logs_core.PatternTrendsResponseDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Router /logs/query/pattern-trends/{projectId} [post]
+func (c *LogQueryController) ExecutePatternTrends(ctx *gin.Context) {
+	user, projectID, request, ok := bindInsightRequest[logs_core.PatternTrendsRequestDTO](ctx)
+	if !ok {
+		return
+	}
+	response, err := c.logQueryService.ExecutePatternTrends(ctx.Request.Context(), projectID, request, user)
+	if err != nil {
+		c.handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, response)
+}
+
+// ExecuteExplain
+// @Summary Explain a range of logs ("Explain this spike")
+// @Description Field values (service, namespace, container, pod, ReplicaSet, level) whose share of the lines matching query grew most from baseline to current (both with from and to, at most 31 days), read from per-minute counts. Values with fewer than minCount lines in current (default 20) are left out.
+// @Tags logs-query
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID (UUID format)"
+// @Param request body logs_core.ExplainRequestDTO true "Explain request"
+// @Success 200 {object} logs_core.ExplainResponseDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Router /logs/query/explain/{projectId} [post]
+func (c *LogQueryController) ExecuteExplain(ctx *gin.Context) {
+	user, projectID, request, ok := bindInsightRequest[logs_core.ExplainRequestDTO](ctx)
+	if !ok {
+		return
+	}
+	response, err := c.logQueryService.ExecuteExplain(ctx.Request.Context(), projectID, request, user)
+	if err != nil {
+		c.handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, response)
+}
+
+// ExecuteVolume
+// @Summary Log volume and noise (Logs › Volume & noise)
+// @Description Lines per UTC day by service over the last days (default 14, at most 31), lines per level over 7 days, today so far against yesterday at the same time, the project's stored and ingested bytes per line, and the 10 biggest patterns per service and level over 7 days with their template - all from per-minute counts. Cached for a minute.
+// @Tags logs-query
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID (UUID format)"
+// @Param request body logs_core.VolumeRequestDTO true "Volume request"
+// @Success 200 {object} logs_core.VolumeResponseDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Router /logs/query/volume/{projectId} [post]
+func (c *LogQueryController) ExecuteVolume(ctx *gin.Context) {
+	user, projectID, request, ok := bindInsightRequest[logs_core.VolumeRequestDTO](ctx)
+	if !ok {
+		return
+	}
+	response, err := c.logQueryService.ExecuteVolume(ctx.Request.Context(), projectID, request, user)
+	if err != nil {
+		c.handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, response)
+}
+
+// ExecuteHealthMap
+// @Summary Log health map (Logs › Health map)
+// @Description Lines, error lines and warning lines per workload grouped by namespace (groupBy k8s; a workload is a pod name without its generated parts), per service grouped by host (host; reads raw logs, host_name is not a per-minute dimension) or per service (service) over timeRange (from and to, at most 31 days), with each tile's lines 24 h earlier. At most 150 tiles, biggest first. Cached for a minute.
+// @Tags logs-query
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID (UUID format)"
+// @Param request body logs_core.HealthMapRequestDTO true "Health map request"
+// @Success 200 {object} logs_core.HealthMapResponseDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 422 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Router /logs/query/health-map/{projectId} [post]
+func (c *LogQueryController) ExecuteHealthMap(ctx *gin.Context) {
+	user, projectID, request, ok := bindInsightRequest[logs_core.HealthMapRequestDTO](ctx)
+	if !ok {
+		return
+	}
+	response, err := c.logQueryService.ExecuteHealthMap(ctx.Request.Context(), projectID, request, user)
+	if err != nil {
+		c.handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, response)
+}
+
 func (c *LogQueryController) handleError(ctx *gin.Context, err error) {
 	status, body := c.errorResponse(err)
 	ctx.JSON(status, body)
@@ -633,4 +750,25 @@ func (c *LogQueryController) getStatusCodeForQueryValidationError(errorCode stri
 	default:
 		return http.StatusBadRequest
 	}
+}
+
+// bindInsightRequest reads an insight route's user, project id and JSON
+// body, answering the error itself when one is missing or malformed.
+func bindInsightRequest[T any](ctx *gin.Context) (*users_models.User, uuid.UUID, *T, bool) {
+	user, isOk := ctx.MustGet("user").(*users_models.User)
+	if !isOk {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user type in context"})
+		return nil, uuid.Nil, nil, false
+	}
+	projectID, err := uuid.Parse(ctx.Param("projectId"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID format"})
+		return nil, uuid.Nil, nil, false
+	}
+	var request T
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return nil, uuid.Nil, nil, false
+	}
+	return user, projectID, &request, true
 }

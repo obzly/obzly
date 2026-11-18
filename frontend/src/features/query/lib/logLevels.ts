@@ -64,20 +64,8 @@ export function withHiddenLevels(
   return { type: 'logical', logic: { operator: 'and', children: [base, levelFilter] } };
 }
 
-// Facet value colors: distinct hues readable in both themes, no red (reserved
-// for errors). Assigned by row position since a per-value hash let neighbors
-// collide.
-const VALUE_PALETTE = [
-  '#3b82f6', // blue-500
-  '#f59e0b', // amber-500
-  '#10b981', // emerald-500
-  '#8b5cf6', // violet-500
-  '#ec4899', // pink-500
-  '#06b6d4', // cyan-500
-  '#f97316', // orange-500
-  '#84cc16', // lime-500
-];
-
-export function valueColor(index: number): string {
-  return VALUE_PALETTE[index % VALUE_PALETTE.length];
+// Facet value colours are the theme's chart series (useTheme().chartColors),
+// assigned by row position since a per-value hash let neighbours collide.
+export function valueColor(index: number, colors: string[]): string {
+  return colors[index % colors.length];
 }

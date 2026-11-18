@@ -75,3 +75,22 @@ func Test_SampleLogs_NoRules_KeepsEverything(t *testing.T) {
 	logs := []*logs_core.LogItem{{ID: uuid.New(), Level: "debug"}, {ID: uuid.New(), Level: "info"}}
 	require.Len(t, sampleLogs(logs, nil), 2)
 }
+
+// A rule with a pattern (from Logs › Volume & noise) samples only that
+// pattern's logs of its service and level; the rest of them are kept.
+func Test_SampleLogs_RuleWithPattern_SamplesOnlyThatPattern(t *testing.T) {
+	rules := projects_models.LogSampleRules{{
+		Service: "web", Level: "info", Pattern: logs_core.PatternHash("GET /static/app.js 200 in 12 ms"), Rate: 0,
+	}}
+	static := &logs_core.LogItem{
+		ID: uuid.New(), Level: "info", Message: "GET /static/app.js 200 in 48 ms", Fields: map[string]any{"service_name": "web"},
+	}
+	other := &logs_core.LogItem{
+		ID: uuid.New(), Level: "info", Message: "order 42 confirmed", Fields: map[string]any{"service_name": "web"},
+	}
+	otherService := &logs_core.LogItem{
+		ID: uuid.New(), Level: "info", Message: "GET /static/app.js 200 in 48 ms", Fields: map[string]any{"service_name": "api"},
+	}
+	kept := sampleLogs([]*logs_core.LogItem{static, other, otherService}, rules)
+	require.Equal(t, []*logs_core.LogItem{other, otherService}, kept)
+}

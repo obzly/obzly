@@ -22,6 +22,10 @@ func (r *UsersSettingsRepository) GetSettings() (*user_models.UsersSettings, err
 				IsAllowExternalRegistrations:    false,
 				IsAllowMemberInvitations:        true,
 				IsMemberAllowedToCreateProjects: true,
+				DefaultThemeMode:                user_models.DefaultThemeMode,
+				DefaultLightTheme:               user_models.DefaultLightTheme,
+				DefaultDarkTheme:                user_models.DefaultDarkTheme,
+				IsUserThemeChoiceAllowed:        true,
 			}
 
 			if createErr := storage.GetDb().Create(defaultSettings).Error; createErr != nil {

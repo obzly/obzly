@@ -156,8 +156,10 @@ export const DataSourceConfigModal = ({
   return (
     <Modal
       title={
-        <div className="flex items-center gap-2">
-          <DataSourceIcon sourceId={definition.id} size={22} />
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40">
+            <DataSourceIcon sourceId={definition.id} size={20} />
+          </span>
           <span>{definition.name} config</span>
         </div>
       }
@@ -174,13 +176,7 @@ export const DataSourceConfigModal = ({
               <Button key="cancel" onClick={onClose}>
                 Cancel
               </Button>,
-              <Button
-                key="generate"
-                type="primary"
-                loading={isGenerating}
-                onClick={handleGenerate}
-                className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-              >
+              <Button key="generate" type="primary" loading={isGenerating} onClick={handleGenerate}>
                 Generate config
               </Button>,
             ]
@@ -212,7 +208,7 @@ export const DataSourceConfigModal = ({
                 label: `${key.name} (${key.tokenPrefix})`,
               }))}
             />
-            <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               Leave empty to create a new dedicated key, shown once. Or reuse an existing key to
               avoid creating one per config.
             </div>
@@ -229,7 +225,7 @@ export const DataSourceConfigModal = ({
                 placeholder={selectedKey.tokenPrefix}
                 autoComplete="off"
               />
-              <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+              <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 Key values are stored hashed and can&apos;t be shown again, so paste the value you
                 saved when creating it. It is checked against this key before use.
               </div>
@@ -252,7 +248,7 @@ export const DataSourceConfigModal = ({
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder={IS_CONTROL_PLANE ? 'https://your-site.example.com' : undefined}
             />
-            <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {IS_CONTROL_PLANE
                 ? "The Site's public URL, reachable from wherever this collector runs. Telemetry goes straight to the Site; the control plane doesn't accept it."
                 : "Must be reachable from wherever this collector runs - defaults to the URL you're using right now; change it if that source needs a different address."}
@@ -290,7 +286,7 @@ export const DataSourceConfigModal = ({
                 />
               )}
               {field.helpText && (
-                <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+                <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   {field.helpText}
                 </div>
               )}
@@ -328,7 +324,7 @@ export const DataSourceConfigModal = ({
                 </Button>
               </div>
 
-              <div className="max-h-[40vh] overflow-auto rounded border border-gray-200 dark:border-gray-700">
+              <div className="max-h-[40vh] overflow-auto rounded-xl border border-gray-200 dark:border-gray-700">
                 <SyntaxHighlighter
                   language={file.language}
                   style={tomorrow}
@@ -340,7 +336,7 @@ export const DataSourceConfigModal = ({
             </div>
           ))}
 
-          <div className="text-xs text-gray-500 dark:text-gray-300">{result.instructions}</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">{result.instructions}</div>
         </div>
       )}
     </Modal>

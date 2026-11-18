@@ -8,6 +8,7 @@ import {
   inventoryApi,
 } from '../../../entity/inventory';
 import { sitesApi } from '../../../entity/sites';
+import { type KindHistory, mergeHistories } from './history';
 
 export interface SiteResult extends SiteRef {
   /** Why the Site's inventory couldn't be read. */
@@ -21,6 +22,8 @@ export interface InventoryData {
   assets: SiteAsset[];
   changes: SiteChange[];
   sites: SiteResult[];
+  /** Kind counts over time, from the Sites' inventory history. */
+  history: KindHistory;
   loading: boolean;
   /** Set when no Site could be listed at all. */
   error?: string;
@@ -34,6 +37,7 @@ export const useInventory = (refresh: number): InventoryData => {
     assets: [],
     changes: [],
     sites: [],
+    history: { trend: {} },
     loading: true,
   });
 
@@ -64,9 +68,11 @@ export const useInventory = (refresh: number): InventoryData => {
       const results = await Promise.all(
         targets.map(async (target) => {
           try {
-            const [list, changes] = await Promise.all([
+            const [list, changes, summary] = await Promise.all([
               inventoryApi.assets(target.siteId, controller.signal),
               inventoryApi.changes(target.siteId, CHANGE_HOURS, controller.signal),
+              // Only for pills and sparklines: a Site without it still shows its assets.
+              inventoryApi.summary(target.siteId, controller.signal, true).catch(() => undefined),
             ]);
             return {
               site: {
@@ -76,12 +82,16 @@ export const useInventory = (refresh: number): InventoryData => {
               } as SiteResult,
               assets: list.assets.map((asset) => ({ ...asset, ...target })),
               changes: changes.map((change) => ({ ...change, ...target })),
+              history: summary?.history,
+              failed: false,
             };
           } catch (reason) {
             return {
               site: { ...target, assets: 0, truncated: false, error: (reason as Error).message },
               assets: [] as SiteAsset[],
               changes: [] as SiteChange[],
+              history: undefined,
+              failed: true,
             };
           }
         }),
@@ -93,6 +103,10 @@ export const useInventory = (refresh: number): InventoryData => {
           .flatMap((result) => result.changes)
           .sort((a, b) => b.at.localeCompare(a.at)),
         sites: results.map((result) => result.site),
+        // Sites that couldn't be read add no assets, so they don't need a history either.
+        history: mergeHistories(
+          results.filter((result) => !result.failed).map((result) => result.history),
+        ),
         loading: false,
       });
     };

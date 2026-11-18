@@ -61,6 +61,16 @@ type ScopedSQLRequestDTO struct {
 	Statements    []ScopedSQLStatement
 	// ScanBudget refuses a range whose segments add up to more (0: none).
 	ScanBudget int64
+	// Table, when set, shapes the "logs" table: a trusted SELECT over the
+	// relation "raw" (timestamp, level, message, client_ip, trace_id,
+	// span_id, fields), so only the rows and columns the statements read
+	// are materialized. TableArgs bind its placeholders.
+	Table     string
+	TableArgs []any
+	// Timeout bounds the statements (0: the default); MaxRows caps each
+	// statement's rows (0: the default).
+	Timeout time.Duration
+	MaxRows int
 }
 
 type ScopedSQLStatement struct {
@@ -162,6 +172,18 @@ type AggregationRequestDTO struct {
 	Limit int `json:"limit,omitempty"`
 	// ScanBudget is set from QUERY_MAX_SCAN_GB, never from JSON; 0 for none.
 	ScanBudget int64 `json:"-"`
+	// Measure: what each bucket/group holds ("" counts lines). Anything but a
+	// count reads raw logs in one query (no per-minute counts, no cache).
+	Measure AggregationMeasure `json:"measure,omitempty"`
+	// MeasureField: the field Measure reads; required unless it counts.
+	MeasureField string `json:"measureField,omitempty"`
+	// TopGroups (with BucketMs and GroupField) keeps only the N groups with the
+	// largest value over the whole range, so a time series shows a top N.
+	TopGroups int `json:"topGroups,omitempty"`
+	// GroupBands GroupBandsLog groups GroupField's numeric value into 1-2-5
+	// log-scale bands; the group key is the band's lower bound ("0" for zero
+	// or less). Lines without a number are left out.
+	GroupBands string `json:"groupBands,omitempty"`
 }
 
 // AggregationEmitter receives a streamed aggregation's counts as they are
@@ -175,6 +197,9 @@ type AggregationBucketDTO struct {
 	// GroupKey is "" when the request had no GroupField (a single series).
 	GroupKey string `json:"groupKey,omitempty"`
 	Count    int64  `json:"count"`
+	// Value is set for any measure but a count (Count is then it rounded).
+	// Lines without a value for the measure's field are left out.
+	Value *float64 `json:"value,omitempty"`
 }
 
 type AggregationResponseDTO struct {
@@ -275,9 +300,12 @@ type LogsStatsDTO struct {
 	TotalSizeMB float64 `json:"totalSizeMb"`
 	// RawSizeMB is the approximate uncompressed size of the ingested rows
 	// (before Parquet/columnar compression) - "log ingested size".
-	RawSizeMB     float64   `json:"rawSizeMb"`
-	OldestLogTime time.Time `json:"oldestLogTime"`
-	NewestLogTime time.Time `json:"newestLogTime"`
+	RawSizeMB float64 `json:"rawSizeMb"`
+	// ObjectStorageSizeMB: the part of TotalSizeMB already in object storage
+	// (0 without object storage); the rest is fresh segments on local disk.
+	ObjectStorageSizeMB float64   `json:"objectStorageSizeMb"`
+	OldestLogTime       time.Time `json:"oldestLogTime"`
+	NewestLogTime       time.Time `json:"newestLogTime"`
 }
 
 // SystemDashboardDTO is the admin System Dashboard's payload: LogsStatsDTO's
@@ -556,6 +584,11 @@ type PatternChangesRequestDTO struct {
 	MinCount int64 `json:"minCount,omitempty"`
 	// Limit: most patterns of each kind; 0 means 50.
 	Limit int `json:"limit,omitempty"`
+	// CountOnly: only NewCount, SpikeCount and DropCount, for the Anomalies button. Answered
+	// only when the query filters on per-minute count dimensions (level, service, namespace,
+	// container, pod, pattern), so it reads logs_1m rather than raw logs; otherwise Counted
+	// is false. The ranges are cut to whole minutes and the answer is cached briefly.
+	CountOnly bool `json:"countOnly,omitempty"`
 	// ScanBudget: set by the HTTP service from QUERY_MAX_SCAN_GB.
 	ScanBudget int64 `json:"-"`
 }
@@ -580,4 +613,10 @@ type PatternChangesResponseDTO struct {
 	Changes       []PatternChangeDTO `json:"changes"`
 	CurrentTotal  int64              `json:"currentTotal"`
 	BaselineTotal int64              `json:"baselineTotal"`
+	// NewCount, SpikeCount, DropCount: how many patterns changed each way, before Limit.
+	NewCount   int `json:"newCount"`
+	SpikeCount int `json:"spikeCount"`
+	DropCount  int `json:"dropCount"`
+	// Counted is false when a CountOnly request wasn't answered (its query needs raw logs).
+	Counted bool `json:"counted"`
 }

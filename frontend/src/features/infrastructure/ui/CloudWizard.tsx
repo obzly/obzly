@@ -527,11 +527,11 @@ export const CloudWizard = ({
                 role="radio"
                 aria-checked={provider === key}
                 onClick={() => pickProvider(key)}
-                className={`flex cursor-pointer items-center gap-4 rounded-lg border bg-white p-4 text-left text-base font-medium dark:bg-gray-900 ${provider === key ? 'border-emerald-600 ring-2 ring-emerald-600/30' : 'border-gray-200 hover:border-gray-400 dark:border-gray-700'}`}
+                className={`flex cursor-pointer items-center gap-4 rounded-2xl border bg-white p-4 text-left text-base font-medium dark:bg-gray-900 ${provider === key ? 'border-accent-600 ring-accent-600/30 ring-2' : 'border-gray-200 hover:border-gray-400 dark:border-gray-700'}`}
               >
                 <ProviderLogo provider={key} size={28} />
                 {PROVIDERS[key].name}
-                {provider === key && <CheckOutlined className="ml-auto text-emerald-600" />}
+                {provider === key && <CheckOutlined className="text-accent-600 ml-auto" />}
               </button>
             ))}
           </div>
@@ -554,7 +554,7 @@ export const CloudWizard = ({
               {USES.map((use) => (
                 <Checkbox key={use.value} value={use.value} disabled={!use.since}>
                   <span className="font-medium">{use.label}</span>
-                  <span className="ml-2 rounded bg-gray-100 px-1.5 text-[11px] text-gray-500 dark:bg-gray-700 dark:text-gray-300">
+                  <span className="ml-2 rounded-full bg-gray-100 px-2 text-[11px] text-gray-500 dark:bg-gray-700 dark:text-gray-300">
                     {use.since ?? 'later'}
                   </span>
                   <span className="block text-xs text-gray-500 dark:text-gray-400">
@@ -563,7 +563,7 @@ export const CloudWizard = ({
                 </Checkbox>
               ))}
             </Checkbox.Group>
-            <div className="rounded-md border border-gray-200 p-3 dark:border-gray-700">
+            <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
               <div className="mb-1 text-[11px] tracking-wide text-gray-500 uppercase dark:text-gray-400">
                 Read-only {provider === 'aws' ? 'AWS' : 'Azure'} permissions this needs
               </div>
@@ -804,7 +804,7 @@ export const CloudWizard = ({
                 A management group uses the az CLI script.
               </span>
             )}
-            <pre className="m-0 max-h-80 overflow-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre dark:bg-gray-900">
+            <pre className="m-0 max-h-80 overflow-auto rounded-xl bg-gray-50 p-3 font-mono text-xs whitespace-pre dark:bg-gray-900">
               {generated?.script}
             </pre>
             <div className="flex flex-wrap gap-2">
@@ -983,8 +983,8 @@ const Section = ({
 }) => (
   <div className="flex flex-col gap-3">
     <div>
-      <div className="text-base font-semibold text-gray-900 dark:text-gray-100">{title}</div>
-      {detail && <div className="text-sm text-gray-500 dark:text-gray-400">{detail}</div>}
+      <div className="text-[15px] font-semibold text-gray-900 dark:text-gray-50">{title}</div>
+      {detail && <div className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">{detail}</div>}
     </div>
     {children}
   </div>

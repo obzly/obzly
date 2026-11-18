@@ -1,6 +1,11 @@
 import type { Granularity } from '../../../entity/cost';
 import type { PostureFilters } from '../../../entity/posture';
+import type { StatusColors } from '../../../shared/theme';
 import type { DayRange, RangePreset } from '../../cost';
+
+/** A score's colour: good from 80%, a warning from 50%. */
+export const scoreColor = (percent: number, status: StatusColors) =>
+  percent >= 80 ? status.ok : percent >= 50 ? status.warn : status.bad;
 
 /** "eu-west-1", or "Account-wide" for the global scope. */
 export const regionLabel = (region: string) => (region === 'global' ? 'Account-wide' : region);

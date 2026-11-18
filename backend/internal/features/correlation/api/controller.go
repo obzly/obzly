@@ -1,10 +1,12 @@
 package correlation_api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	correlation_core "obzly/internal/features/correlation/core"
 	users_middleware "obzly/internal/features/users/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +21,7 @@ type CorrelationController struct {
 func (c *CorrelationController) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/correlation/sessions/:projectId", c.ListSessions)
 	router.GET("/correlation/sessions/:projectId/:sessionId", c.GetSessionDetail)
+	router.GET("/correlation/sessions/:projectId/:sessionId/impact", c.GetSessionImpact)
 }
 
 // ListSessions
@@ -105,6 +108,52 @@ func (c *CorrelationController) GetSessionDetail(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, detail)
+}
+
+// GetSessionImpact
+// @Summary Get an incident session's impact by service
+// @Description Error logs and error spans per service within the session window, for the session's services, most first
+// @Tags correlation
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID"
+// @Param sessionId path string true "Session ID"
+// @Success 200 {object} correlation_core.SessionImpactDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /correlation/sessions/{projectId}/{sessionId}/impact [get]
+func (c *CorrelationController) GetSessionImpact(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	projectID, err := uuid.Parse(ctx.Param("projectId"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+		return
+	}
+
+	sessionID, err := uuid.Parse(ctx.Param("sessionId"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID"})
+		return
+	}
+
+	impact, err := c.service.GetSessionImpact(projectID, sessionID, user)
+	if err != nil {
+		if errors.Is(err, correlation_core.ErrSessionNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.handleError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, impact)
 }
 
 func parseTimeRangeQuery(ctx *gin.Context) (*time.Time, *time.Time) {

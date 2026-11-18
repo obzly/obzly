@@ -1101,7 +1101,39 @@ func (s *UserService) GetCurrentUserProfile(user *users_models.User) *users_dto.
 		LastLoginAt:  user.LastLoginAt,
 		LastActiveAt: user.LastActiveAt,
 		MFAEnabled:   user.MFAEnabled,
+
+		UIPreferences: uiPreferencesOrNil(user.UIPreferences),
 	}
+}
+
+// UpdateUIPreferences saves the caller's own UI preferences; only validated
+// fields are stored.
+func (s *UserService) UpdateUIPreferences(
+	user *users_models.User,
+	request *users_dto.UpdateUIPreferencesRequestDTO,
+) (*users_models.UIPreferences, error) {
+	if request.Theme == nil {
+		return nil, fmt.Errorf("%w: theme is required", users_models.ErrInvalidThemePreferences)
+	}
+	if err := request.Theme.Validate(); err != nil {
+		return nil, err
+	}
+
+	prefs := users_models.UIPreferences{}
+	if user.UIPreferences != nil {
+		prefs = *user.UIPreferences
+	}
+	prefs.Theme = &users_models.ThemePreferences{
+		Mode:             request.Theme.Mode,
+		Light:            request.Theme.Light,
+		Dark:             request.Theme.Dark,
+		ColorBlindCharts: request.Theme.ColorBlindCharts,
+	}
+
+	if err := s.userRepository.UpdateUIPreferences(user.ID, &prefs); err != nil {
+		return nil, fmt.Errorf("failed to save preferences: %w", err)
+	}
+	return &prefs, nil
 }
 
 // UpdateUserInfo changes the caller's name and/or email. An email change needs
@@ -1727,4 +1759,11 @@ func (s *UserService) fetchGitHubEmail(
 	}
 
 	return "", false, errors.New("github account has no accessible email")
+}
+
+func uiPreferencesOrNil(prefs *users_models.UIPreferences) *users_models.UIPreferences {
+	if prefs.IsEmpty() {
+		return nil
+	}
+	return prefs
 }

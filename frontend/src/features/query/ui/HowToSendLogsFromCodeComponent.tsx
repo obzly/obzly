@@ -59,16 +59,8 @@ export const HowToSendLogsFromCodeComponent = ({
         <div>
           <div style={{ marginBottom: 16 }}>
             {project.isApiKeyRequired && (
-              <div
-                style={{
-                  marginBottom: 16,
-                  padding: '8px 12px',
-                  backgroundColor: '#fff3cd',
-                  border: '1px solid #ffeaa7',
-                  borderRadius: '4px',
-                }}
-              >
-                <strong style={{ color: '#856404' }}>
+              <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-700/50 dark:bg-amber-900/30">
+                <strong className="text-amber-800 dark:text-amber-200">
                   📝 API Key Required: This project requires an X-API-Key header. Create an API key
                   in your project settings.
                 </strong>
@@ -76,16 +68,8 @@ export const HowToSendLogsFromCodeComponent = ({
             )}
 
             {project.isFilterByDomain && (
-              <div
-                style={{
-                  marginBottom: 16,
-                  padding: '8px 12px',
-                  backgroundColor: '#d1ecf1',
-                  border: '1px solid #bee5eb',
-                  borderRadius: '4px',
-                }}
-              >
-                <strong style={{ color: '#0c5460' }}>
+              <div className="mb-4 rounded border border-cyan-200 bg-cyan-50 px-3 py-2 dark:border-cyan-700/50 dark:bg-cyan-900/30">
+                <strong className="text-cyan-900 dark:text-cyan-200">
                   🌐 Domain Filtering: This project filters by domain. Allowed domains:{' '}
                   {project.allowedDomains.join(', ')}
                 </strong>
@@ -93,16 +77,8 @@ export const HowToSendLogsFromCodeComponent = ({
             )}
 
             {project.isFilterByIp && (
-              <div
-                style={{
-                  marginBottom: 16,
-                  padding: '8px 12px',
-                  backgroundColor: '#d1ecf1',
-                  border: '1px solid #bee5eb',
-                  borderRadius: '4px',
-                }}
-              >
-                <strong style={{ color: '#0c5460' }}>
+              <div className="mb-4 rounded border border-cyan-200 bg-cyan-50 px-3 py-2 dark:border-cyan-700/50 dark:bg-cyan-900/30">
+                <strong className="text-cyan-900 dark:text-cyan-200">
                   🔒 IP Filtering: This project filters by IP address. Allowed IPs:{' '}
                   {project.allowedIps.join(', ')}
                 </strong>

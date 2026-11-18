@@ -222,7 +222,7 @@ export const ConditionEditorComponent = ({
             <button
               type="button"
               onClick={handleArrayValueAdd}
-              className="rounded bg-emerald-600 px-2 py-1 text-sm text-white hover:bg-emerald-700"
+              className="bg-accent-600 hover:bg-accent-700 rounded px-2 py-1 text-sm text-white"
             >
               <PlusOutlined />
             </button>
@@ -235,7 +235,7 @@ export const ConditionEditorComponent = ({
                   key={index}
                   closable
                   onClose={() => handleArrayValueRemove(index)}
-                  className="border-emerald-200 bg-emerald-50"
+                  className="border-accent-200 bg-accent-50"
                 >
                   {value}
                 </Tag>

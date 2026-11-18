@@ -9,6 +9,8 @@ export interface AiUsageFilter {
 export interface AiUsageOverviewParams extends AiUsageFilter {
   groupBy?: 'model' | 'user';
   bucketSeconds?: number;
+  /** 'previous' adds the summary of the equally long window before the range. */
+  compare?: 'previous';
 }
 
 export interface AiUsageSessionsParams extends AiUsageFilter {
@@ -84,6 +86,8 @@ export interface AiUsageOverview {
   tools: AiUsageToolRow[];
   errors: AiUsageErrorRow[];
   filterOptions: { users: string[]; models: string[]; terminals: string[] };
+  /** The equally long window before the range (compare: 'previous' only). */
+  previous?: AiUsageSummary;
 }
 
 export interface AiUsageSession {

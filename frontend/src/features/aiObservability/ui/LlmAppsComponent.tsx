@@ -10,13 +10,17 @@ import {
   type LlmCallsResponse,
   type LlmGroupBy,
   type LlmOverview,
+  type LlmTimeseriesPoint,
   aiUsageApi,
 } from '../../../entity/aiUsage';
+import { absoluteChange, relativeChange } from '../../../shared/lib/periodChange';
+import { Card, KpiTile } from '../../../shared/ui/v2';
 import { type TimeRange, TimeRangePickerComponent } from '../../query';
 import { formatCount, formatMs, formatPercent, formatTime, formatUsd } from '../lib/format';
 import { costCell, errorRate, toUsagePoints } from '../lib/llmApps';
-import { StatTile } from './StatTile';
+import { bucketLabel, bucketTotals } from '../lib/series';
 import { UsageChart } from './UsageChart';
+import { InfoTip } from './bits';
 
 interface Props {
   projectId: string;
@@ -24,8 +28,6 @@ interface Props {
   onOpenTrace: (traceId: string, at: string) => void;
   onOpenPrices: () => void;
 }
-
-const CARD = 'rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800';
 
 const GROUPS: { value: LlmGroupBy; label: string }[] = [
   { value: 'service', label: 'Service' },
@@ -56,7 +58,7 @@ const breakdownColumns = (keyTitle: string): ColumnsType<LlmBreakdownRow> => [
     render: (_, row) => {
       const rate = errorRate(row.errors, row.calls);
       return (
-        <span className={rate >= 0.02 ? 'text-red-600 dark:text-red-400' : undefined}>
+        <span className={rate >= 0.02 ? 'text-[var(--v2-red)]' : undefined}>
           {formatPercent(rate)}
         </span>
       );
@@ -122,7 +124,7 @@ export const LlmAppsComponent = ({
     let cancelled = false;
     setIsLoading(true);
     aiUsageApi
-      .getLlmOverview(projectId, { ...range, groupBy })
+      .getLlmOverview(projectId, { ...range, groupBy, compare: 'previous' })
       .then((response) => {
         if (cancelled) return;
         setOverview(response);
@@ -152,11 +154,18 @@ export const LlmAppsComponent = ({
   const listedCalls = mergeCalls(calls);
   const groupLabel = GROUPS.find((group) => group.value === groupBy)?.label ?? 'Service';
   const unpriced = summary?.unpricedModels.length ?? 0;
+  // The window just before the range, for change pills; rates and latencies need calls in it.
+  const previous = overview?.previous;
+  const previousCalls = previous?.calls ? previous : undefined;
+  const trendOf = (value: (point: LlmTimeseriesPoint) => number) =>
+    overview
+      ? bucketTotals(overview.timeseries, value, overview.bucketSeconds).map((point) => point.value)
+      : [];
 
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="mr-auto text-xs text-gray-500 dark:text-gray-400">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="mr-auto min-w-[260px] flex-1 text-xs text-gray-500 dark:text-gray-400">
           Applications instrumented with the OpenTelemetry gen_ai conventions
           {overview?.latestCallAt ? (
             <span>
@@ -167,15 +176,17 @@ export const LlmAppsComponent = ({
           ) : null}
         </div>
         <TimeRangePickerComponent compact defaultPreset="24h" onChange={setTimeRange} />
-        <Button
-          size="small"
-          icon={<ReloadOutlined />}
-          aria-label="Refresh"
-          onClick={() => setRefreshToken((token) => token + 1)}
-        />
+        <Tooltip title="Refresh">
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            aria-label="Refresh"
+            onClick={() => setRefreshToken((token) => token + 1)}
+          />
+        </Tooltip>
       </div>
 
-      {error && <Alert type="error" showIcon className="mb-4" title={error} />}
+      {error && <Alert type="error" showIcon title={error} />}
 
       {!overview && isLoading && (
         <div className="flex justify-center p-12">
@@ -184,67 +195,108 @@ export const LlmAppsComponent = ({
       )}
 
       {overview && !hasData && (
-        <div className={`${CARD} text-sm text-gray-700 dark:text-gray-200`}>
-          <div className="mb-2 font-medium">No LLM calls in this range</div>
-          <p className="mb-3 text-gray-600 dark:text-gray-300">
+        <Card
+          className="items-center px-5 py-10 text-center"
+          bodyClassName="flex flex-col items-center gap-3"
+        >
+          <strong className="text-base font-semibold text-gray-900 dark:text-gray-50">
+            No LLM calls in this range
+          </strong>
+          <p className="m-0 max-w-[60ch] text-sm text-gray-600 dark:text-gray-300">
             Spans with <code>gen_ai.operation.name</code> show up here: OpenLLMetry, OpenLIT and the
             OpenTelemetry instrumentations for OpenAI, Anthropic, Bedrock, Vertex AI, LangChain and
             others. Point the app&apos;s OTLP exporter at this project.
           </p>
-          <Button onClick={onOpenDataSources}>Open Data Sources</Button>
-        </div>
+          <Button type="primary" onClick={onOpenDataSources}>
+            Open Data Sources
+          </Button>
+        </Card>
       )}
 
       {overview && summary && hasData && range && (
-        <div className={`space-y-4 ${isLoading ? 'opacity-60' : ''}`}>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <StatTile
+        <div className={`flex flex-col gap-4 ${isLoading ? 'opacity-60' : ''}`}>
+          <section
+            aria-label="LLM totals"
+            className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-4"
+          >
+            <KpiTile
               label="Calls"
               value={formatCount(summary.calls)}
-              hint={`${summary.services} service${summary.services === 1 ? '' : 's'}`}
+              note={`${summary.services} service${summary.services === 1 ? '' : 's'}`}
+              change={relativeChange(summary.calls, previous?.calls, 'up')}
+              trend={trendOf((point) => point.calls)}
             />
-            <StatTile
+            <KpiTile
               label="Input tokens"
               value={formatCount(summary.inputTokens)}
-              hint={
+              note={
                 summary.cachedTokens ? `${formatCount(summary.cachedTokens)} cached` : undefined
               }
+              change={relativeChange(summary.inputTokens, previous?.inputTokens, 'up')}
+              trend={trendOf((point) => point.inputTokens)}
+              color="var(--v2-blue)"
             />
-            <StatTile label="Output tokens" value={formatCount(summary.outputTokens)} />
-            <StatTile
+            <KpiTile
+              label="Output tokens"
+              value={formatCount(summary.outputTokens)}
+              change={relativeChange(summary.outputTokens, previous?.outputTokens, 'up')}
+              trend={trendOf((point) => point.outputTokens)}
+              color="var(--v2-purple)"
+            />
+            <KpiTile
               label="Errors"
               value={formatPercent(errorRate(summary.errors, summary.calls))}
-              hint={`${formatCount(summary.errors)} calls`}
+              note={`${formatCount(summary.errors)} calls`}
+              change={
+                previousCalls &&
+                absoluteChange(
+                  errorRate(summary.errors, summary.calls) * 100,
+                  errorRate(previousCalls.errors, previousCalls.calls) * 100,
+                  'down',
+                  (points) => `${points.toFixed(1)} pts`,
+                )
+              }
             />
-            <StatTile
+            <KpiTile
               label="p95 latency"
               value={formatMs(summary.p95Ms)}
-              hint={`p50 ${formatMs(summary.p50Ms)}`}
+              note={`p50 ${formatMs(summary.p50Ms)}`}
+              change={absoluteChange(summary.p95Ms, previousCalls?.p95Ms, 'down', formatMs)}
             />
-            <StatTile
+            <KpiTile
               label="Est. cost"
               value={formatUsd(summary.costUsd)}
-              tooltip="From the model prices in Settings. Obzly doesn't fetch prices."
-              hint={
+              change={relativeChange(summary.costUsd, previous?.costUsd, 'down')}
+              icon={
+                <InfoTip
+                  label="Est. cost"
+                  text="From the model prices in Settings. Obzly doesn't fetch prices."
+                />
+              }
+              note={
                 unpriced
                   ? `${unpriced} model${unpriced === 1 ? ' has' : 's have'} no price`
                   : undefined
               }
             />
-          </div>
+          </section>
           {unpriced > 0 && (
-            <div className="text-xs text-gray-500 dark:text-gray-400">
-              No price for {summary.unpricedModels.join(', ')}.{' '}
+            <div className="flex flex-wrap items-center gap-2 text-[13px] text-gray-600 dark:text-gray-300">
+              <span
+                aria-hidden="true"
+                className="inline-block h-2 w-2 rounded-full bg-[var(--v2-orange)]"
+              />
+              No price for <span className="font-mono">{summary.unpricedModels.join(', ')}</span>.
               <Button type="link" size="small" className="!p-0" onClick={onOpenPrices}>
                 Set model prices
               </Button>
             </div>
           )}
 
-          <div className={CARD}>
-            <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
-              Tokens over time, by model
-            </h3>
+          <Card
+            title="Tokens over time, by model"
+            subtitle={`Input and output tokens per ${bucketLabel(overview.bucketSeconds)}`}
+          >
             <UsageChart
               points={toUsagePoints(overview.timeseries)}
               metric="tokens"
@@ -253,20 +305,19 @@ export const LlmAppsComponent = ({
               to={Date.parse(range.to)}
               height={240}
             />
-          </div>
+          </Card>
 
-          <div className={CARD}>
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <h3 className="mr-auto text-sm font-semibold text-gray-700 dark:text-gray-200">
-                Breakdown
-              </h3>
+          <Card
+            title="Breakdown"
+            extra={
               <Segmented
                 size="small"
                 value={groupBy}
                 onChange={(value) => setGroupBy(value as LlmGroupBy)}
                 options={GROUPS}
               />
-            </div>
+            }
+          >
             <Table<LlmBreakdownRow>
               size="small"
               rowKey="key"
@@ -275,39 +326,37 @@ export const LlmAppsComponent = ({
               pagination={{ pageSize: 10, hideOnSinglePage: true }}
               scroll={{ x: 'max-content' }}
             />
-          </div>
+          </Card>
 
-          <div className={CARD}>
-            <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
-              Slowest and failed calls
-            </h3>
+          <Card title="Slowest and failed calls">
             {listedCalls.length === 0 ? (
               <div className="text-sm text-gray-500 dark:text-gray-400">No calls to list</div>
             ) : (
-              <ul className="divide-y divide-gray-100 dark:divide-gray-700">
+              <ul className="m-0 flex list-none flex-col p-0">
                 {listedCalls.map((call) => (
                   <li
                     key={`${call.traceId}/${call.spanId}`}
-                    className="flex flex-wrap items-center gap-3 py-2 text-sm"
+                    className="flex flex-wrap items-center gap-3 border-t border-gray-200 py-2 text-[13px] first:border-t-0 dark:border-gray-700"
                   >
                     <Tooltip title={call.isError ? 'Failed' : 'Slow'}>
                       <span
+                        role="img"
                         aria-label={call.isError ? 'Failed' : 'Slow'}
                         className={`inline-block h-2 w-2 rounded-full ${
-                          call.isError ? 'bg-red-600' : 'bg-amber-500'
+                          call.isError ? 'bg-[var(--v2-red)]' : 'bg-[var(--v2-orange)]'
                         }`}
                       />
                     </Tooltip>
-                    <span className="w-36 text-gray-500 tabular-nums dark:text-gray-400">
+                    <span className="w-36 font-mono text-xs text-gray-500 tabular-nums dark:text-gray-400">
                       {formatTime(call.timestamp)}
                     </span>
-                    <span className="w-40 truncate font-medium text-gray-900 dark:text-gray-100">
+                    <span className="w-40 truncate font-medium text-gray-900 dark:text-gray-50">
                       {call.service}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-gray-700 dark:text-gray-300">
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs text-gray-500 dark:text-gray-400">
                       {describeCall(call)}
                     </span>
-                    <span className="w-20 text-right text-gray-700 tabular-nums dark:text-gray-300">
+                    <span className="w-20 text-right font-mono text-gray-700 tabular-nums dark:text-gray-200">
                       {formatMs(call.durationMs)}
                     </span>
                     <Button
@@ -321,10 +370,10 @@ export const LlmAppsComponent = ({
                 ))}
               </ul>
             )}
-            <p className="mt-2 mb-0 text-xs text-gray-500 dark:text-gray-400">
+            <p className="m-0 mt-2 border-t border-gray-200 pt-3 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
               Prompts and completions are never shown here, even when an app sends them.
             </p>
-          </div>
+          </Card>
         </div>
       )}
     </div>

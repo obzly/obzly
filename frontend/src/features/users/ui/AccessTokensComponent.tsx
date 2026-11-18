@@ -3,6 +3,7 @@ import {
   Alert,
   App,
   Button,
+  Checkbox,
   Input,
   Modal,
   Popconfirm,
@@ -16,6 +17,7 @@ import { type JSX, useEffect, useState } from 'react';
 import { getApplicationServer } from '../../../constants';
 import {
   type AccessToken,
+  MCP_WRITE_SCOPE,
   type OAuthConnectedApp,
   accessTokenApi,
   mfaApi,
@@ -31,6 +33,9 @@ const EXPIRY_OPTIONS = [
 
 const formatDate = (value?: string | null): string =>
   value ? new Date(value).toLocaleDateString() : 'Never';
+
+const accessLabel = (scopes?: string[]): string =>
+  scopes?.includes(MCP_WRITE_SCOPE) ? 'Read & write' : 'Read-only';
 
 const mcpUrl = (): string => `${getApplicationServer()}/mcp`;
 
@@ -55,6 +60,7 @@ export const AccessTokensComponent = (): JSX.Element => {
   const [name, setName] = useState('');
   const [expiresInDays, setExpiresInDays] = useState(90);
   const [mfaCode, setMfaCode] = useState('');
+  const [allowWrite, setAllowWrite] = useState(false);
   const [isCreating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
   const [createdToken, setCreatedToken] = useState<string | null>(null);
@@ -92,6 +98,7 @@ export const AccessTokensComponent = (): JSX.Element => {
     setName('');
     setExpiresInDays(90);
     setMfaCode('');
+    setAllowWrite(false);
     setCreateError('');
     setCreateOpen(true);
   };
@@ -109,7 +116,7 @@ export const AccessTokensComponent = (): JSX.Element => {
     setCreating(true);
     setCreateError('');
     try {
-      const response = await accessTokenApi.create(name.trim(), expiresInDays, mfaCode);
+      const response = await accessTokenApi.create(name.trim(), expiresInDays, mfaCode, allowWrite);
       setCreateOpen(false);
       setCreatedToken(response.token);
       await loadTokens();
@@ -140,24 +147,33 @@ export const AccessTokensComponent = (): JSX.Element => {
   }, []);
 
   return (
-    <div className="max-w-3xl">
-      <div className="mb-3 text-sm text-gray-600 dark:text-gray-300">
+    <div className="flex max-w-4xl flex-col gap-4">
+      <div className="text-sm text-gray-500 dark:text-gray-400">
         Let AI assistants such as Claude Code or Cursor query your logs, traces and metrics through
-        MCP. A token has read-only access to everything your account can see, and works only on{' '}
-        <code>{mcpUrl()}</code>.
+        MCP. A token has read-only access to everything your account can see, unless you also allow
+        changes when you create it, and works only on <code>{mcpUrl()}</code>.
       </div>
 
-      <div className="mb-4 text-sm text-gray-600 dark:text-gray-300">
-        <b>claude.ai and Claude Desktop:</b> add a custom connector with the URL{' '}
+      <div className="rounded-xl bg-gray-50 px-3.5 py-3 text-[13.5px] text-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
+        <b className="font-semibold text-gray-900 dark:text-gray-50">
+          claude.ai and Claude Desktop:
+        </b>{' '}
+        add a custom connector with the URL{' '}
         <Typography.Text code copyable>
           {mcpUrl()}
         </Typography.Text>{' '}
-        and sign in when asked. <b>Claude Code, Cursor and other tools:</b> create a token below.
+        and sign in when asked.{' '}
+        <b className="font-semibold text-gray-900 dark:text-gray-50">
+          Claude Code, Cursor and other tools:
+        </b>{' '}
+        create a token below.
       </div>
 
       {apps.length > 0 && (
-        <div className="mb-5">
-          <div className="mb-2 text-sm font-semibold">Connected apps</div>
+        <div className="flex flex-col gap-2 border-t border-gray-200 pt-3 dark:border-gray-700">
+          <div className="text-sm font-semibold text-gray-900 dark:text-gray-50">
+            Connected apps
+          </div>
           <Table<OAuthConnectedApp>
             size="small"
             rowKey="id"
@@ -165,6 +181,7 @@ export const AccessTokensComponent = (): JSX.Element => {
             pagination={false}
             columns={[
               { title: 'App', dataIndex: 'clientName' },
+              { title: 'Access', dataIndex: 'scopes', render: accessLabel },
               { title: 'Last refreshed', dataIndex: 'lastUsedAt', render: formatDate },
               { title: 'Access ends', dataIndex: 'expiresAt', render: formatDate },
               {
@@ -190,12 +207,13 @@ export const AccessTokensComponent = (): JSX.Element => {
         </div>
       )}
 
-      <div className="mb-2 text-sm font-semibold">Access tokens</div>
-      <Button type="primary" onClick={openCreate}>
-        Create token
-      </Button>
-
-      <div className="mt-4">
+      <div className="flex flex-col gap-2 border-t border-gray-200 pt-3 dark:border-gray-700">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm font-semibold text-gray-900 dark:text-gray-50">Access tokens</div>
+          <Button type="primary" onClick={openCreate}>
+            Create token
+          </Button>
+        </div>
         {isLoading ? (
           <Spin indicator={<LoadingOutlined spin />} />
         ) : (
@@ -207,7 +225,14 @@ export const AccessTokensComponent = (): JSX.Element => {
             locale={{ emptyText: 'No active tokens' }}
             columns={[
               { title: 'Name', dataIndex: 'name' },
-              { title: 'Token', dataIndex: 'tokenPrefix', render: (v: string) => <code>{v}</code> },
+              {
+                title: 'Token',
+                dataIndex: 'tokenPrefix',
+                render: (v: string) => (
+                  <code className="text-xs text-gray-600 dark:text-gray-300">{v}</code>
+                ),
+              },
+              { title: 'Access', dataIndex: 'scopes', render: accessLabel },
               { title: 'Last used', dataIndex: 'lastUsedAt', render: formatDate },
               { title: 'Expires', dataIndex: 'expiresAt', render: formatDate },
               {
@@ -241,7 +266,7 @@ export const AccessTokensComponent = (): JSX.Element => {
         okText="Create"
         confirmLoading={isCreating}
       >
-        <div className="mb-1 text-xs font-semibold">Name</div>
+        <div className="mb-1 pt-1 text-xs font-medium text-gray-500 dark:text-gray-400">Name</div>
         <Input
           placeholder="Claude Code on my laptop"
           value={name}
@@ -250,7 +275,9 @@ export const AccessTokensComponent = (): JSX.Element => {
           onPressEnter={create}
         />
 
-        <div className="mt-3 mb-1 text-xs font-semibold">Expires after</div>
+        <div className="mt-3 mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+          Expires after
+        </div>
         <Select
           className="w-full"
           value={expiresInDays}
@@ -258,9 +285,26 @@ export const AccessTokensComponent = (): JSX.Element => {
           onChange={setExpiresInDays}
         />
 
+        <div className="mt-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+          <Checkbox checked={allowWrite} onChange={(e) => setAllowWrite(e.target.checked)}>
+            <span className="text-sm text-gray-800 dark:text-gray-100">
+              Also allow changes (write access)
+            </span>
+          </Checkbox>
+          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Lets the assistant create and end alert silences (up to 4 hours), create dashboards and
+            add panels. It can&apos;t delete anything; each change is confirmed and recorded in the
+            audit log.
+            {!mfaEnabled &&
+              ' Needs two-factor authentication: turn it on under Profile first, unless you signed in through a provider that enforces it.'}
+          </div>
+        </div>
+
         {mfaEnabled && (
           <>
-            <div className="mt-3 mb-1 text-xs font-semibold">Authenticator code</div>
+            <div className="mt-3 mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+              Authenticator code
+            </div>
             <Input
               placeholder="000000"
               inputMode="numeric"
@@ -268,6 +312,7 @@ export const AccessTokensComponent = (): JSX.Element => {
               value={mfaCode}
               onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               onPressEnter={create}
+              className="!font-mono"
             />
           </>
         )}
@@ -294,20 +339,27 @@ export const AccessTokensComponent = (): JSX.Element => {
               message="Copy it now - it won't be shown again."
               className="mb-3"
             />
-            <Typography.Paragraph copyable={{ text: createdToken }}>
+            <Typography.Paragraph
+              copyable={{ text: createdToken }}
+              className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900"
+            >
               <code className="break-all">{createdToken}</code>
             </Typography.Paragraph>
 
-            <div className="mt-4 mb-1 text-xs font-semibold">Claude Code</div>
+            <div className="mt-4 mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+              Claude Code
+            </div>
             <Typography.Paragraph copyable={{ text: claudeCodeCommand(createdToken) }}>
-              <pre className="rounded bg-gray-50 p-2 text-xs break-all whitespace-pre-wrap dark:bg-gray-900">
+              <pre className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs break-all whitespace-pre-wrap dark:border-gray-700 dark:bg-gray-900">
                 {claudeCodeCommand(createdToken)}
               </pre>
             </Typography.Paragraph>
 
-            <div className="mb-1 text-xs font-semibold">Cursor and other clients (mcp.json)</div>
+            <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+              Cursor and other clients (mcp.json)
+            </div>
             <Typography.Paragraph copyable={{ text: jsonConfig(createdToken) }}>
-              <pre className="rounded bg-gray-50 p-2 text-xs dark:bg-gray-900">
+              <pre className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs dark:border-gray-700 dark:bg-gray-900">
                 {jsonConfig(createdToken)}
               </pre>
             </Typography.Paragraph>

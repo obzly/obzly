@@ -55,6 +55,9 @@ type User struct {
 	// SCIMOrgID is the organization whose SCIM created the account - the
 	// only one that may deactivate it.
 	SCIMOrgID *uuid.UUID `json:"-" gorm:"column:scim_org_id"`
+
+	// UIPreferences is NULL until the user first saves a preference.
+	UIPreferences *UIPreferences `json:"-" gorm:"column:ui_preferences;type:jsonb"`
 }
 
 func (User) TableName() string {

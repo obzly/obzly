@@ -224,8 +224,8 @@ export const QueryBuilderComponent = ({
           key={`logical-${path.join('-')}`}
           className={`relative w-full max-w-[820px] ${indentClass} pr-4`}
         >
-          <div className="rounded-lg border border-emerald-200 bg-white shadow-sm dark:bg-gray-800">
-            <div className="border-b border-emerald-200 px-4 py-3">
+          <div className="border-accent-200 rounded-lg border bg-white shadow-sm dark:bg-gray-800">
+            <div className="border-accent-200 border-b px-4 py-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Select
@@ -321,7 +321,7 @@ export const QueryBuilderComponent = ({
             type="primary"
             icon={<PlusOutlined />}
             onClick={handleAddCondition}
-            className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+            className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
           >
             Add Condition
           </Button>

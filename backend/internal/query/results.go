@@ -32,7 +32,11 @@ import (
 // needs QUERIER_TOKEN: an executor reads any project's data.
 const (
 	resultsFetchMethod = "/obzly.query.v1.Results/Fetch"
-	resultChunkBytes   = 1 << 20
+	// resultsShipMethod uploads one of the coordinator's local files for a
+	// fragment (see wireFragment.Shipped), in resultChunkBytes messages -
+	// under gRPC's 4 MiB default message limit.
+	resultsShipMethod = "/obzly.query.v1.Results/Ship"
+	resultChunkBytes  = 1 << 20
 	// resultTTL: an unfetched result (its coordinator died) is removed
 	// after this.
 	resultTTL = 5 * time.Minute
@@ -51,14 +55,25 @@ var resultsServiceDesc = grpc.ServiceDesc{
 			}
 			return server.fetch(stream)
 		},
+	}, {
+		StreamName:    "Ship",
+		ClientStreams: true,
+		Handler: func(srv any, stream grpc.ServerStream) error {
+			server, ok := srv.(*resultsServer)
+			if !ok {
+				return status.Error(codes.Internal, "unexpected results server")
+			}
+			return server.ship(stream)
+		},
 	}},
 }
 
 // resultsServer serves result files from dir by result ID, removing each
-// once sent.
+// once sent, and takes shipped files into shippedDir.
 type resultsServer struct {
-	dir   string
-	token string
+	dir        string
+	shippedDir string
+	token      string
 }
 
 // resultsClient fetches results, one connection per executor address.
@@ -74,6 +89,9 @@ type resultsClient struct {
 // startResultsServer listens on addr and serves results from dir until ctx
 // ends, over TLS when tlsConfig is set. It returns the bound address.
 func startResultsServer(ctx context.Context, addr, dir, token string, tlsConfig *tls.Config) (*net.TCPAddr, error) {
+	if err := os.MkdirAll(shippedDir(dir), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create shipped files directory: %w", err)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen for query results on %s: %w", addr, err)
@@ -88,7 +106,7 @@ func startResultsServer(ctx context.Context, addr, dir, token string, tlsConfig 
 		options = append(options, grpc.Creds(credentials.NewTLS(tlsConfig)))
 	}
 	server := grpc.NewServer(options...)
-	server.RegisterService(&resultsServiceDesc, &resultsServer{dir: dir, token: token})
+	server.RegisterService(&resultsServiceDesc, &resultsServer{dir: dir, shippedDir: shippedDir(dir), token: token})
 	go func() { _ = server.Serve(listener) }()
 	go func() {
 		ticker := time.NewTicker(time.Minute)
@@ -100,6 +118,7 @@ func startResultsServer(ctx context.Context, addr, dir, token string, tlsConfig 
 				return
 			case <-ticker.C:
 				removeExpiredResults(dir)
+				removeExpiredResults(shippedDir(dir))
 			}
 		}
 	}()
@@ -146,6 +165,48 @@ func (c *resultsClient) fetch(ctx context.Context, addr, id, path string) error 
 			return fmt.Errorf("failed to write fragment result: %w", err)
 		}
 	}
+}
+
+// ship uploads the file at path to the executor at addr and returns the id
+// a fragment names it by.
+func (c *resultsClient) ship(ctx context.Context, addr, path string) (string, error) {
+	conn, err := c.conn(addr)
+	if err != nil {
+		return "", err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file to ship: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+	stream, err := conn.NewStream(ctx, &resultsServiceDesc.Streams[1], resultsShipMethod)
+	if err != nil {
+		return "", fmt.Errorf("failed to ship a file to %s: %w", addr, err)
+	}
+	buffer := make([]byte, resultChunkBytes)
+	for {
+		n, err := file.Read(buffer)
+		if n > 0 {
+			if sendErr := stream.SendMsg(wrapperspb.Bytes(buffer[:n])); sendErr != nil {
+				return "", fmt.Errorf("failed to ship a file to %s: %w", addr, sendErr)
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to read file to ship: %w", err)
+		}
+	}
+	if err := stream.CloseSend(); err != nil {
+		return "", fmt.Errorf("failed to ship a file to %s: %w", addr, err)
+	}
+	id := new(wrapperspb.StringValue)
+	if err := stream.RecvMsg(id); err != nil {
+		return "", fmt.Errorf("failed to ship a file to %s: %w", addr, err)
+	}
+	return id.Value, nil
 }
 
 func (c *resultsClient) conn(addr string) (*grpc.ClientConn, error) {
@@ -207,6 +268,45 @@ func (s *resultsServer) fetch(stream grpc.ServerStream) error {
 	}
 }
 
+// ship writes one shipped file, at most maxShippedBytes, under a new id;
+// unused ones expire like results.
+func (s *resultsServer) ship(stream grpc.ServerStream) (err error) {
+	id := uuid.NewString()
+	path := resultPath(s.shippedDir, id)
+	file, err := os.Create(path)
+	if err != nil {
+		return status.Error(codes.Internal, "failed to create shipped file")
+	}
+	defer func() {
+		_ = file.Close()
+		if err != nil {
+			_ = os.Remove(path)
+		}
+	}()
+	var written int64
+	for {
+		chunk := new(wrapperspb.BytesValue)
+		err := stream.RecvMsg(chunk)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		written += int64(len(chunk.Value))
+		if written > maxShippedBytes {
+			return status.Error(codes.ResourceExhausted, "shipped file over the limit")
+		}
+		if _, err := file.Write(chunk.Value); err != nil {
+			return status.Error(codes.Internal, "failed to write shipped file")
+		}
+	}
+	if err := file.Close(); err != nil {
+		return status.Error(codes.Internal, "failed to write shipped file")
+	}
+	return stream.SendMsg(wrapperspb.String(id))
+}
+
 func tokenInterceptor(token string) grpc.StreamServerInterceptor {
 	want := []byte("Bearer " + token)
 	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
@@ -221,6 +321,12 @@ func tokenInterceptor(token string) grpc.StreamServerInterceptor {
 
 func resultPath(dir, id string) string {
 	return filepath.Join(dir, id+".parquet")
+}
+
+// shippedDir holds the files coordinators shipped to an executor whose
+// results are in dir.
+func shippedDir(dir string) string {
+	return filepath.Join(dir, "shipped")
 }
 
 func removeExpiredResults(dir string) {

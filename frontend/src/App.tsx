@@ -53,13 +53,17 @@ function AppContent() {
   }, []);
 
   const showMfaGate = isAuthorized && mfaSetupRequired === true;
-  const { theme } = useTheme();
+  const { theme, definition } = useTheme();
 
   return (
     <ConfigProvider
       theme={{
         token: {
-          colorPrimary: '#009966', // Tailwind emerald-600
+          fontFamily: "'Jost', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+          borderRadius: 8,
+          borderRadiusLG: 14,
+          // Per-theme surfaces; keep in step with the theme's colours in index.css.
+          ...definition.antd,
         },
         algorithm: theme === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
       }}

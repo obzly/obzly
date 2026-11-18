@@ -38,3 +38,11 @@ export const colorFor = (event: string, f: Record<string, string>): string => {
   if (event === 'api_request') return 'green';
   return 'gray';
 };
+
+export type PillTone = 'bad' | 'warn' | 'ok' | 'info' | 'muted';
+
+const TONES: Record<string, PillTone> = { red: 'bad', orange: 'warn', blue: 'info', green: 'ok' };
+
+/** colorFor as a v2 pill tone. */
+export const toneFor = (event: string, f: Record<string, string>): PillTone =>
+  TONES[colorFor(event, f)] ?? 'muted';

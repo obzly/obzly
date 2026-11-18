@@ -17,6 +17,11 @@ const (
 	maxAssetLimit     = 5000
 	maxChildren       = 200
 	maxParents        = 6
+	historyDays       = 7
+	// previousAge: change pills compare with the counts this old; previousSlack: how much
+	// older they may be when that hour has none (a build was missed).
+	previousAge   = 24 * time.Hour
+	previousSlack = 2 * time.Hour
 )
 
 var (
@@ -40,8 +45,9 @@ type assetFilter struct {
 	search    string
 }
 
-// Summary counts the user's assets by kind, health and state.
-func (s *Service) Summary(user *users_models.User, projectID string) (*SummaryDTO, error) {
+// Summary counts the user's assets by kind, health and state, with the last days' hourly counts
+// when withHistory.
+func (s *Service) Summary(user *users_models.User, projectID string, withHistory bool) (*SummaryDTO, error) {
 	projects, ids, err := s.projectsFor(user, projectID)
 	if err != nil {
 		return nil, err
@@ -50,8 +56,16 @@ func (s *Service) Summary(user *users_models.User, projectID string) (*SummaryDT
 		Kinds: map[string]map[string]int64{}, States: map[string]int64{}, Health: map[string]int64{},
 		Projects: []ProjectCountDTO{},
 	}
+	if withHistory {
+		summary.History = &HistoryDTO{Hours: []time.Time{}, Kinds: map[string][]int64{}}
+	}
 	if len(ids) == 0 {
 		return summary, nil
+	}
+	if withHistory {
+		if summary.History, err = s.history(ids); err != nil {
+			return nil, err
+		}
 	}
 	rows, err := s.repo.summary(ids)
 	if err != nil {
@@ -180,6 +194,56 @@ func (s *Service) ListChanges(user *users_models.User, projectID string, hours, 
 		result = append(result, ChangeDTO{Change: change, ProjectName: projects[change.ProjectID]})
 	}
 	return result, nil
+}
+
+// history is the projects' hourly counts over the last historyDays, and those of about a day ago.
+func (s *Service) history(ids []uuid.UUID) (*HistoryDTO, error) {
+	now := s.now()
+	rows, err := s.repo.counts(ids, now.Add(-historyDays*24*time.Hour).Truncate(time.Hour))
+	if err != nil {
+		return nil, err
+	}
+	history := &HistoryDTO{Hours: []time.Time{}, Kinds: map[string][]int64{}}
+	index := map[time.Time]int{}
+	for _, row := range rows {
+		if row.Kind == "" {
+			index[row.Hour.UTC()] = len(history.Hours)
+			history.Hours = append(history.Hours, row.Hour.UTC())
+		}
+	}
+	target := now.Add(-previousAge).Truncate(time.Hour)
+	var previous time.Time
+	for _, hour := range history.Hours {
+		if !hour.After(target) && !hour.Before(target.Add(-previousSlack)) {
+			previous = hour
+		}
+	}
+	for _, row := range rows {
+		i, ok := index[row.Hour.UTC()]
+		if row.Kind == "" || !ok {
+			continue
+		}
+		if history.Kinds[row.Kind] == nil {
+			history.Kinds[row.Kind] = make([]int64, len(history.Hours))
+		}
+		history.Kinds[row.Kind][i] += row.Count
+		if !previous.IsZero() && row.Hour.UTC().Equal(previous) {
+			if history.Previous == nil {
+				history.Previous = map[string]map[string]int64{}
+			}
+			if history.Previous[row.Kind] == nil {
+				history.Previous[row.Kind] = map[string]int64{}
+			}
+			history.Previous[row.Kind][row.Health] += row.Count
+		}
+	}
+	if !previous.IsZero() {
+		history.PreviousAt = &previous
+		if history.Previous == nil {
+			history.Previous = map[string]map[string]int64{}
+		}
+	}
+	return history, nil
 }
 
 // projectsFor is the projects the user can read (names by id), narrowed to

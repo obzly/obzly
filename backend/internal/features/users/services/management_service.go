@@ -18,6 +18,8 @@ import (
 )
 
 var (
+	ErrListUsersForbidden   = errors.New("insufficient permissions to list users")
+	ErrInvalidUserFilter    = errors.New("invalid filter")
 	ErrDeleteUsersForbidden = errors.New("insufficient permissions to delete users")
 	ErrUserNotFound         = errors.New("user not found")
 	ErrUserOwnsProjects     = errors.New("user owns projects; transfer their ownership first")
@@ -36,14 +38,26 @@ func (s *UserManagementService) SetAuditLogWriter(writer user_interfaces.AuditLo
 func (s *UserManagementService) GetUsers(
 	currentUser *user_models.User,
 	limit, offset int,
-	beforeCreatedAt *time.Time,
-	query string,
+	filter user_repositories.UserListFilter,
 ) ([]*user_models.User, int64, error) {
 	if !currentUser.CanManageUsers() {
-		return nil, 0, errors.New("insufficient permissions to list users")
+		return nil, 0, ErrListUsersForbidden
+	}
+	if err := validateUserListFilter(filter); err != nil {
+		return nil, 0, err
 	}
 
-	return s.userRepository.GetUsers(limit, offset, beforeCreatedAt, query)
+	return s.userRepository.GetUsers(limit, offset, filter)
+}
+
+// GetUsersSummary is the Users page's counts (admins).
+func (s *UserManagementService) GetUsersSummary(
+	currentUser *user_models.User,
+) (*user_repositories.UsersSummary, error) {
+	if !currentUser.CanManageUsers() {
+		return nil, ErrListUsersForbidden
+	}
+	return s.userRepository.Summary(time.Now().UTC())
 }
 
 func (s *UserManagementService) GetUserProfile(
@@ -93,17 +107,15 @@ func (s *UserManagementService) DeactivateUser(userID uuid.UUID, deactivatedBy *
 }
 
 // SetStatusByProvisioning is SCIM's (de)activation of an account its organization
-// created; deactivating revokes sessions.
-func (s *UserManagementService) SetStatusByProvisioning(user *user_models.User, active bool, by string) error {
-	status, verb := user_enums.UserStatusInactive, "deactivated"
+// created; deactivating revokes sessions. The caller writes the audit log, with
+// its organization.
+func (s *UserManagementService) SetStatusByProvisioning(user *user_models.User, active bool) error {
+	status := user_enums.UserStatusInactive
 	if active {
-		status, verb = user_enums.UserStatusActive, "activated"
+		status = user_enums.UserStatusActive
 	}
 	if err := s.userRepository.UpdateUserStatus(user.ID, status); err != nil {
 		return fmt.Errorf("failed to update user status: %w", err)
-	}
-	if s.auditLogWriter != nil {
-		s.auditLogWriter.WriteAuditLog(fmt.Sprintf("User %s by %s: %s", verb, by, user.Email), nil, nil)
 	}
 	if !active {
 		notifySessionRevocation(user.ID)
@@ -309,5 +321,23 @@ func (s *UserManagementService) SetUserPassword(
 		)
 	}
 
+	return nil
+}
+
+func validateUserListFilter(filter user_repositories.UserListFilter) error {
+	if filter.Role != "" && !user_enums.UserRole(filter.Role).IsValid() {
+		return fmt.Errorf("%w: role must be ADMIN or MEMBER", ErrInvalidUserFilter)
+	}
+	if filter.MFA != "" && filter.MFA != "on" && filter.MFA != "off" {
+		return fmt.Errorf("%w: mfa must be on or off", ErrInvalidUserFilter)
+	}
+	switch user_enums.UserStatus(filter.Status) {
+	case "", user_enums.UserStatusActive, user_enums.UserStatusInvited, user_enums.UserStatusInactive:
+	default:
+		return fmt.Errorf("%w: status must be ACTIVE, INVITED or INACTIVE", ErrInvalidUserFilter)
+	}
+	if filter.Activity != "" && filter.Activity != "active" && filter.Activity != "inactive" {
+		return fmt.Errorf("%w: activity must be active or inactive", ErrInvalidUserFilter)
+	}
 	return nil
 }

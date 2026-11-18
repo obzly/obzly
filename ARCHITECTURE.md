@@ -712,8 +712,12 @@ New subsystem, not tied to one signal:
   accumulating duplicates.
 - **Frontend**: `react-grid-layout` for the drag/resize grid, `echarts` (modular imports —
   `echarts/core` + only the chart/component/renderer types dashboards use — cut the production bundle by
-  roughly 500KB versus the full package) for line/bar/pie; `stat`/`table` panel types render directly
-  (a plain number, an antd `Table`) rather than through ECharts. The panel editor reuses
+  roughly 500KB versus the full package) for line/bar/pie/stackedBar; `stat`/`table` panel types render
+  directly (a plain number, an antd `Table`) rather than through ECharts, as do the UI v2 kinds
+  (`statTrend`, `rankedList`, `donut`, `gauge`, `statusStrip`) through the shared `shared/ui/v2` widgets.
+  Their display settings (`min`/`max` for a gauge, `thresholds` for a gauge or status strip, `higherIs`
+  for those and a stat with trend's change pill) are validated per type by the backend and never touch
+  the query; a stat with trend runs one extra un-bucketed query over the previous window. The panel editor reuses
   `features/query`'s existing `QueryBuilderComponent`/`TimeRangePickerComponent` unchanged — a panel's
   filter is the exact same `QueryNode` the log search page already builds. A time-series panel's bucket
   width defaults to "auto" (`bucketMs` unset): the frontend computes a bucket width from whatever range
@@ -1148,6 +1152,13 @@ stale owner's release can't steal back a lease someone else has since taken over
   runs a given pass at a time," not "always the same replica." `RunExclusive` renews the lease every
   TTL/3 while the pass runs, so a pass longer than its TTL stays exclusive, and
   cancels the pass's context if the lease is lost or can't be renewed in time.
+  That still let N replicas each run a pass every interval (one after another), so interval tasks
+  whose passes cost something (these tickers outside sharded compaction, correlation scan, inventory
+  build, alert outbox prune, cloud cost/posture maintenance) now call `leaderlock.RunAtMostEvery`:
+  with the lock held, a replica also claims the interval (`SET NX PX` on
+  `obzly:leaderlock:last-run:<task>`, expiring 1/20 of the interval early) and runs only if no run
+  claimed it yet, so the pass runs about once per interval across all replicas;
+  `obzly_leader_task_runs_total{result="ok"}` summed over replicas is that rate.
 - **Migrations** (`runMigrations` in `cmd/main.go`) now run `goose up` inside
   `leaderlock.RunExclusiveBlocking` - unlike the workers above, every replica *must* eventually run this
   (goose's own version tracking makes a second run a no-op, not a skip), so a replica that loses the race
@@ -1852,9 +1863,14 @@ backlog, pending uploads and oldest-pending age on worker replicas — aggregate
 Rules and alerts for every SLO that has a metric today ship in
 `deploy/observability/prometheus/obzly-rules.yaml`, validated by a Go test against the metric
 definitions. **Part 2:** `obzly_duckdb_memory_bytes` / `obzly_duckdb_temporary_storage_bytes` per
-handle kind (writer, querier per stream, compactor) from `duckdb_memory()` at scrape time — each
-handle defaults to a `memory_limit` of 80% of RAM, and a process opens about a dozen, so their sum is
-what shows OOM risk; and a seed Grafana dashboard, `deploy/observability/grafana/obzly-overview.json`,
+handle kind (writer, querier per stream, compactor, token filter, tail merger, footer reader) from
+`duckdb_memory()` at scrape time (a handle that misses the scrape timeout reports its last reading),
+beside `obzly_duckdb_memory_limit_bytes` — every handle now has an explicit `memory_limit` (DuckDB's
+default is 80% of RAM each). All writers share one database (384 MB), all compactors one (1 GB, where a
+gate lets one in-memory sort or several streaming merges run at a time) and both token filter builders
+one (384 MB); a worker's four search handles get 1/16 of the pod each (256-512 MB, 2 threads). Each
+replica logs the sum of the caps plus 25% for Go at startup (about 4.1 GB on a 4 GiB worker), warning
+when it is over the container limit; and a seed Grafana dashboard, `deploy/observability/grafana/obzly-overview.json`,
 checked by the same test. Self-tracing is part 3, below. Still to do for item 7: the JetStream/broker
 metrics once item 1 exists (the Valkey queue stands in for consumer lag until then).
 
@@ -1910,7 +1926,7 @@ design, project-scoped), `alert_states` (per rule and label fingerprint), `notif
   row pause a channel for a minute. Sent and given-up rows are deleted after 7 days (leader lock
   `alert-outbox-prune`, hourly, 1,000 rows a statement). Webhook (JSON body
   `obzly.alert/1`, optional headers), Slack (incoming webhook text with `&`, `<`, `>` escaped, so
-  telemetry can't mention or link), PagerDuty (Events API v2,
+  telemetry can't mention or link; an attachment since v1.2.0), PagerDuty (Events API v2,
   `dedup_key` = rule:fingerprint, resolve on recovery) and email (the SMTP relay set in Obzly settings - since v0.55.0, before that `ALERT_SMTP_*` -
   STARTTLS or TLS 1.2+, channels hold recipients only). Channels themselves are defined in Obzly
   settings and shared across projects; on a control plane they are central and Sites pull them
@@ -1935,6 +1951,26 @@ design, project-scoped), `alert_states` (per rule and label fingerprint), `notif
   rule with a warning). They show in Alerts read-only; editing or deleting one answers
   409. A child monitor's down and degraded rules end with `unless on()` its parents' failure
   queries when they share the project, so an outage notifies once, for its root cause.
+- **Severities, message templates and incident notifications (v1.2.0):** `alert_rules.severity`
+  (critical/high/medium/low, migrated from the `severity` label) and `description` (runbook).
+  Every channel renders through `alerting/templates.go`: Go `text/template` with a curated
+  FuncMap (strings only), a 16 KB source / 64 KB output cap, a 2 s timeout, no `define`/`template`
+  and no ranging over number literals; the data (`.Emoji`, `.Severity`, `.Rule`, `.Labels`,
+  `.Link`, `.Incident`, ...) is escaped per channel before the template sees it (Slack `& < >`,
+  JSON string content for custom webhook bodies, control characters for email/PagerDuty). The
+  template is the channel's override, else the organisation default for its kind
+  (`notification_templates`, source `central` on a control plane and enrolled Sites, `local` on a
+  standalone one; cached 30 s), else the built-in. A send-time render failure sends the built-in
+  template and is recorded on the channel (`template_error`) or the template row (`last_error`).
+  `shared_channels` carry `use_emoji` and the override; the shared-config payload carries them and
+  `templates`, applied by the Site in the channel transaction. PagerDuty severity follows the
+  rule's; Slack uses an attachment coloured by severity/status. Incident notifications:
+  `incident_notification_settings` per project and `incident_notifications`, one row per incident
+  into which the correlation scanner folds its sessions (shared service, within 15 minutes);
+  crossing min signals or min services queues the opening (top services from the session impact
+  query, once), 15 quiet minutes end it (`EndQuietIncidents`, end queued once by a guarded
+  `UPDATE ... WHERE ended_at IS NULL`); both go through the outbox with labels
+  `alertname=Incident`, `obzly_kind=incident`, `severity`.
 - Measured: rule to notification 15.2 s with the real loops (target < 60 s). Not yet: grouping
   several alerts into one notification (`group_wait`), org-scoped channels (item 9).
 

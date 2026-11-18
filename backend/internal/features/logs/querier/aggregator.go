@@ -70,10 +70,23 @@ func (q *LogQuerier) executeAggregation(
 	emit logs_core.AggregationEmitter,
 ) (*logs_core.AggregationResponseDTO, error) {
 	empty := &logs_core.AggregationResponseDTO{Buckets: []logs_core.AggregationBucketDTO{}}
+	if err := request.ValidateOptions(); err != nil {
+		return nil, err
+	}
+	if err := validateValueFields(request); err != nil {
+		return nil, err
+	}
 	if request.BucketMs > 0 && request.BucketMs < minBucketMs {
 		floored := *request
 		floored.BucketMs = minBucketMs
 		request = &floored
+	}
+	if request.TopGroups > 0 {
+		restricted, err := q.restrictToTopGroups(ctx, projectID, request)
+		if err != nil || restricted == nil {
+			return empty, err
+		}
+		request = restricted
 	}
 	from, to := resolveTimeRange(request.TimeRange)
 	records, err := q.segmentRepo.PlanSegments(projectID, q.stream, from, to, hintsFor(request.Query))
@@ -92,6 +105,11 @@ func (q *LogQuerier) executeAggregation(
 	if querySQL != "" {
 		whereClause += " AND " + querySQL
 	}
+	// A measure or band reads a value; lines without one are left out.
+	if valueSQL, valueArgs := builder.requiredValue(request); valueSQL != "" {
+		whereClause += " AND " + valueSQL
+		whereArgs = append(whereArgs, valueArgs...)
+	}
 
 	plan := buildAggregationPlan(request, builder)
 
@@ -102,10 +120,22 @@ func (q *LogQuerier) executeAggregation(
 	if limit > maxAggregationLimit {
 		limit = maxAggregationLimit
 	}
-	if request.BucketMs > 0 && (q.partitionCache != nil || q.rollupsApply(request) || emit != nil) &&
+	// Partitions add their counts up, so only a count (of lines or bands)
+	// can be read by partition.
+	if request.BucketMs > 0 && request.Measure.IsCount() &&
+		(q.partitionCache != nil || q.rollupsApply(request) || emit != nil) &&
 		partitionedAggregationFits(request, from, to, tail, ordered) {
 		return q.aggregateByPartition(ctx, projectID, request, from, to, tail, ordered,
 			whereClause, whereArgs, plan, limit, emit)
+	}
+	if topN := hourlyTopNRequest(request); topN != nil && (q.partitionCache != nil || q.rollupsApply(topN)) &&
+		partitionedAggregationFits(topN, from, to, tail, ordered) {
+		response, err := q.aggregateTopNByPartition(ctx, projectID, topN, from, to, tail, ordered,
+			whereClause, whereArgs, buildAggregationPlan(topN, builder), limit)
+		if err == nil && emit != nil && len(response.Buckets) > 0 {
+			err = emit(response.Buckets)
+		}
+		return response, err
 	}
 
 	// Fragments count per bucket/group without a limit (a top-N must see
@@ -126,6 +156,8 @@ func (q *LogQuerier) executeAggregation(
 		SingleArgs: append(selectArgs, limit),
 		ScanBudget: request.ScanBudget,
 		Tokens:     requiredTokens(request.Query),
+		// A distinct count or a percentile can't be merged from fragments.
+		SingleFragment: !request.Measure.IsCount(),
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			bucket, err := plan.scan(rows)
@@ -169,7 +201,15 @@ type rowScanner interface {
 }
 
 func buildAggregationPlan(request *logs_core.AggregationRequestDTO, builder *whereBuilder) aggregationPlan {
-	return buildAggregationPlanCounting(request, builder, "count(*)")
+	if request.Measure.IsCount() {
+		return buildAggregationPlanCounting(request, builder, "count(*)")
+	}
+	expr, args := builder.measureExpression(request.Measure, request.MeasureField)
+	plan := buildAggregationPlanCounting(request, builder, expr)
+	// The measure's own arguments come after the bucket and group ones.
+	plan.selectArgs = append(plan.selectArgs, args...)
+	plan.scan = measureScannerFor(request.BucketMs > 0, request.GroupField != "")
+	return plan
 }
 
 // buildAggregationPlanCounting is buildAggregationPlan counting a row as
@@ -181,6 +221,9 @@ func buildAggregationPlanCounting(
 	grouped := request.GroupField != ""
 
 	groupFieldExpr, groupFieldArgs := builder.groupFieldExpression(request.GroupField)
+	if request.GroupBands == logs_core.GroupBandsLog {
+		groupFieldExpr, groupFieldArgs = builder.logBandExpression(request.GroupField)
+	}
 
 	var selectParts []string
 	var selectArgs []any
@@ -279,8 +322,23 @@ func scannerFor(bucketed, grouped bool) func(rowScanner) (logs_core.AggregationB
 }
 
 // groupFieldExpression resolves a GroupField like a condition's field: a
-// system column directly, else a custom field from the fields JSON.
+// system column directly, else a custom field from the fields JSON. Several
+// fields (logs_core.JoinGroupFields) group by their values joined.
 func (b *whereBuilder) groupFieldExpression(field string) (expr string, args []any) {
+	parts := strings.Split(field, logs_core.GroupFieldsSeparator)
+	if len(parts) == 1 {
+		return b.singleGroupFieldExpression(field)
+	}
+	exprs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		partExpr, partArgs := b.singleGroupFieldExpression(strings.TrimSpace(part))
+		exprs = append(exprs, "COALESCE(CAST("+partExpr+" AS VARCHAR), '')")
+		args = append(args, partArgs...)
+	}
+	return "concat_ws(chr(31), " + strings.Join(exprs, ", ") + ")", args
+}
+
+func (b *whereBuilder) singleGroupFieldExpression(field string) (expr string, args []any) {
 	field = attrnames.Normalize(field)
 	if column, isSystem := b.systemColumn(field); isSystem {
 		return column, nil

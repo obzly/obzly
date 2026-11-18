@@ -22,6 +22,10 @@ export interface OrgMember {
   suspended: boolean;
   email: string;
   name: string;
+  /** When they joined the organization. */
+  createdAt: string;
+  /** Names of the organization's teams they are in (older servers omit it). */
+  teams?: string[];
 }
 
 export interface TeamMember {
@@ -55,6 +59,13 @@ export interface SCIMToken {
   prefix: string;
   createdAt: string;
   lastUsedAt: string | null;
+}
+
+/** One SCIM provisioning change to the organization, from the audit log. */
+export interface SCIMEvent {
+  id: string;
+  message: string;
+  createdAt: string;
 }
 
 // Returned once, at creation.

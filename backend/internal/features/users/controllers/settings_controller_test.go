@@ -159,3 +159,110 @@ func Test_UpdateUserSettings_WithoutAuth_ReturnsUnauthorized(t *testing.T) {
 
 	test_utils.MakePutRequest(t, router, "/api/v1/users/settings", "", request, http.StatusUnauthorized)
 }
+
+func Test_GetUserSettings_ThemeDefaults_ReturnsSafeDefaults(t *testing.T) {
+	users_testing.ResetSettingsToDefaults()
+	router := createSettingsTestRouter()
+	testUser := users_testing.CreateTestUser(users_enums.UserRoleMember)
+
+	var response users_models.UsersSettings
+	test_utils.MakeGetRequestAndUnmarshal(
+		t, router, "/api/v1/users/settings", "Bearer "+testUser.Token, http.StatusOK, &response,
+	)
+
+	assert.Equal(t, "system", response.DefaultThemeMode)
+	assert.Equal(t, "emerald-light", response.DefaultLightTheme)
+	assert.Equal(t, "emerald-dark", response.DefaultDarkTheme)
+	assert.True(t, response.IsUserThemeChoiceAllowed)
+}
+
+func Test_UpdateUserSettings_WithThemeDefaults_SavedAndReadBack(t *testing.T) {
+	users_testing.ResetSettingsToDefaults()
+	defer users_testing.ResetSettingsToDefaults()
+	router := createSettingsTestRouter()
+	admin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
+
+	request := map[string]any{
+		"isAllowExternalRegistrations":    true,
+		"isAllowMemberInvitations":        true,
+		"isMemberAllowedToCreateProjects": true,
+		"defaultThemeMode":                "dark",
+		"defaultLightTheme":               "soft-light",
+		"defaultDarkTheme":                "black",
+		"isUserThemeChoiceAllowed":        false,
+	}
+	test_utils.MakePutRequest(t, router, "/api/v1/users/settings", "Bearer "+admin.Token, request, http.StatusOK)
+
+	var response users_models.UsersSettings
+	test_utils.MakeGetRequestAndUnmarshal(
+		t, router, "/api/v1/users/settings", "Bearer "+admin.Token, http.StatusOK, &response,
+	)
+	assert.Equal(t, "dark", response.DefaultThemeMode)
+	assert.Equal(t, "soft-light", response.DefaultLightTheme)
+	assert.Equal(t, "black", response.DefaultDarkTheme)
+	assert.False(t, response.IsUserThemeChoiceAllowed)
+}
+
+func Test_UpdateUserSettings_WithoutThemeFields_KeepsStoredThemeDefaults(t *testing.T) {
+	users_testing.ResetSettingsToDefaults()
+	defer users_testing.ResetSettingsToDefaults()
+	router := createSettingsTestRouter()
+	admin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
+
+	test_utils.MakePutRequest(t, router, "/api/v1/users/settings", "Bearer "+admin.Token, map[string]any{
+		"isAllowExternalRegistrations": true, "defaultDarkTheme": "midnight", "isUserThemeChoiceAllowed": false,
+	}, http.StatusOK)
+
+	var response users_models.UsersSettings
+	test_utils.MakePutRequestAndUnmarshal(t, router, "/api/v1/users/settings", "Bearer "+admin.Token,
+		map[string]any{"isAllowExternalRegistrations": true}, http.StatusOK, &response)
+
+	assert.Equal(t, "midnight", response.DefaultDarkTheme)
+	assert.Equal(t, "system", response.DefaultThemeMode)
+	assert.False(t, response.IsUserThemeChoiceAllowed)
+}
+
+func Test_UpdateUserSettings_WithInvalidThemeDefaults_ReturnsBadRequest(t *testing.T) {
+	users_testing.ResetSettingsToDefaults()
+	defer users_testing.ResetSettingsToDefaults()
+	router := createSettingsTestRouter()
+	admin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
+
+	cases := map[string]map[string]any{
+		"unknown mode":     {"defaultThemeMode": "sepia"},
+		"dark id as light": {"defaultLightTheme": "black"},
+		"light id as dark": {"defaultDarkTheme": "semi-dark"},
+		"unknown theme":    {"defaultDarkTheme": "no-such"},
+	}
+	for name, request := range cases {
+		t.Run(name, func(t *testing.T) {
+			test_utils.MakePutRequest(t, router, "/api/v1/users/settings", "Bearer "+admin.Token, request,
+				http.StatusBadRequest)
+		})
+	}
+
+	var response users_models.UsersSettings
+	test_utils.MakeGetRequestAndUnmarshal(
+		t, router, "/api/v1/users/settings", "Bearer "+admin.Token, http.StatusOK, &response,
+	)
+	assert.Equal(t, "system", response.DefaultThemeMode)
+	assert.Equal(t, "emerald-light", response.DefaultLightTheme)
+	assert.Equal(t, "emerald-dark", response.DefaultDarkTheme)
+}
+
+func Test_UpdateUserSettings_ThemeDefaultsAsMember_ReturnsForbidden(t *testing.T) {
+	users_testing.ResetSettingsToDefaults()
+	defer users_testing.ResetSettingsToDefaults()
+	router := createSettingsTestRouter()
+	member := users_testing.CreateTestUser(users_enums.UserRoleMember)
+
+	test_utils.MakePutRequest(t, router, "/api/v1/users/settings", "Bearer "+member.Token,
+		map[string]any{"defaultDarkTheme": "black", "isUserThemeChoiceAllowed": false}, http.StatusForbidden)
+
+	var response users_models.UsersSettings
+	test_utils.MakeGetRequestAndUnmarshal(
+		t, router, "/api/v1/users/settings", "Bearer "+member.Token, http.StatusOK, &response,
+	)
+	assert.Equal(t, "emerald-dark", response.DefaultDarkTheme)
+	assert.True(t, response.IsUserThemeChoiceAllowed)
+}

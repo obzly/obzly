@@ -16,14 +16,6 @@ export const BUDGET_STATE_LABELS: Record<BudgetState, string> = {
   over: 'Over budget',
 };
 
-// antd Tag/Progress colors per state: green, amber past the first
-// threshold, red from 100%.
-export const BUDGET_STATE_COLORS: Record<BudgetState, string> = {
-  ok: '#16a34a',
-  warning: '#d97706',
-  over: '#dc2626',
-};
-
 export const SCOPE_OPTIONS: { value: BudgetScope; label: string; hint: string }[] = [
   { value: 'project', label: 'The whole project', hint: 'One total for everyone' },
   {

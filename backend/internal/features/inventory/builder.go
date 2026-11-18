@@ -16,17 +16,26 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
+// buildEvery and buildTask: variables so a test can shorten the interval and
+// keep its Valkey keys apart.
+var (
 	buildEvery = 5 * time.Minute
+	buildTask  = "inventory-build"
+)
+
+const (
 	// projectTimeout bounds one project's build.
 	projectTimeout = 2 * time.Minute
 	// parallelProjects: projects built at once.
 	parallelProjects = 4
 	keepChanges      = 7 * 24 * time.Hour
+	keepCounts       = 30 * 24 * time.Hour
 )
 
-// Builder rebuilds every project's inventory every 5 minutes on one worker
-// replica (leader-locked).
+// Builder rebuilds every project's inventory every 5 minutes, on one worker
+// replica per interval (leaderlock.RunAtMostEvery): with RunExclusive alone
+// every worker rebuilt it every 5 minutes, each running every project's
+// PromQL on its own metrics DuckDB.
 type Builder struct {
 	repo      *repository
 	collector collector
@@ -46,8 +55,7 @@ func (b *Builder) Start(ctx context.Context) {
 				return
 			case <-timer.C:
 			}
-			if _, err := leaderlock.RunExclusive(ctx, cache.GetCache(), "inventory-build", 2*buildEvery,
-				b.BuildAll); err != nil {
+			if _, err := b.buildIfDue(ctx); err != nil {
 				b.log.Error("inventory build failed", "error", err)
 			}
 			timer.Reset(buildEvery)
@@ -82,6 +90,9 @@ func (b *Builder) BuildAll(ctx context.Context) error {
 	}
 	close(work)
 	wg.Wait()
+	if err := b.repo.deleteCountsBefore(b.now().Add(-keepCounts)); err != nil {
+		return err
+	}
 	return b.repo.deleteChangesBefore(b.now().Add(-keepChanges))
 }
 
@@ -107,7 +118,11 @@ func (b *Builder) Build(ctx context.Context, projectID uuid.UUID) error {
 		assets, changes, stale = capAssets(assets, changes, stale, limit)
 	}
 	changed, seen := splitUnchanged(existing, assets)
-	return b.repo.save(ctx, changed, seen, changes, stale)
+	if err := b.repo.save(ctx, changed, seen, changes, stale); err != nil {
+		return err
+	}
+	hour := now.Truncate(time.Hour)
+	return b.repo.saveCounts(ctx, projectID, hour, countsOf(projectID, hour, assets))
 }
 
 func retention() time.Duration {
@@ -116,6 +131,20 @@ func retention() time.Duration {
 		days = 30
 	}
 	return time.Duration(days) * 24 * time.Hour
+}
+
+// countsOf is the hour's count rows: per kind and health, and the total under kind "".
+func countsOf(projectID uuid.UUID, hour time.Time, assets []*Asset) []countRow {
+	type key struct{ kind, health string }
+	counts := map[key]int64{}
+	for _, a := range assets {
+		counts[key{a.Kind, a.Health}]++
+	}
+	rows := []countRow{{ProjectID: projectID, Hour: hour, Count: int64(len(assets))}}
+	for k, count := range counts {
+		rows = append(rows, countRow{ProjectID: projectID, Hour: hour, Kind: k.kind, Health: k.health, Count: count})
+	}
+	return rows
 }
 
 // capAssets keeps the limit most recently seen assets: the rest are
@@ -182,3 +211,9 @@ func samePersisted(a, b *Asset) bool {
 
 // sameTime: equal at Postgres' microsecond precision.
 func sameTime(a, b time.Time) bool { return a.Sub(b).Abs() < time.Microsecond }
+
+// buildIfDue builds every project unless another replica built them within
+// buildEvery or is building them now; ran says whether this replica built.
+func (b *Builder) buildIfDue(ctx context.Context) (bool, error) {
+	return leaderlock.RunAtMostEvery(ctx, cache.GetCache(), buildTask, buildEvery, 2*buildEvery, b.BuildAll)
+}

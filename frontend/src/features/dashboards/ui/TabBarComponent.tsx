@@ -32,7 +32,8 @@ export const TabBarComponent = ({
 
   return (
     <Tabs
-      className="dashboard-tab-bar"
+      // The page already spaces its sections; drop antd's own gap under the tabs.
+      className="dashboard-tab-bar [&_.ant-tabs-nav]:!mb-0"
       activeKey={activeTabId}
       onChange={onChangeActiveTab}
       type={isEditing ? 'editable-card' : 'card'}

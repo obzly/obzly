@@ -72,6 +72,24 @@ func (r *repository) members(orgID uuid.UUID) ([]Membership, error) {
 	return members, err
 }
 
+// memberTeams is each member's team names in orgID, in one query.
+func (r *repository) memberTeams(orgID uuid.UUID) (map[uuid.UUID][]string, error) {
+	var rows []struct {
+		UserID uuid.UUID `gorm:"column:user_id"`
+		Name   string    `gorm:"column:name"`
+	}
+	if err := storage.GetDb().Table("team_memberships tm").Select("tm.user_id, t.name").
+		Joins("JOIN teams t ON t.id = tm.team_id").Where("t.org_id = ?", orgID).
+		Order("lower(t.name)").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	teams := map[uuid.UUID][]string{}
+	for _, row := range rows {
+		teams[row.UserID] = append(teams[row.UserID], row.Name)
+	}
+	return teams, nil
+}
+
 func (r *repository) countOwners(tx *gorm.DB, orgID uuid.UUID) (int64, error) {
 	var count int64
 	err := tx.Model(&Membership{}).Where("org_id = ? AND role = ?", orgID, RoleOwner).Count(&count).Error

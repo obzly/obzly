@@ -15,13 +15,17 @@ export const accessTokenApi = {
     return response.accessTokens;
   },
 
+  /** write adds the mcp:write scope (MCP write tools); it needs a session that passed MFA. */
   async create(
     name: string,
     expiresInDays: number,
     mfaCode?: string,
+    write = false,
   ): Promise<CreateAccessTokenResponse> {
     const requestOptions = new RequestOptions();
-    requestOptions.setBody(JSON.stringify({ name, expiresInDays, mfaCode: mfaCode || undefined }));
+    requestOptions.setBody(
+      JSON.stringify({ name, expiresInDays, mfaCode: mfaCode || undefined, write }),
+    );
     return apiHelper.fetchPostJson(baseUrl(), requestOptions);
   },
 

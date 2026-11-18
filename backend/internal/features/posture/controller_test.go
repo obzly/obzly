@@ -118,6 +118,44 @@ func Test_PostureBatches_OpenResolveAndReopenFindings_OnlyWhereAScopeWasReadAgai
 	assert.Equal(t, "EC2.8", resource[0].Control)
 }
 
+func Test_PostureSummary_ExplainsEachStandardsSource_FromTheScopesReads(t *testing.T) {
+	f := newFixture(t, "Posture reasons")
+	run := func(region, standard, source, result, reason string) spec.PostureRun {
+		return spec.PostureRun{Account: "111122223333", Region: region, Standard: standard, Source: source,
+			Result: result, Reason: reason, Passed: []string{"S3.1"}}
+	}
+	f.send(t, f.batch(testNow.Add(-time.Hour), []spec.PostureRun{
+		run("eu-west-1", "aws-fsbp", spec.PostureSourceNative, spec.PostureRunOK, ""),
+		run("us-east-1", "aws-fsbp", spec.PostureSourceNative, spec.PostureRunOK, ""),
+		run("eu-central-1", "aws-fsbp", spec.PostureSourceNative, spec.PostureRunNotEnabled, "Security Hub not enabled"),
+		run("eu-central-1", "aws-fsbp", spec.PostureSourceBaseline, spec.PostureRunOK, ""),
+		run("eu-west-1", "cis-aws", spec.PostureSourceNative, spec.PostureRunOK, ""),
+		run("eu-west-1", "obzly-baseline", spec.PostureSourceBaseline, spec.PostureRunOK, ""),
+		run("us-east-1", "obzly-baseline", spec.PostureSourceBaseline, spec.PostureRunOK, ""),
+	}))
+
+	summary := f.summary(t)
+	assert.Equal(t, "Security Hub in 2 of 3 regions; Obzly baseline in eu-central-1 (Security Hub not enabled)",
+		score(summary, "aws-fsbp").Reason)
+	assert.Equal(t, "Security Hub in every scanned region", score(summary, "cis-aws").Reason)
+	assert.Equal(t, "Obzly baseline checks in every scanned region", score(summary, "obzly-baseline").Reason)
+
+	azure := newFixture(t, "Posture reasons Azure")
+	subscriptionRuns := []spec.PostureRun{}
+	for _, subscription := range []string{"sub-dev-1", "sub-dev-2"} {
+		subscriptionRuns = append(subscriptionRuns,
+			spec.PostureRun{Account: subscription, Region: spec.GlobalRegion, Standard: "mcsb",
+				Source: spec.PostureSourceNative, Result: spec.PostureRunNotEnabled, Reason: "Defender CSPM plan off"},
+			spec.PostureRun{Account: subscription, Region: spec.GlobalRegion, Standard: "mcsb",
+				Source: spec.PostureSourceBaseline, Result: spec.PostureRunOK, Passed: []string{"8.6"}})
+	}
+	batch := azure.batch(testNow.Add(-time.Hour), subscriptionRuns)
+	batch.Provider = spec.ProviderAzure
+	azure.send(t, batch)
+	assert.Equal(t, "Obzly baseline: Defender CSPM plan off in 2 subscriptions",
+		score(azure.summary(t), "mcsb").Reason)
+}
+
 func Test_SuppressingAFinding_NeedsAReason_LeavesScoresAndAlerts_AndExpires(t *testing.T) {
 	f := newFixture(t, "Posture suppression")
 	f.send(t, f.batch(testNow.Add(-time.Hour),

@@ -11,6 +11,15 @@ import type { FieldValuesRequest, FieldValuesResponse } from '../model/FieldValu
 import type { GetQueryableFieldsRequest } from '../model/GetQueryableFieldsRequest';
 import type { GetQueryableFieldsResponse } from '../model/GetQueryableFieldsResponse';
 import type { LogContextRequest, LogContextResponse } from '../model/LogContext';
+import type {
+  ExplainRequest,
+  ExplainResponse,
+  HealthMapRequest,
+  HealthMapResponse,
+  PatternTrendsRequest,
+  PatternTrendsResponse,
+  VolumeResponse,
+} from '../model/LogInsights';
 import type { LogItem } from '../model/LogItem';
 import type { LogPatternsRequest, LogPatternsResponse } from '../model/LogPattern';
 import type { LogQueryRequest } from '../model/LogQueryRequest';
@@ -116,6 +125,38 @@ export const queryApi = {
     );
   },
 
+  // Logs › Patterns: pattern counts per bucket with new / spiking / dropping ones.
+  async getPatternTrends(
+    projectId: string,
+    request: PatternTrendsRequest,
+    signal?: AbortSignal,
+  ): Promise<PatternTrendsResponse> {
+    return postInsight(`pattern-trends/${projectId}`, request, signal);
+  },
+
+  // "Explain this spike": field values over-represented in a range against a baseline.
+  async explainRange(
+    projectId: string,
+    request: ExplainRequest,
+    signal?: AbortSignal,
+  ): Promise<ExplainResponse> {
+    return postInsight(`explain/${projectId}`, request, signal);
+  },
+
+  // Logs › Volume & noise.
+  async getVolume(projectId: string, days: number, signal?: AbortSignal): Promise<VolumeResponse> {
+    return postInsight(`volume/${projectId}`, { days }, signal);
+  },
+
+  // Logs › Health map.
+  async getHealthMap(
+    projectId: string,
+    request: HealthMapRequest,
+    signal?: AbortSignal,
+  ): Promise<HealthMapResponse> {
+    return postInsight(`health-map/${projectId}`, request, signal);
+  },
+
   // Deployment rollouts in the range - the histogram's deploy markers.
   async getDeploys(
     projectId: string,
@@ -206,4 +247,11 @@ export const queryApi = {
       true,
     );
   },
+};
+
+const postInsight = <T>(path: string, request: unknown, signal?: AbortSignal): Promise<T> => {
+  const requestOptions: RequestOptions = new RequestOptions();
+  requestOptions.setBody(JSON.stringify(request));
+  if (signal) requestOptions.setSignal(signal);
+  return apiHelper.fetchPostJson(`${getApiBase()}/logs/query/${path}`, requestOptions);
 };

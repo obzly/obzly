@@ -75,9 +75,37 @@ type SharedChannel struct {
 	CreatedBy       *uuid.UUID `json:"-"         gorm:"column:created_by"`
 	CreatedAt       time.Time  `json:"createdAt" gorm:"column:created_at"`
 	UpdatedAt       time.Time  `json:"updatedAt" gorm:"column:updated_at"`
+	// UseEmoji and the template override travel to the Sites with the channel.
+	UseEmoji         bool   `json:"useEmoji"         gorm:"column:use_emoji"`
+	TemplateOverride bool   `json:"templateOverride" gorm:"column:template_override"`
+	TemplateSubject  string `json:"templateSubject"  gorm:"column:template_subject"`
+	TemplateBody     string `json:"templateBody"     gorm:"column:template_body"`
 }
 
 func (SharedChannel) TableName() string { return "shared_channels" }
+
+// MessageTemplate is one stored organisation-default message template for a
+// channel kind: a control plane's own (central, also sent to its Sites) or
+// a standalone Site's (local). No row: the built-in template.
+type MessageTemplate struct {
+	Source      string     `gorm:"column:source;primaryKey"`
+	Kind        string     `gorm:"column:kind;primaryKey"`
+	Subject     string     `gorm:"column:subject"`
+	Body        string     `gorm:"column:body"`
+	UpdatedBy   *uuid.UUID `gorm:"column:updated_by"`
+	UpdatedAt   time.Time  `gorm:"column:updated_at"`
+	LastError   string     `gorm:"column:last_error"`
+	LastErrorAt *time.Time `gorm:"column:last_error_at"`
+}
+
+func (MessageTemplate) TableName() string { return "notification_templates" }
+
+// SyncedTemplate is an organisation-default template a Site receives.
+type SyncedTemplate struct {
+	Kind    string `json:"kind"`
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+}
 
 // Scope is where a shared channel can be used: every project of every Site,
 // every project of some Sites, and/or some projects.
@@ -132,6 +160,9 @@ type payload struct {
 	// Maintenance is the next 48 hours of Synthetics maintenance for this
 	// Site's monitors; it keeps them as managed silences.
 	Maintenance []MaintenanceSilence `json:"maintenance,omitempty"`
+	// Templates are the organisation-default message templates; a kind
+	// without one uses the built-in template.
+	Templates []SyncedTemplate `json:"templates,omitempty"`
 }
 
 // MonitorAlert is one managed alert rule a Site keeps for a feature on the
@@ -172,7 +203,14 @@ var (
 
 	maintenanceFor   func(siteID string) ([]MaintenanceSilence, error)
 	applyMaintenance func(silences []MaintenanceSilence) error
+
+	// templatesChanged drops alerting's template cache after a sync.
+	templatesChanged func()
 )
+
+// SetTemplatesChanged registers what runs after a sync stored templates
+// (main.go; avoids an import cycle).
+func SetTemplatesChanged(changed func()) { templatesChanged = changed }
 
 // SetMonitorAlerts registers where the control plane gets monitor alerts
 // and how a Site applies them (main.go; avoids an import cycle).
@@ -193,6 +231,21 @@ type SyncedChannel struct {
 	Config      json.RawMessage `json:"config"`
 	AllProjects bool            `json:"allProjects"`
 	ProjectIDs  []string        `json:"projectIds"`
+	// UseEmoji is nil from a control plane older than message templates (on).
+	UseEmoji         *bool  `json:"useEmoji,omitempty"`
+	TemplateOverride bool   `json:"templateOverride,omitempty"`
+	TemplateSubject  string `json:"templateSubject,omitempty"`
+	TemplateBody     string `json:"templateBody,omitempty"`
+}
+
+// EmojiOn is UseEmoji with its default.
+func (c SyncedChannel) EmojiOn() bool { return c.UseEmoji == nil || *c.UseEmoji }
+
+// CentralTemplates lists the control plane's organisation-default templates.
+func CentralTemplates() ([]MessageTemplate, error) {
+	var rows []MessageTemplate
+	err := storage.GetDb().Where("source = ?", SourceCentral).Order("kind").Find(&rows).Error
+	return rows, err
 }
 
 // SiteSync is how up to date a Site is: what it was last served, what it
@@ -325,10 +378,11 @@ func SharedChannels() ([]*SharedChannel, error) {
 // payloadSource reads what every Site's payload is built from once, so a
 // status over many Sites decrypts each channel and the relay only once.
 type payloadSource struct {
-	loaded   bool
-	channels []*SharedChannel
-	configs  map[uuid.UUID]string
-	smtp     *SMTP
+	loaded    bool
+	channels  []*SharedChannel
+	configs   map[uuid.UUID]string
+	smtp      *SMTP
+	templates []SyncedTemplate
 }
 
 func (p *payloadSource) load() error {
@@ -347,6 +401,13 @@ func (p *payloadSource) load() error {
 		if p.smtp, err = decryptSMTP(stored); err != nil {
 			return err
 		}
+	}
+	templates, err := CentralTemplates()
+	if err != nil {
+		return err
+	}
+	for _, row := range templates {
+		p.templates = append(p.templates, SyncedTemplate{Kind: row.Kind, Subject: row.Subject, Body: row.Body})
 	}
 	p.channels, p.configs, p.loaded = channels, map[uuid.UUID]string{}, true
 	return nil
@@ -369,7 +430,7 @@ func (p *payloadSource) payloadFor(siteID string) ([]byte, string, error) {
 		return nil, "", err
 	}
 	var err error
-	content := payload{Channels: []SyncedChannel{}, SMTP: p.smtp}
+	content := payload{Channels: []SyncedChannel{}, SMTP: p.smtp, Templates: p.templates}
 	if monitorAlertsFor != nil {
 		if content.MonitorAlerts, err = monitorAlertsFor(siteID); err != nil {
 			return nil, "", err
@@ -406,9 +467,12 @@ func (p *payloadSource) payloadFor(siteID string) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
+		useEmoji := channel.UseEmoji
 		content.Channels = append(content.Channels, SyncedChannel{
 			ID: channel.ID, Name: channel.Name, Kind: channel.Kind, Config: json.RawMessage(config),
-			AllProjects: allProjects, ProjectIDs: projectIDs,
+			AllProjects: allProjects, ProjectIDs: projectIDs, UseEmoji: &useEmoji,
+			TemplateOverride: channel.TemplateOverride, TemplateSubject: channel.TemplateSubject,
+			TemplateBody: channel.TemplateBody,
 		})
 	}
 	plain, err := json.Marshal(content)

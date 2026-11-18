@@ -1,4 +1,5 @@
 import {
+  CheckCircleFilled,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -27,6 +28,8 @@ import { ProjectRole } from '../../../entity/users/model/ProjectRole';
 import { UserRole } from '../../../entity/users/model/UserRole';
 import { copyToClipboard } from '../../../shared/lib';
 import { MFAConfirmModal } from '../../../shared/ui/MFAConfirmModal';
+import { Card } from '../../../shared/ui/v2';
+import { BANNER_WARN, ProjectPageShell } from './ProjectPageShell';
 
 const INACTIVE_THRESHOLD_DAYS = 7;
 
@@ -34,9 +37,10 @@ interface Props {
   contentHeight: number;
   projectResponse: ProjectResponse;
   user: UserProfile;
+  embedded?: boolean;
 }
 
-export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }: Props) {
+export function ProjectApiKeysComponent({ contentHeight, projectResponse, user, embedded }: Props) {
   const { message } = App.useApp();
 
   const [project, setProject] = useState<Project | undefined>(undefined);
@@ -310,8 +314,8 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
       render: (name: string, record: ApiKey) => {
         if (editingKey && editingKey.id === record.id) {
           return (
-            <div>
-              <div className="mb-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div>
                 <Input
                   value={editForm.name}
                   onChange={(e) => {
@@ -333,12 +337,12 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
                 onClick={handleUpdateApiKey}
                 loading={isUpdating}
                 disabled={isUpdating}
-                className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+                className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
               >
                 Save
               </Button>
 
-              <Button size="small" onClick={cancelEditing} disabled={isUpdating} className="ml-1">
+              <Button size="small" onClick={cancelEditing} disabled={isUpdating}>
                 Cancel
               </Button>
             </div>
@@ -353,7 +357,7 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
       key: 'tokenPrefix',
       width: 150,
       render: (tokenPrefix: string) => (
-        <code className="rounded bg-gray-100 px-2 py-1 !font-mono text-sm text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+        <code className="rounded-md bg-gray-100 px-2 py-0.5 !font-mono text-xs text-gray-700 dark:bg-gray-700 dark:text-gray-200">
           {tokenPrefix}...
         </code>
       ),
@@ -367,14 +371,12 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
         <div className="flex items-center space-x-2">
           {canManageKeys && (
             <Switch
+              aria-label={`${record.name} active`}
               checked={status === ApiKeyStatus.ACTIVE}
               onChange={() => handleToggleStatus(record.id, status)}
               loading={processingKeys.has(record.id)}
               disabled={processingKeys.has(record.id)}
               size="small"
-              style={{
-                backgroundColor: status === ApiKeyStatus.ACTIVE ? '#059669' : undefined,
-              }}
             />
           )}
         </div>
@@ -428,6 +430,7 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
           <Button
             type="text"
             size="small"
+            aria-label="Delete API key"
             icon={<DeleteOutlined />}
             danger
             loading={deletingKeys.has(record.id)}
@@ -442,6 +445,7 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
               <Button
                 type="text"
                 size="small"
+                aria-label="Edit name"
                 icon={<EditOutlined />}
                 onClick={() => startEditing(record)}
                 disabled={!!editingKey || processingKeys.has(record.id)}
@@ -491,7 +495,7 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
       key: 'tokenPrefix',
       width: 150,
       render: (tokenPrefix: string) => (
-        <code className="rounded bg-gray-100 px-2 py-1 !font-mono text-sm text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+        <code className="rounded-md bg-gray-100 px-2 py-0.5 !font-mono text-xs text-gray-700 dark:bg-gray-700 dark:text-gray-200">
           {tokenPrefix}...
         </code>
       ),
@@ -526,293 +530,271 @@ export function ProjectApiKeysComponent({ contentHeight, projectResponse, user }
   const isLoading = isLoadingProject || isLoadingApiKeys;
 
   return (
-    <div className="flex grow pl-3">
-      <div className="w-full">
-        <div
-          className="grow overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
-          style={{ height: contentHeight }}
-        >
-          <div className="max-w-[850px]">
-            <div className="mb-6 flex items-center justify-between">
-              <h1 className="text-2xl font-bold">API keys</h1>
-              {canManageKeys && (
-                <div className="flex gap-2">
-                  <Button
-                    type="primary"
-                    icon={<PlusOutlined />}
-                    onClick={() => setIsCreateModalOpen(true)}
-                    disabled={isLoading}
-                    className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                  >
-                    Create API key
-                  </Button>
-                </div>
-              )}
+    <ProjectPageShell
+      embedded={embedded}
+      contentHeight={contentHeight}
+      title="Settings"
+      subtitle={projectResponse.name}
+    >
+      {!canManageKeys && (
+        <div className={BANNER_WARN}>
+          You don&apos;t have permission to manage API keys. Only project owners, project admins,
+          and system administrators can create, edit, or delete API keys.
+        </div>
+      )}
+
+      {project && !project.isApiKeyRequired && (
+        <div className={`flex items-start gap-2 ${BANNER_WARN}`}>
+          <WarningOutlined className="mt-0.5" />
+          <div>
+            <div className="font-semibold">API key validation disabled</div>
+            <div className="mt-0.5 text-gray-600 dark:text-gray-300">
+              API key validation is currently disabled in project settings. API keys created here
+              won&apos;t be enforced for log ingestion.{' '}
+              <span className="font-medium">
+                Enable &quot;Require API key&quot; in Settings to enforce API key validation.
+              </span>
             </div>
-
-            {project && !project.isApiKeyRequired && (
-              <div className="mb-6 rounded-md border border-yellow-200 bg-yellow-50 p-4">
-                <div className="flex items-start">
-                  <WarningOutlined className="mt-0.5 mr-2 text-yellow-600" />
-                  <div>
-                    <div className="font-medium text-yellow-800">API key validation disabled</div>
-                    <div className="mt-1 text-sm text-yellow-700">
-                      API key validation is currently disabled in project settings. API keys created
-                      here won&apos;t be enforced for log ingestion.{' '}
-                      <span className="font-medium">
-                        Enable &quot;Require API key&quot; in Settings to enforce API key
-                        validation.
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {isLoading ? (
-              <div className="flex h-64 items-center justify-center">
-                <Spin indicator={<LoadingOutlined spin />} size="large" />
-              </div>
-            ) : (
-              <div>
-                <div className="mb-4 text-sm text-gray-500 dark:text-gray-300">
-                  {apiKeys.length === 0
-                    ? 'No API keys found'
-                    : `${apiKeys.length} API key${apiKeys.length !== 1 ? 's' : ''}`}
-                </div>
-
-                <Table
-                  columns={columns}
-                  dataSource={apiKeys}
-                  pagination={false}
-                  rowKey="id"
-                  size="small"
-                  locale={{
-                    emptyText: (
-                      <div className="py-8 text-center text-gray-500 dark:text-gray-300">
-                        <div className="mb-2">No API keys created yet</div>
-                        {canManageKeys && (
-                          <div className="text-sm">
-                            Click &quot;Create API key&quot; to get started
-                          </div>
-                        )}
-                      </div>
-                    ),
-                  }}
-                />
-
-                {canManageKeys && inactiveApiKeys.length > 0 && (
-                  <div className="mt-8">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div>
-                        <h2 className="text-lg font-semibold">Inactive API keys</h2>
-                        <div className="text-sm text-gray-500 dark:text-gray-300">
-                          Not used in the last {INACTIVE_THRESHOLD_DAYS} days (
-                          {inactiveApiKeys.length})
-                        </div>
-                      </div>
-
-                      {mfaEnabled ? (
-                        <Button
-                          danger
-                          icon={<DeleteOutlined />}
-                          disabled={selectedInactiveKeys.length === 0}
-                          loading={isBulkDeleting}
-                          onClick={requestBulkDelete}
-                        >
-                          Delete selected ({selectedInactiveKeys.length})
-                        </Button>
-                      ) : (
-                        <Popconfirm
-                          title="Delete selected API keys"
-                          description={`Delete ${selectedInactiveKeys.length} inactive API key(s)? This action cannot be undone.`}
-                          onConfirm={handleBulkDeleteNoMfa}
-                          okText="Delete"
-                          cancelText="Cancel"
-                          okButtonProps={{ danger: true }}
-                          disabled={selectedInactiveKeys.length === 0}
-                        >
-                          <Button
-                            danger
-                            icon={<DeleteOutlined />}
-                            disabled={selectedInactiveKeys.length === 0}
-                            loading={isBulkDeleting}
-                          >
-                            Delete selected ({selectedInactiveKeys.length})
-                          </Button>
-                        </Popconfirm>
-                      )}
-                    </div>
-
-                    <Table
-                      columns={inactiveColumns}
-                      dataSource={inactiveApiKeys}
-                      pagination={false}
-                      rowKey="id"
-                      size="small"
-                      rowSelection={{
-                        selectedRowKeys: selectedInactiveKeys,
-                        onChange: (keys) => setSelectedInactiveKeys(keys as string[]),
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {!canManageKeys && (
-              <div className="mt-6 rounded-md bg-yellow-50 p-3">
-                <div className="text-sm text-yellow-800">
-                  You don&apos;t have permission to manage API keys. Only project owners, project
-                  admins, and system administrators can create, edit, or delete API keys.
-                </div>
-              </div>
-            )}
-
-            <Modal
-              title="Create new API key"
-              open={isCreateModalOpen}
-              onOk={handleCreateApiKey}
-              onCancel={() => {
-                setIsCreateModalOpen(false);
-                setCreateForm({ name: '' });
-                setCreateNameError(false);
-              }}
-              confirmLoading={isCreating}
-              okText="Create API key"
-              cancelText="Cancel"
-              okButtonProps={{
-                className:
-                  'border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700',
-              }}
-            >
-              <div className="py-4">
-                <div className="mb-4">
-                  <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">
-                    API key name
-                  </div>
-                  <Input
-                    value={createForm.name}
-                    onChange={(e) => {
-                      setCreateNameError(false);
-                      setCreateForm({ name: e.target.value });
-                    }}
-                    placeholder="Enter a descriptive name for this API key"
-                    maxLength={100}
-                    status={createNameError ? 'error' : undefined}
-                  />
-                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-                    Choose a name that helps you identify this key&apos;s purpose (e.g.,
-                    &quot;Production&quot;, &quot;Development&quot;)
-                  </div>
-                </div>
-              </div>
-            </Modal>
-
-            <Modal
-              title={
-                <div className="flex items-center">
-                  <span className="mr-2 text-green-600">✓</span>
-                  API key created successfully
-                </div>
-              }
-              open={isTokenModalOpen}
-              onCancel={() => {
-                setIsTokenModalOpen(false);
-                setCreatedApiKey(null);
-              }}
-              footer={[
-                <Button
-                  key="close"
-                  type="primary"
-                  onClick={() => {
-                    setIsTokenModalOpen(false);
-                    setCreatedApiKey(null);
-                  }}
-                  className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                >
-                  I have saved the token
-                </Button>,
-              ]}
-              width={700}
-              centered
-              maskClosable={false}
-              closable={false}
-            >
-              {createdApiKey && (
-                <div className="mt-6">
-                  <div className="mb-4">
-                    <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">
-                      API key name:
-                    </div>
-                    <div className="text-gray-700 dark:text-gray-200">{createdApiKey.name}</div>
-                  </div>
-
-                  <div className="mb-4">
-                    <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">
-                      Full API token:
-                    </div>
-                    <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <code className="!font-mono text-sm break-all text-emerald-800 select-all">
-                          {createdApiKey.token}
-                        </code>
-                        <Button
-                          type="primary"
-                          icon={<CopyOutlined />}
-                          onClick={async () => {
-                            if (createdApiKey.token) {
-                              const success = await copyToClipboard(createdApiKey.token);
-                              if (success) {
-                                message.success('API token copied to clipboard!');
-                              } else {
-                                message.error(
-                                  'Failed to copy token to clipboard. Please select and copy the token manually.',
-                                );
-                              }
-                            }
-                          }}
-                          className="ml-3 border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                        >
-                          Copy token
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </Modal>
-
-            {pendingSingleDelete && (
-              <MFAConfirmModal
-                open
-                title="Confirm deletion"
-                description={`Enter your current 6-digit authenticator code to confirm deleting "${pendingSingleDelete.name}".`}
-                confirmText="Delete API key"
-                onCancel={() => setPendingSingleDelete(null)}
-                onConfirm={async (code) => {
-                  await performDeleteApiKey(pendingSingleDelete.id, pendingSingleDelete.name, code);
-                  setPendingSingleDelete(null);
-                }}
-              />
-            )}
-
-            {pendingBulkDelete && (
-              <MFAConfirmModal
-                open
-                title="Confirm deletion"
-                description={`Enter your current 6-digit authenticator code to confirm deleting ${selectedInactiveKeys.length} inactive API key(s).`}
-                confirmText="Delete API keys"
-                onCancel={() => setPendingBulkDelete(false)}
-                onConfirm={async (code) => {
-                  await performBulkDelete(code);
-                  setPendingBulkDelete(false);
-                }}
-              />
-            )}
           </div>
         </div>
-      </div>
-    </div>
+      )}
+
+      <Card
+        title="API keys"
+        subtitle={
+          isLoading
+            ? undefined
+            : apiKeys.length === 0
+              ? 'No API keys found'
+              : `${apiKeys.length} API key${apiKeys.length !== 1 ? 's' : ''}`
+        }
+        extra={
+          canManageKeys && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setIsCreateModalOpen(true)}
+              disabled={isLoading}
+            >
+              Create API key
+            </Button>
+          )
+        }
+      >
+        {isLoading ? (
+          <div className="flex h-64 items-center justify-center">
+            <Spin indicator={<LoadingOutlined spin />} size="large" />
+          </div>
+        ) : (
+          <Table
+            columns={columns}
+            dataSource={apiKeys}
+            pagination={false}
+            rowKey="id"
+            size="small"
+            scroll={{ x: 760 }}
+            locale={{
+              emptyText: (
+                <div className="py-8 text-center text-gray-500 dark:text-gray-300">
+                  <div className="mb-2">No API keys created yet</div>
+                  {canManageKeys && (
+                    <div className="text-sm">Click &quot;Create API key&quot; to get started</div>
+                  )}
+                </div>
+              ),
+            }}
+          />
+        )}
+      </Card>
+
+      {!isLoading && canManageKeys && inactiveApiKeys.length > 0 && (
+        <Card
+          title="Inactive API keys"
+          subtitle={`Not used in the last ${INACTIVE_THRESHOLD_DAYS} days (${inactiveApiKeys.length})`}
+          extra={
+            mfaEnabled ? (
+              <Button
+                danger
+                icon={<DeleteOutlined />}
+                disabled={selectedInactiveKeys.length === 0}
+                loading={isBulkDeleting}
+                onClick={requestBulkDelete}
+              >
+                Delete selected ({selectedInactiveKeys.length})
+              </Button>
+            ) : (
+              <Popconfirm
+                title="Delete selected API keys"
+                description={`Delete ${selectedInactiveKeys.length} inactive API key(s)? This action cannot be undone.`}
+                onConfirm={handleBulkDeleteNoMfa}
+                okText="Delete"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true }}
+                disabled={selectedInactiveKeys.length === 0}
+              >
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={selectedInactiveKeys.length === 0}
+                  loading={isBulkDeleting}
+                >
+                  Delete selected ({selectedInactiveKeys.length})
+                </Button>
+              </Popconfirm>
+            )
+          }
+        >
+          <Table
+            columns={inactiveColumns}
+            dataSource={inactiveApiKeys}
+            pagination={false}
+            rowKey="id"
+            size="small"
+            scroll={{ x: 640 }}
+            rowSelection={{
+              selectedRowKeys: selectedInactiveKeys,
+              onChange: (keys) => setSelectedInactiveKeys(keys as string[]),
+            }}
+          />
+        </Card>
+      )}
+
+      <Modal
+        title="Create new API key"
+        open={isCreateModalOpen}
+        onOk={handleCreateApiKey}
+        onCancel={() => {
+          setIsCreateModalOpen(false);
+          setCreateForm({ name: '' });
+          setCreateNameError(false);
+        }}
+        confirmLoading={isCreating}
+        okText="Create API key"
+        cancelText="Cancel"
+        okButtonProps={{
+          className: 'border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700',
+        }}
+      >
+        <div className="py-4">
+          <div className="mb-4">
+            <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">API key name</div>
+            <Input
+              value={createForm.name}
+              onChange={(e) => {
+                setCreateNameError(false);
+                setCreateForm({ name: e.target.value });
+              }}
+              placeholder="Enter a descriptive name for this API key"
+              maxLength={100}
+              status={createNameError ? 'error' : undefined}
+            />
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+              Choose a name that helps you identify this key&apos;s purpose (e.g.,
+              &quot;Production&quot;, &quot;Development&quot;)
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        title={
+          <div className="flex items-center gap-2">
+            <CheckCircleFilled className="!text-[var(--v2-accent)]" />
+            API key created successfully
+          </div>
+        }
+        open={isTokenModalOpen}
+        onCancel={() => {
+          setIsTokenModalOpen(false);
+          setCreatedApiKey(null);
+        }}
+        footer={[
+          <Button
+            key="close"
+            type="primary"
+            onClick={() => {
+              setIsTokenModalOpen(false);
+              setCreatedApiKey(null);
+            }}
+            className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
+          >
+            I have saved the token
+          </Button>,
+        ]}
+        width={700}
+        centered
+        maskClosable={false}
+        closable={false}
+      >
+        {createdApiKey && (
+          <div className="mt-6">
+            <div className="mb-4">
+              <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">API key name:</div>
+              <div className="text-gray-700 dark:text-gray-200">{createdApiKey.name}</div>
+            </div>
+
+            <div className="mb-4">
+              <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">
+                Full API token:
+              </div>
+              <div className="border-accent-500/30 rounded-xl border bg-[var(--v2-ok-soft)] p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <code className="!font-mono text-sm break-all text-[var(--v2-accent)] select-all">
+                    {createdApiKey.token}
+                  </code>
+                  <Button
+                    type="primary"
+                    icon={<CopyOutlined />}
+                    onClick={async () => {
+                      if (createdApiKey.token) {
+                        const success = await copyToClipboard(createdApiKey.token);
+                        if (success) {
+                          message.success('API token copied to clipboard!');
+                        } else {
+                          message.error(
+                            'Failed to copy token to clipboard. Please select and copy the token manually.',
+                          );
+                        }
+                      }
+                    }}
+                    className="shrink-0"
+                  >
+                    Copy token
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {pendingSingleDelete && (
+        <MFAConfirmModal
+          open
+          title="Confirm deletion"
+          description={`Enter your current 6-digit authenticator code to confirm deleting "${pendingSingleDelete.name}".`}
+          confirmText="Delete API key"
+          onCancel={() => setPendingSingleDelete(null)}
+          onConfirm={async (code) => {
+            await performDeleteApiKey(pendingSingleDelete.id, pendingSingleDelete.name, code);
+            setPendingSingleDelete(null);
+          }}
+        />
+      )}
+
+      {pendingBulkDelete && (
+        <MFAConfirmModal
+          open
+          title="Confirm deletion"
+          description={`Enter your current 6-digit authenticator code to confirm deleting ${selectedInactiveKeys.length} inactive API key(s).`}
+          confirmText="Delete API keys"
+          onCancel={() => setPendingBulkDelete(false)}
+          onConfirm={async (code) => {
+            await performBulkDelete(code);
+            setPendingBulkDelete(false);
+          }}
+        />
+      )}
+    </ProjectPageShell>
   );
 }

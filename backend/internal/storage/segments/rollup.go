@@ -31,7 +31,7 @@ func (c *Compactor) BuildGroupedRollup(
 		return nil, fmt.Errorf("failed to create rollup directory: %w", err)
 	}
 	outputPath := filepath.Join(segmentDir, fmt.Sprintf("%d_%s.parquet", time.Now().UnixNano(), uuid.NewString()[:8]))
-	if _, err := c.db.Exec(compactionCopySQL(query, outputPath), args...); err != nil {
+	if err := c.execGated(false, compactionCopySQL(query, outputPath), args...); err != nil {
 		_ = os.Remove(outputPath)
 		return nil, fmt.Errorf("failed to build %s rollup of segment %s: %w", stream, record.ID, err)
 	}
@@ -104,7 +104,7 @@ func (c *Compactor) BuildRollup(record *SegmentRecord, stream, dataDir string) (
 		return nil, fmt.Errorf("failed to create rollup directory: %w", err)
 	}
 	outputPath := filepath.Join(segmentDir, fmt.Sprintf("%d_%s.parquet", time.Now().UnixNano(), uuid.NewString()[:8]))
-	if _, err := c.db.Exec(compactionCopySQL(query, outputPath), args...); err != nil {
+	if err := c.execGated(true, compactionCopySQL(query, outputPath), args...); err != nil {
 		return nil, fmt.Errorf("failed to build %s rollup of segment %s: %w", stream, record.ID, err)
 	}
 

@@ -1,4 +1,5 @@
 import {
+  MenuFoldOutlined,
   SearchOutlined,
   SortAscendingOutlined,
   SortDescendingOutlined,
@@ -9,6 +10,7 @@ import dayjs from 'dayjs';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { type QueryNode, type QueryableField, queryApi } from '../../../entity/query';
+import { useTheme } from '../../../shared/theme';
 import { getFrequentFields, recordFieldUsage } from '../lib/frequentFieldsStorage';
 import { levelColor, sortLevels, valueColor } from '../lib/logLevels';
 import type { TimeRange } from './TimeRangePickerComponent';
@@ -31,6 +33,8 @@ interface Props {
   onAddFilter: (fieldName: string, value: string) => void;
   /** A recent value (not logged in the range): widen the range, then filter. */
   onAddRecentFilter: (fieldName: string, value: string, lastSeen: string) => void;
+  /** Shows a button that hides the panel (View settings brings it back). */
+  onHide?: () => void;
 }
 
 interface FacetValue {
@@ -95,6 +99,7 @@ export const FieldSidebarComponent = ({
   onShowOnlyLevel,
   onAddFilter,
   onAddRecentFilter,
+  onHide,
 }: Props): React.JSX.Element => {
   const [valuesByField, setValuesByField] = useState<Record<string, FieldTopValues>>({});
   const [openKeys, setOpenKeys] = useState<string[]>([]);
@@ -260,7 +265,35 @@ export const FieldSidebarComponent = ({
   const allKeys = new Set(visibleFields.map((f) => f.name));
 
   return (
-    <div className="w-64 shrink-0 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <aside
+      aria-labelledby="log-fields-title"
+      className="w-64 shrink-0 overflow-y-auto rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800"
+    >
+      <div className="flex items-start justify-between gap-2 px-1 pb-2">
+        <div className="min-w-0">
+          <h2
+            id="log-fields-title"
+            className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-50"
+          >
+            Fields
+          </h2>
+          <p className="m-0 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            Click a value to filter
+          </p>
+        </div>
+        {onHide && (
+          <Tooltip title="Hide the fields panel">
+            <button
+              type="button"
+              onClick={onHide}
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700"
+              aria-label="Hide fields panel"
+            >
+              <MenuFoldOutlined />
+            </button>
+          </Tooltip>
+        )}
+      </div>
       <div className="flex items-center gap-1 px-1 pb-2">
         <Input
           size="small"
@@ -274,7 +307,7 @@ export const FieldSidebarComponent = ({
           <button
             type="button"
             onClick={() => setSortDescending((d) => !d)}
-            className="shrink-0 rounded p-1 text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+            className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700"
             aria-label="Toggle attribute sort order"
           >
             {sortDescending ? <SortDescendingOutlined /> : <SortAscendingOutlined />}
@@ -284,7 +317,7 @@ export const FieldSidebarComponent = ({
 
       {frequentFields.length > 0 && (
         <>
-          <div className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 uppercase dark:text-gray-300">
+          <div className="flex items-center gap-1 px-2 py-1 text-[11px] font-semibold tracking-wider text-gray-500 uppercase dark:text-gray-400">
             <StarOutlined className="text-[10px]" />
             Frequently Used
           </div>
@@ -341,12 +374,12 @@ export const FieldSidebarComponent = ({
                             <button
                               type="button"
                               onClick={() => onShowOnlyLevel(level, levels)}
-                              className="ml-auto hidden text-[10px] text-emerald-600 group-hover:inline"
+                              className="text-accent-600 dark:text-accent-400 ml-auto hidden text-[10px] group-focus-within:inline group-hover:inline"
                               title={`Show only ${level}`}
                             >
                               only
                             </button>
-                            <span className="ml-auto w-10 text-right text-xs text-gray-400 group-hover:hidden dark:text-gray-400">
+                            <span className="ml-auto w-10 text-right text-xs text-gray-400 group-focus-within:hidden group-hover:hidden dark:text-gray-400">
                               {compactCount(levelCounts[level] ?? 0)}
                             </span>
                           </li>
@@ -361,7 +394,7 @@ export const FieldSidebarComponent = ({
         </>
       )}
 
-      <div className="px-2 py-1 text-xs font-medium text-gray-500 uppercase dark:text-gray-300">
+      <div className="px-2 py-1 text-[11px] font-semibold tracking-wider text-gray-500 uppercase dark:text-gray-400">
         Attributes
       </div>
       {visibleFields.length === 0 ? (
@@ -375,7 +408,7 @@ export const FieldSidebarComponent = ({
           items={visibleFields.map(toCollapseItem)}
         />
       )}
-    </div>
+    </aside>
   );
 };
 
@@ -390,6 +423,7 @@ const FieldTopValuesList = ({
   onAddFilter: (value: string) => void;
   onAddRecentFilter: (value: string, lastSeen: string) => void;
 }): React.JSX.Element => {
+  const { chartColors } = useTheme();
   const [page, setPage] = useState(1);
 
   // A refetch replaces the values, so go back to page 1.
@@ -429,6 +463,8 @@ const FieldTopValuesList = ({
   const start = isPaged ? (page - 1) * FACET_PAGE_SIZE : 0;
   const pageValues = isPaged ? state.values.slice(start, start + FACET_PAGE_SIZE) : state.values;
   const limit = isPattern ? TOP_PATTERNS_LIMIT : FACET_VALUES_LIMIT;
+  // Bars are relative to the facet's top value.
+  const maxCount = state.values.reduce((max, v) => (v.lastSeen ? max : Math.max(max, v.count)), 0);
 
   return (
     <div className={state.loading ? 'opacity-60' : ''}>
@@ -455,18 +491,32 @@ const FieldTopValuesList = ({
                 <button
                   type="button"
                   onClick={() => onAddFilter(v.key)}
-                  className="flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left text-xs text-gray-800 hover:bg-emerald-50 dark:text-gray-100 dark:hover:bg-emerald-900/40"
+                  className="hover:bg-accent-50 dark:hover:bg-accent-900/40 flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-1 py-0.5 text-left text-xs text-gray-800 dark:text-gray-100"
                   aria-label={`Add filter: ${v.key}`}
                 >
-                  <span className="flex min-w-0 items-center gap-2">
-                    {/* Absolute index, so a value keeps its color across pages. */}
-                    <ColorDot color={valueColor(start + index)} />
-                    <span className={`truncate ${isPattern ? 'font-mono text-[11px]' : ''}`}>
-                      {v.label ?? v.key}
+                  <span className="flex w-full items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      {/* Absolute index, so a value keeps its color across pages. */}
+                      <ColorDot color={valueColor(start + index, chartColors)} />
+                      <span className={`truncate ${isPattern ? 'font-mono text-[11px]' : ''}`}>
+                        {v.label ?? v.key}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-gray-400 dark:text-gray-400">
+                      {v.count.toLocaleString()}
                     </span>
                   </span>
-                  <span className="shrink-0 text-gray-400 dark:text-gray-400">
-                    {v.count.toLocaleString()}
+                  <span
+                    aria-hidden
+                    className="block h-[3px] w-full overflow-hidden rounded-full bg-[var(--v2-track)]"
+                  >
+                    <span
+                      className="block h-full rounded-full"
+                      style={{
+                        width: `${maxCount > 0 ? Math.max(2, (v.count / maxCount) * 100) : 0}%`,
+                        background: valueColor(start + index, chartColors),
+                      }}
+                    />
                   </span>
                 </button>
               </Tooltip>
@@ -536,11 +586,11 @@ const RecentValueRow = ({
         <button
           type="button"
           onClick={() => onAddFilter(value.key, lastSeen)}
-          className="flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left text-xs text-gray-500 hover:bg-emerald-50 dark:text-gray-400 dark:hover:bg-emerald-900/40"
+          className="hover:bg-accent-50 dark:hover:bg-accent-900/40 flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left text-xs text-gray-500 dark:text-gray-400"
           aria-label={`Add filter: ${value.key} (last seen ${when})`}
         >
           <span className="flex min-w-0 items-center gap-2">
-            <ColorDot color="#9ca3af" />
+            <ColorDot color="var(--color-gray-400)" />
             <span className="truncate">{value.key}</span>
           </span>
           <span className="shrink-0 text-[10px] text-gray-400 dark:text-gray-500">{when}</span>

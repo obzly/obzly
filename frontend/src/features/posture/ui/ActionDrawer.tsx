@@ -6,6 +6,7 @@ import { useState } from 'react';
 
 import { postureApi } from '../../../entity/posture';
 import { copyToClipboard } from '../../../shared/lib';
+import { ProviderMark, ServiceIcon } from '../../cost';
 import { formatMoney } from '../../cost/lib/format';
 import { KIND_LABEL, STATUS_LABEL, type SiteAction } from '../lib/actions';
 import { shortResource } from '../lib/format';
@@ -58,7 +59,8 @@ export const ActionDrawer = ({ action, onClose, onChanged, onFinding }: Props) =
           <Tag className="m-0">{KIND_LABEL[action.kind]}</Tag>
           {action.severity && <SeverityTag severity={action.severity} />}
           <span className="text-gray-500 dark:text-gray-400">Effort: {action.effort}</span>
-          <span className="text-gray-500 dark:text-gray-400">
+          <span className="inline-flex items-center gap-1.5 text-gray-500 dark:text-gray-400">
+            <ProviderMark provider={action.provider} size={14} />
             {[action.connectionName, action.account, action.region].filter(Boolean).join(' · ')}
           </span>
           <Tag
@@ -103,13 +105,14 @@ export const ActionDrawer = ({ action, onClose, onChanged, onFinding }: Props) =
                   key={finding.id}
                   type="button"
                   onClick={() => onFinding(action.siteId, finding.id)}
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
                   <SeverityTag severity={finding.severity} />
                   <span className="min-w-0 flex-1 truncate text-gray-800 dark:text-gray-200">
                     {finding.title}
                   </span>
-                  <span className="shrink-0 font-mono text-xs text-gray-500">
+                  <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-xs text-gray-500 dark:text-gray-400">
+                    <ServiceIcon text={finding.resourceKey} provider={action.provider} size={14} />
                     {shortResource(finding.resourceKey)}
                   </span>
                   {finding.status === 'resolved' && (
@@ -143,7 +146,7 @@ export const ActionDrawer = ({ action, onClose, onChanged, onFinding }: Props) =
                 looksLikeCommand(step) ? (
                   <div
                     key={step}
-                    className="flex items-start gap-2 rounded bg-gray-900 p-2 font-mono text-xs text-gray-100"
+                    className="flex items-start gap-2 rounded-xl bg-gray-900 p-2 font-mono text-xs text-gray-100 dark:bg-gray-950"
                   >
                     <code className="min-w-0 flex-1 break-all whitespace-pre-wrap">{step}</code>
                     <Button
@@ -171,7 +174,7 @@ export const ActionDrawer = ({ action, onClose, onChanged, onFinding }: Props) =
         )}
 
         {action.costLinks && action.costLinks.length > 0 && (
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
+          <div className="border-accent-200 text-accent-900 dark:border-accent-900 dark:text-accent-200 rounded-xl border bg-[var(--v2-ok-soft)] p-3 text-sm">
             Also on Cost → Recommendations:
             <ul className="m-0 mt-1 pl-4">
               {action.costLinks.map((link) => (

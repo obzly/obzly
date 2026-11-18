@@ -21,6 +21,22 @@ var ErrNotUploadedYet = errors.New("not uploaded yet by the replica that wrote i
 // one, a week of them on a freshly started pod outlasted a 30 s query.
 const resolveConcurrency = 8
 
+const (
+	// maxDetachedFetches: fetches a cancelled query leaves running so they
+	// land in the cache, process-wide; past it a cancelled fetch stops.
+	// A query that timed out on cold segments timed out again on every
+	// retry when its downloads died with it.
+	maxDetachedFetches = 16
+	// detachedFetchTimeout bounds a fetch once its query has gone.
+	detachedFetchTimeout = 2 * time.Minute
+)
+
+var detachedFetches = make(chan struct{}, maxDetachedFetches)
+
+// downloadLocks serializes whole-file downloads of one cache path, so a
+// retry waits for the download already running instead of starting another.
+var downloadLocks sync.Map // path -> *sync.Mutex
+
 // ResolveFiles maps each record to a locally readable file, downloading cold
 // segments from store (nil for local-disk-only) into cacheDir.
 //
@@ -53,7 +69,9 @@ func ResolveFilesReading(
 			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			path, source, err := resolveFileReading(ctx, store, cacheDir, record, columns)
+			path, source, err := resolveDetached(ctx, func(fetchCtx context.Context) (string, string, error) {
+				return resolveFileReading(fetchCtx, store, cacheDir, record, columns)
+			})
 			results[i] = resolved{path, source, err}
 		}()
 	}
@@ -62,6 +80,10 @@ func ResolveFilesReading(
 	files := make([]ResolvedFile, 0, len(records))
 	for i, record := range records {
 		path, source, err := results[i].path, results[i].source, results[i].err
+		if err != nil && ctx.Err() != nil {
+			// The query is over (its caller checks ctx); nothing is unreadable.
+			continue
+		}
 		telemetry.QuerySegmentReads.WithLabelValues(record.Stream, source).Inc()
 		if errors.Is(err, ErrNotUploadedYet) {
 			// Expected for a few seconds after another replica writes a
@@ -153,6 +175,10 @@ func resolveFile(
 	}
 
 	cachePath := filepath.Join(cacheDir, record.Stream, record.ProjectID.String(), record.ID.String()+".parquet")
+	lock, _ := downloadLocks.LoadOrStore(cachePath, &sync.Mutex{})
+	mutex, _ := lock.(*sync.Mutex)
+	mutex.Lock()
+	defer mutex.Unlock()
 	if info, err := os.Stat(cachePath); err == nil {
 		if record.SizeBytes <= 0 || info.Size() == record.SizeBytes {
 			// mtime is the cache's recency (EvictColdCache): a file read
@@ -174,4 +200,43 @@ func resolveFile(
 	}
 
 	return cachePath, telemetry.SourceObjectStore, nil
+}
+
+// resolveDetached runs fetch so that it outlives ctx: when ctx ends first
+// the caller gets ctx's error at once, and fetch keeps going into the cache
+// (up to detachedFetchTimeout) if a detached slot is free, else it stops.
+// Nothing new starts once ctx has ended.
+func resolveDetached(
+	ctx context.Context, fetch func(context.Context) (string, string, error),
+) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", telemetry.SourceMissing, err
+	}
+	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedFetchTimeout)
+	type result struct {
+		path, source string
+		err          error
+	}
+	done := make(chan result, 1)
+	go func() {
+		path, source, err := fetch(fetchCtx)
+		done <- result{path, source, err}
+	}()
+	select {
+	case r := <-done:
+		cancel()
+		return r.path, r.source, r.err
+	case <-ctx.Done():
+	}
+	select {
+	case detachedFetches <- struct{}{}:
+		go func() {
+			<-done
+			cancel()
+			<-detachedFetches
+		}()
+	default:
+		cancel()
+	}
+	return "", telemetry.SourceMissing, ctx.Err()
 }

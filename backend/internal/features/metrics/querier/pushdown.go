@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	metrics_core "obzly/internal/features/metrics/core"
@@ -15,6 +18,52 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// msWindow is a time range in Unix ms, both ends included.
+type msWindow struct {
+	fromMs, toMs int64
+}
+
+// pushdownPlan is a request's slices: whole ones (function and aggregation
+// computed by the executor) and partial ones (time chunks the coordinator
+// merges first), never answering the same step.
+type pushdownPlan struct {
+	planned []plannedSlice
+}
+
+type plannedSlice struct {
+	slice   query.Slice
+	window  msWindow
+	partial bool
+}
+
+// planBuilder adds one request's slices to a plan.
+type planBuilder struct {
+	q         *MetricQuerier
+	projectID uuid.UUID
+	request   *metrics_core.RangeFunctionRequestDTO
+	source    sampleSource
+	stepMs    int64
+}
+
+// pushdownRun is one coordinator query of a plan and its rows.
+type pushdownRun struct {
+	slices    []query.Slice
+	finalSQL  string
+	finalArgs []any
+	rows      []pushdownRow
+	found     bool
+	bad       bool
+	err       error
+}
+
+// pushdownRow: a series key, its By label values, a step and its value.
+type pushdownRow struct {
+	key    string
+	values []string
+	t      int64
+	value  float64
+}
 
 // Range functions evaluated where the samples are; rate/increase treat the
 // series as counters.
@@ -70,6 +119,26 @@ const maxStepsPerSample = 32
 const pushdownSingleSQL = `WITH merged AS (
 	SELECT labels, t, n, first_t, first_v, last_t, last_v, resets, sum, min, max, dup AS bad
 	FROM (%s)
+)`
+
+// pushdownMergeSQL merges time chunks' partials (disjoint at the
+// millisecond) into "merged", one row per series and step: counts and sums
+// add, the earliest first and latest last win, and a counter reset where a
+// chunk's first value drops below the previous chunk's last counts as the
+// lag() inside one chunk would have. Partials that overlap in time (or
+// share a millisecond) can't be ordered, so they mark the step bad and
+// storage declines.
+const pushdownMergeSQL = `WITH p AS (
+	SELECT *, lag(last_t) OVER w AS prev_t, lag(last_v) OVER w AS prev_v
+	FROM ` + query.ResultsPlaceholder + ` WINDOW w AS (PARTITION BY labels, t ORDER BY first_t, last_t)
+), merged AS (
+	SELECT labels, t, sum(n)::BIGINT AS n,
+		min(first_t) AS first_t, arg_min(first_v, first_t) AS first_v,
+		max(last_t) AS last_t, arg_max(last_v, last_t) AS last_v,
+		sum(resets + CASE WHEN first_v < prev_v AND NOT isnan(prev_v) THEN prev_v ELSE 0 END) AS resets,
+		sum(sum) AS sum, min(min) AS min, max(max) AS max,
+		bool_or(dup OR coalesce(first_t <= prev_t, false)) AS bad
+	FROM p GROUP BY labels, t
 )`
 
 // pushdownRateSQL is Prometheus's extrapolatedRate for float counters
@@ -139,62 +208,59 @@ func (q *MetricQuerier) EvaluateRangeFunction(
 	if len(sources) != 1 {
 		return nil, false, nil
 	}
-	slices, err := q.pushdownSlices(projectID, request, stepMs, lastStep, sources[0])
+	plan, err := q.pushdownPlan(projectID, request, stepMs, lastStep, sources[0])
 	if err != nil {
 		return nil, false, err
 	}
-
-	empty := &metrics_core.RangeFunctionResponseDTO{Series: []metrics_core.RangeSeriesDTO{}}
-	bySeries := map[string]*metrics_core.RangeSeriesDTO{}
-	bad := false
-	points := 0
-	found, err := q.run(ctx, query.Request{
-		Slices:   slices,
-		FinalSQL: "SELECT * FROM " + query.ResultsPlaceholder,
-	}, func(rows *sql.Rows) error {
-		groups := len(request.By)
-		for rows.Next() {
-			var key string
-			var t int64
-			var value float64
-			var rowBad bool
-			values := make([]string, groups)
-			dest := make([]any, 0, groups+4)
-			dest = append(dest, &key)
-			for i := range values {
-				dest = append(dest, &values[i])
-			}
-			dest = append(dest, &t, &value, &rowBad)
-			if err := rows.Scan(dest...); err != nil {
-				return fmt.Errorf("failed to scan range function row: %w", err)
-			}
-			if rowBad {
-				bad = true
-				return nil
-			}
-			points++
-			if points > maxSeriesRows {
-				return fmt.Errorf("query returns more than %d points; narrow the time range or matchers", maxSeriesRows)
-			}
-			series, ok := bySeries[key]
-			if !ok {
-				series = &metrics_core.RangeSeriesDTO{Labels: resultLabels(request, key, values)}
-				bySeries[key] = series
-			}
-			series.Points = append(series.Points, metrics_core.PointDTO{TimestampMs: t, Value: value})
+	finalSQL, finalArgs := pushdownFinalSQL(pushdownMergeSQL, request)
+	requests := []pushdownRun{
+		{slices: plan.slices(false), finalSQL: "SELECT * FROM " + query.ResultsPlaceholder},
+		{slices: plan.slices(true), finalSQL: finalSQL, finalArgs: finalArgs},
+	}
+	// Whole slices and merged chunks answer different steps: run both at once.
+	var wg sync.WaitGroup
+	for i := range requests {
+		if len(requests[i].slices) == 0 {
+			continue
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, false, err
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			requests[i].run(ctx, q, len(request.By))
+		}()
+	}
+	wg.Wait()
+
+	found, bad, points := false, false, 0
+	for _, run := range requests {
+		if run.err != nil {
+			return nil, false, run.err
+		}
+		found, bad, points = found || run.found, bad || run.bad, points+len(run.rows)
+	}
+	if points > maxSeriesRows {
+		return nil, false, fmt.Errorf(
+			"query returns more than %d points; narrow the time range or matchers", maxSeriesRows,
+		)
 	}
 	if bad {
 		return nil, false, nil
 	}
 	if !found {
-		return empty, true, nil
+		return &metrics_core.RangeFunctionResponseDTO{Series: []metrics_core.RangeSeriesDTO{}}, true, nil
 	}
 
+	bySeries := map[string]*metrics_core.RangeSeriesDTO{}
+	for _, run := range requests {
+		for _, row := range run.rows {
+			series, ok := bySeries[row.key]
+			if !ok {
+				series = &metrics_core.RangeSeriesDTO{Labels: resultLabels(request, row.key, row.values)}
+				bySeries[row.key] = series
+			}
+			series.Points = append(series.Points, metrics_core.PointDTO{TimestampMs: row.t, Value: row.value})
+		}
+	}
 	keys := make([]string, 0, len(bySeries))
 	for key := range bySeries {
 		keys = append(keys, key)
@@ -212,55 +278,66 @@ func (q *MetricQuerier) EvaluateRangeFunction(
 	return response, true, nil
 }
 
-// pushdownSlices splits the steps into one contiguous slice per remote
-// executor (one in all without any). A slice reads every file overlapping
-// (its first step - range, its last step], so it computes its steps whole -
-// function and aggregation - and the coordinator only concatenates.
-// Interleaved files are fine: they land in the same slice.
-func (q *MetricQuerier) pushdownSlices(
+// pushdownPlan splits request over the executors (everything in one whole
+// slice without remote ones).
+//
+// Steps before the recent boundary (recentBoundary) need no local file:
+// they split into one contiguous slice per remote executor, each reading
+// every file overlapping (its first step - range, its last step] and
+// computing its steps whole - function and aggregation - so the
+// coordinator only concatenates. With fewer steps than executors (an
+// instant query, a few steps over long windows) one slice would read the
+// whole window on one executor while the rest idle, so each slice's window
+// is also cut in time into chunks, one per spare executor, returning
+// partials the coordinator merges (pushdownMergeSQL).
+//
+// Steps from the boundary on need the local files, which only this process
+// reads, and an in-process read of cold segments has no warm cache behind
+// it: a week-long window of them outlasted the query. So their window is
+// cut at the boundary - in-process only from it on - and what comes before
+// is chunked over the remote executors.
+func (q *MetricQuerier) pushdownPlan(
 	projectID uuid.UUID,
 	request *metrics_core.RangeFunctionRequestDTO,
 	stepMs, lastStep int64,
 	source sampleSource,
-) ([]query.Slice, error) {
-	count := min(int64(max(q.coordinator.RemoteExecutors(), 1)), lastStep+1)
-	var slices []query.Slice
-	for i := range count {
-		firstStep, endStep := (lastStep+1)*i/count, (lastStep+1)*(i+1)/count-1
-		fromMs := request.StartMs + firstStep*stepMs - request.RangeMs + 1
-		toMs := request.StartMs + endStep*stepMs
-		from := time.UnixMilli(fromMs).UTC()
-		to := time.UnixMilli(toMs + 1).UTC().Add(-time.Microsecond)
-		where, args, err := q.whereFor(projectID, from, to, request.Matchers)
-		if err != nil {
-			return nil, err
-		}
-		slice := query.Slice{}
-		for _, record := range source.records {
-			if !record.MaxTime.Before(from) && !record.MinTime.After(to) {
-				slice.Segments = append(slice.Segments, record)
-			}
-		}
-		for _, file := range source.tail {
-			if file.MaxTime.IsZero() || (!file.MaxTime.Before(from) && !file.MinTime.After(to)) {
-				slice.LocalFiles = append(slice.LocalFiles, file)
-			}
-		}
-		fragmentSQL := fmt.Sprintf(
-			pushdownFragmentSQL,
-			where,
-			request.StartMs,
-			stepMs,
-			endStep,
-			request.RangeMs-1,
-			firstStep,
-		)
-		sliceSQL, finalArgs := pushdownFinalSQL(fmt.Sprintf(pushdownSingleSQL, fragmentSQL), request)
-		slice.SQL = sliceSQL
-		slice.Args = append(append([]any{}, args...), finalArgs...)
-		slices = append(slices, slice)
+) (pushdownPlan, error) {
+	builder := planBuilder{q: q, projectID: projectID, request: request, source: source, stepMs: stepMs}
+	executors := int64(q.coordinator.RemoteExecutors())
+	recent, known := recentBoundary(source)
+	if executors == 0 || !known {
+		return builder.steps(0, lastStep, max(executors, 1))
 	}
-	return slices, nil
+	localStep := lastStep + 1
+	if recent <= request.StartMs {
+		localStep = 0
+	} else if recent <= request.EndMs {
+		localStep = (recent - request.StartMs + stepMs - 1) / stepMs
+	}
+	plan := pushdownPlan{}
+	if localStep > 0 {
+		remote, err := builder.steps(0, localStep-1, executors)
+		if err != nil {
+			return plan, err
+		}
+		plan.planned = append(plan.planned, remote.planned...)
+	}
+	if localStep > lastStep {
+		return plan, nil
+	}
+	fromMs := request.StartMs + localStep*stepMs - request.RangeMs + 1
+	toMs := request.StartMs + lastStep*stepMs
+	if recent <= fromMs {
+		err := builder.add(&plan, msWindow{fromMs, toMs}, localStep, lastStep, false)
+		return plan, err
+	}
+	windows := append(timeChunks(fromMs, recent-1, executors, source), msWindow{recent, toMs})
+	for _, window := range windows {
+		if err := builder.add(&plan, window, localStep, lastStep, true); err != nil {
+			return plan, err
+		}
+	}
+	return plan, nil
 }
 
 // pushdownFinalSQL follows merge (the CTE "merged") with the function,
@@ -337,4 +414,232 @@ func resultLabels(request *metrics_core.RangeFunctionRequestDTO, key string, val
 		}
 	}
 	return labels
+}
+
+// steps plans firstStep..lastStep over executors slices of contiguous
+// steps, chunked in time when there are fewer steps than executors.
+func (b planBuilder) steps(firstStep, lastStep, executors int64) (pushdownPlan, error) {
+	plan := pushdownPlan{}
+	steps := lastStep - firstStep + 1
+	count := min(executors, steps)
+	chunks := executors / count
+	for i := range count {
+		sliceFirst, sliceLast := firstStep+steps*i/count, firstStep+steps*(i+1)/count-1
+		fromMs := b.request.StartMs + sliceFirst*b.stepMs - b.request.RangeMs + 1
+		toMs := b.request.StartMs + sliceLast*b.stepMs
+		windows := []msWindow{{fromMs, toMs}}
+		if chunks > 1 {
+			windows = timeChunks(fromMs, toMs, chunks, b.source)
+		}
+		for _, window := range windows {
+			if err := b.add(&plan, window, sliceFirst, sliceLast, chunks > 1); err != nil {
+				return plan, err
+			}
+		}
+	}
+	return plan, nil
+}
+
+// add plans a slice reading the files overlapping window, its samples
+// only, for steps firstStep..lastStep: as partials, or computed whole.
+func (b planBuilder) add(plan *pushdownPlan, window msWindow, firstStep, lastStep int64, partial bool) error {
+	from := time.UnixMilli(window.fromMs).UTC()
+	to := time.UnixMilli(window.toMs + 1).UTC().Add(-time.Microsecond)
+	where, args, err := b.q.whereFor(b.projectID, from, to, b.request.Matchers)
+	if err != nil {
+		return err
+	}
+	slice := query.Slice{}
+	for _, record := range b.source.records {
+		if !record.MaxTime.Before(from) && !record.MinTime.After(to) {
+			slice.Segments = append(slice.Segments, record)
+		}
+	}
+	for _, file := range b.source.tail {
+		if file.MaxTime.IsZero() || (!file.MaxTime.Before(from) && !file.MinTime.After(to)) {
+			slice.LocalFiles = append(slice.LocalFiles, file)
+		}
+	}
+	fragmentSQL := fmt.Sprintf(
+		pushdownFragmentSQL,
+		where,
+		b.request.StartMs,
+		b.stepMs,
+		lastStep,
+		b.request.RangeMs-1,
+		firstStep,
+	)
+	if partial {
+		slice.SQL, slice.Args = fragmentSQL, args
+	} else {
+		sliceSQL, finalArgs := pushdownFinalSQL(fmt.Sprintf(pushdownSingleSQL, fragmentSQL), b.request)
+		slice.SQL = sliceSQL
+		slice.Args = append(append([]any{}, args...), finalArgs...)
+	}
+	plan.planned = append(plan.planned, plannedSlice{slice: slice, window: window, partial: partial})
+	return nil
+}
+
+// slices is the plan's partial or whole slices.
+func (p pushdownPlan) slices(partial bool) []query.Slice {
+	var result []query.Slice
+	for _, planned := range p.planned {
+		if planned.partial == partial {
+			result = append(result, planned.slice)
+		}
+	}
+	return result
+}
+
+// run runs r's slices and keeps their rows; bad stops at the first bad row.
+func (r *pushdownRun) run(ctx context.Context, q *MetricQuerier, groups int) {
+	r.found, r.err = q.run(ctx, query.Request{
+		Slices:    r.slices,
+		FinalSQL:  r.finalSQL,
+		FinalArgs: r.finalArgs,
+	}, func(rows *sql.Rows) error {
+		for rows.Next() {
+			row := pushdownRow{values: make([]string, groups)}
+			var rowBad bool
+			dest := make([]any, 0, groups+4)
+			dest = append(dest, &row.key)
+			for i := range row.values {
+				dest = append(dest, &row.values[i])
+			}
+			dest = append(dest, &row.t, &row.value, &rowBad)
+			if err := rows.Scan(dest...); err != nil {
+				return fmt.Errorf("failed to scan range function row: %w", err)
+			}
+			if rowBad {
+				r.bad = true
+				return nil
+			}
+			r.rows = append(r.rows, row)
+			if len(r.rows) > maxSeriesRows {
+				return fmt.Errorf("query returns more than %d points; narrow the time range or matchers", maxSeriesRows)
+			}
+		}
+		return nil
+	})
+}
+
+// recentBoundary is the earliest sample time (ms) of the files only this
+// process reads - the query-time tail and segments not uploaded yet - or
+// MaxInt64 when there are none; false when a tail file's times are unknown.
+func recentBoundary(source sampleSource) (int64, bool) {
+	recent := int64(math.MaxInt64)
+	for _, file := range source.tail {
+		if file.MaxTime.IsZero() {
+			return 0, false
+		}
+		recent = min(recent, file.MinTime.UnixMilli())
+	}
+	for _, record := range source.records {
+		if record.ObjectKey == "" {
+			recent = min(recent, record.MinTime.UnixMilli())
+		}
+	}
+	return recent, true
+}
+
+// timeChunks cuts [fromMs, toMs] into at most n windows that share no
+// millisecond and together cover it. The cuts split the part the files
+// actually span evenly, so no executor gets a stretch without samples; no
+// more windows than files, since each would read every file it overlaps.
+// A cut moves to the nearest file edge within half a chunk of it (past the
+// previous cut): a file split between two chunks is read (and cached) by
+// two executors, so whole files beat equal lengths.
+func timeChunks(fromMs, toMs, n int64, source sampleSource) []msWindow {
+	lo, hi := fromMs, toMs
+	first, last, files := filesSpan(source, fromMs, toMs)
+	if files > 0 {
+		lo, hi = max(lo, first), min(hi, last)
+		n = min(n, files)
+	}
+	if hi < lo || n <= 1 {
+		return []msWindow{{fromMs, toMs}}
+	}
+	n = min(n, hi-lo+1)
+	edges := fileEdges(source, lo, hi)
+	tolerance := (hi - lo + 1) / n / 2
+	windows := make([]msWindow, 0, n)
+	start := fromMs
+	for j := int64(1); j < n; j++ {
+		cut := lo + (hi-lo+1)*j/n
+		if edge, ok := nearestEdge(edges, cut, tolerance, start); ok {
+			cut = edge
+		}
+		if cut <= start {
+			continue
+		}
+		windows = append(windows, msWindow{start, cut - 1})
+		start = cut
+	}
+	return append(windows, msWindow{start, toMs})
+}
+
+// fileEdges is where the files start and end (the millisecond after their
+// last sample), ascending, inside (lo, hi].
+func fileEdges(source sampleSource, lo, hi int64) []int64 {
+	var edges []int64
+	add := func(edge int64) {
+		if edge > lo && edge <= hi {
+			edges = append(edges, edge)
+		}
+	}
+	for _, record := range source.records {
+		add(record.MinTime.UnixMilli())
+		add(record.MaxTime.UnixMilli() + 1)
+	}
+	for _, file := range source.tail {
+		if !file.MaxTime.IsZero() {
+			add(file.MinTime.UnixMilli())
+			add(file.MaxTime.UnixMilli() + 1)
+		}
+	}
+	slices.Sort(edges)
+	return slices.Compact(edges)
+}
+
+// nearestEdge is the edge after start closest to cut, if one is within
+// tolerance.
+func nearestEdge(edges []int64, cut, tolerance, start int64) (int64, bool) {
+	i := sort.Search(len(edges), func(i int) bool { return edges[i] >= cut })
+	best, found := int64(0), false
+	for _, j := range []int{i - 1, i} {
+		if j < 0 || j >= len(edges) || edges[j] <= start {
+			continue
+		}
+		distance := max(edges[j]-cut, cut-edges[j])
+		if distance <= tolerance && (!found || distance < max(best-cut, cut-best)) {
+			best, found = edges[j], true
+		}
+	}
+	return best, found
+}
+
+// filesSpan is the earliest and latest sample time (ms) of the files
+// overlapping [fromMs, toMs], and how many there are; 0 files when a file's
+// times are unknown.
+func filesSpan(source sampleSource, fromMs, toMs int64) (int64, int64, int64) {
+	from := time.UnixMilli(fromMs).UTC()
+	to := time.UnixMilli(toMs + 1).UTC().Add(-time.Microsecond)
+	first, last, files := int64(math.MaxInt64), int64(math.MinInt64), int64(0)
+	add := func(minTime, maxTime time.Time) {
+		if maxTime.Before(from) || minTime.After(to) {
+			return
+		}
+		first, last = min(first, minTime.UnixMilli()), max(last, maxTime.UnixMilli())
+		files++
+	}
+	for _, record := range source.records {
+		add(record.MinTime, record.MaxTime)
+	}
+	for _, file := range source.tail {
+		if file.MaxTime.IsZero() {
+			return 0, 0, 0
+		}
+		add(file.MinTime, file.MaxTime)
+	}
+	return first, last, files
 }

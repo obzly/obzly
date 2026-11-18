@@ -86,7 +86,7 @@ export const CreateProjectDialogComponent = ({
           type="primary"
           onClick={handleCreateProject}
           disabled={isCreating || !projectName.trim()}
-          className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
         >
           {isCreating ? (
             <Spin indicator={<LoadingOutlined spin />} size="small" />

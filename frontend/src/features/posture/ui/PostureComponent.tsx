@@ -1,11 +1,12 @@
 // Posture lives on each Site; a control plane reads every Site it can reach and adds them up.
-import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Spin, Tabs } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button } from 'antd';
 import { useEffect, useState } from 'react';
 
 import type { PostureFilters } from '../../../entity/posture';
 import { useVisibleInterval } from '../../../shared/lib';
-import { type CostSite, listSites } from '../../cost';
+import { PageHeader } from '../../../shared/ui/v2';
+import { type CostSite, Loading, ViewTabs, listSites } from '../../cost';
 import { DEFAULT_TRENDS, type TrendsState } from '../lib/format';
 import { ActionsTab } from './ActionsTab';
 import { CoverageTab } from './CoverageTab';
@@ -17,15 +18,18 @@ import { TrendsTab } from './TrendsTab';
 interface Props {
   contentHeight: number;
   onManageCloud?: () => void;
+  /** The view to open on (the Cost summary links straight to Findings or Coverage). */
+  initialView?: PostureView;
 }
 
-type View = 'overview' | 'findings' | 'actions' | 'trends' | 'coverage';
+export type PostureView = 'overview' | 'findings' | 'actions' | 'trends' | 'coverage';
+type View = PostureView;
 
 // Posture refreshes every few hours; this only picks up a refresh while the tab stays open.
 const REFRESH_MS = 15 * 60_000;
 
-export const PostureComponent = ({ contentHeight, onManageCloud }: Props) => {
-  const [view, setView] = useState<View>('overview');
+export const PostureComponent = ({ contentHeight, onManageCloud, initialView }: Props) => {
+  const [view, setView] = useState<View>(initialView ?? 'overview');
   const [sites, setSites] = useState<CostSite[]>();
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
@@ -42,24 +46,26 @@ export const PostureComponent = ({ contentHeight, onManageCloud }: Props) => {
 
   return (
     <div
-      className="w-full overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
+      className="flex w-full flex-col gap-4 overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
       style={{ height: contentHeight }}
     >
-      <div className="mb-1 flex flex-wrap items-center gap-3">
-        <h1 className="m-0 text-xl font-semibold text-gray-900 dark:text-gray-100">Posture</h1>
-        <span className="text-sm text-gray-500 dark:text-gray-400">
-          Findings against security standards, from your cloud connections
-        </span>
-        <div className="flex-1" />
-        {sites && <PostureAlertsButton sites={sites} />}
-        <Button icon={<ReloadOutlined />} onClick={() => setRefresh((value) => value + 1)}>
-          Refresh
-        </Button>
-      </div>
-      {error && <Alert className="my-3" type="error" showIcon title={error} />}
-      <Tabs
-        activeKey={view}
-        onChange={(key) => setView(key as View)}
+      <PageHeader
+        title="Posture"
+        subtitle="Findings against security standards, from your cloud connections"
+        actions={
+          <>
+            {sites && <PostureAlertsButton sites={sites} />}
+            <Button icon={<ReloadOutlined />} onClick={() => setRefresh((value) => value + 1)}>
+              Refresh
+            </Button>
+          </>
+        }
+      />
+      {error && <Alert type="error" showIcon title={error} />}
+      <ViewTabs<View>
+        label="Posture views"
+        value={view}
+        onChange={setView}
         items={[
           { key: 'overview', label: 'Standards' },
           { key: 'findings', label: 'Findings' },
@@ -69,11 +75,7 @@ export const PostureComponent = ({ contentHeight, onManageCloud }: Props) => {
         ]}
       />
       {!sites ? (
-        !error && (
-          <div className="flex justify-center py-16">
-            <Spin indicator={<LoadingOutlined spin />} />
-          </div>
-        )
+        !error && <Loading />
       ) : (
         <>
           {view === 'overview' && (
@@ -82,8 +84,9 @@ export const PostureComponent = ({ contentHeight, onManageCloud }: Props) => {
               refresh={refresh}
               onManageCloud={onManageCloud}
               onCoverage={() => setView('coverage')}
-              onFindings={({ severity, standard }) => {
+              onFindings={({ severity, standard, status }) => {
                 setFilters({
+                  status,
                   severity: severity ? [severity] : undefined,
                   standard: standard ? [standard] : undefined,
                 });

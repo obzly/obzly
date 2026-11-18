@@ -23,6 +23,8 @@ func (c *TraceQueryController) RegisterRoutes(router *gin.RouterGroup) {
 	queryRoutes := router.Group("/traces/query")
 
 	queryRoutes.POST("/list/:projectId", c.ListTraces)
+	queryRoutes.POST("/summary/:projectId", c.GetTraceSummary)
+	queryRoutes.POST("/service-errors/:projectId", c.GetServiceErrors)
 	queryRoutes.GET("/get/:projectId/:traceId", c.GetTrace)
 	queryRoutes.GET("/services/:projectId", c.ListServices)
 	queryRoutes.GET("/operations/:projectId", c.ListOperations)
@@ -96,6 +98,92 @@ func (c *TraceQueryController) ListTraces(ctx *gin.Context) {
 	}
 
 	response, err := c.traceQueryService.ListTraces(ctx.Request.Context(), projectID, &request, user)
+	if err != nil {
+		c.handleError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, response)
+}
+
+// GetTraceSummary
+// @Summary Get the trace search summary
+// @Description Requests (root spans, or the picked service's spans), error rate, p50 and p95 for the range and the same-length range before it, bucketed trends, and a capped count of traces matching the filters
+// @Tags traces-query
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID"
+// @Param request body traces_querying.TraceSummaryRequestDTO true "Search filters"
+// @Success 200 {object} traces_querying.TraceSummaryResponseDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 422 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Router /traces/query/summary/{projectId} [post]
+func (c *TraceQueryController) GetTraceSummary(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	projectID, ok := parseProjectID(ctx)
+	if !ok {
+		return
+	}
+
+	var request TraceSummaryRequestDTO
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	response, err := c.traceQueryService.GetTraceSummary(ctx.Request.Context(), projectID, &request, user)
+	if err != nil {
+		c.handleError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, response)
+}
+
+// GetServiceErrors
+// @Summary Get the services with the most errors
+// @Description Each service's entry spans (SERVER/CONSUMER spans and trace roots) and failed ones in the range and the same-length range before it, most errors first. Ranges over 7 days are clamped to the last 7 days.
+// @Tags traces-query
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID"
+// @Param request body traces_querying.ServiceErrorsRequestDTO true "Range and limit"
+// @Success 200 {object} traces_querying.ServiceErrorsResponseDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 422 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Router /traces/query/service-errors/{projectId} [post]
+func (c *TraceQueryController) GetServiceErrors(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	projectID, ok := parseProjectID(ctx)
+	if !ok {
+		return
+	}
+
+	var request ServiceErrorsRequestDTO
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	response, err := c.traceQueryService.GetServiceErrors(ctx.Request.Context(), projectID, &request, user)
 	if err != nil {
 		c.handleError(ctx, err)
 		return
@@ -254,6 +342,10 @@ func (c *TraceQueryController) handleError(ctx *gin.Context, err error) {
 	}
 	if errors.Is(err, querylimit.ErrTooManyQueries) {
 		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		return
+	}
+	if errors.Is(err, ErrInvalidSummaryRange) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	switch err.Error() {

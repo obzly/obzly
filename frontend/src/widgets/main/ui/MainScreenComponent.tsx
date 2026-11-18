@@ -3,14 +3,13 @@ import {
   InfoCircleOutlined,
   LoadingOutlined,
   LogoutOutlined,
-  MoonOutlined,
-  SunOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { App, Button, Dropdown, Modal, Spin, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 
 import { APP_VERSION, IS_CONTROL_PLANE, WEBSITE_URL, setCurrentSiteId } from '../../../constants';
+import type { RuleRequest } from '../../../entity/alerting';
 import { type DiskUsage, diskApi } from '../../../entity/disk';
 import { type ProjectResponse, projectApi } from '../../../entity/projects';
 import type { Site } from '../../../entity/sites';
@@ -29,13 +28,12 @@ import { DashboardsComponent } from '../../../features/dashboards';
 import { SessionsListComponent } from '../../../features/incidents';
 import { InfrastructureComponent, type NavigateTarget } from '../../../features/infrastructure';
 import { OrganizationsComponent } from '../../../features/organizations';
-import { PostureComponent } from '../../../features/posture';
+import { OverviewComponent } from '../../../features/overview';
+import { PostureComponent, type PostureView } from '../../../features/posture';
 import {
   CreateProjectDialogComponent,
-  DataSourcesComponent,
-  ProjectApiKeysComponent,
-  ProjectMembershipComponent,
-  ProjectSettingsComponent,
+  ProjectSettingsGroupComponent,
+  type ProjectSettingsSection,
 } from '../../../features/projects';
 import { QueryComponentComponent } from '../../../features/query';
 import { ServiceMapComponent } from '../../../features/serviceMap';
@@ -46,6 +44,10 @@ import { ProfileComponent } from '../../../features/users/ui/ProfileComponent';
 import { UsersComponent } from '../../../features/users/ui/UsersComponent';
 import { useScreenHeight } from '../../../shared/hooks';
 import {
+  parseNotificationLink,
+  withoutNotificationLink,
+} from '../../../shared/lib/notificationLink';
+import {
   ENVIRONMENT_STYLE,
   groupSites,
   scopedStorageKey,
@@ -54,11 +56,14 @@ import {
   useSite,
 } from '../../../shared/site';
 import { useTheme } from '../../../shared/theme';
+import { useThemeProfileSync } from '../lib/useThemeProfileSync';
 import { MobilePlaceholderComponent } from './MobilePlaceholderComponent';
 import { ProjectSelectionComponent } from './ProjectSelectionComponent';
+import { DarkChromeProvider, ThemeMenuComponent } from './ThemeMenuComponent';
 import { LocationPickerComponent } from './locationPicker/LocationPickerComponent';
 
 type TabName =
+  | 'overview'
   | 'profile'
   | 'obzly-settings'
   | 'users'
@@ -80,6 +85,7 @@ type TabName =
   | 'data-sources';
 
 const TAB_NAMES: TabName[] = [
+  'overview',
   'profile',
   'obzly-settings',
   'users',
@@ -109,6 +115,7 @@ const SELECTED_TAB_STORAGE_KEY = 'selected_tab';
 
 // Tabs whose empty state depends on there being a project (or a Site).
 const PROJECT_SCOPED_TABS: TabName[] = [
+  'overview',
   'search',
   'traces',
   'service-map',
@@ -124,20 +131,41 @@ const PROJECT_SCOPED_TABS: TabName[] = [
 
 const isProjectScopedTab = (tab: TabName): boolean => PROJECT_SCOPED_TABS.includes(tab);
 
-// Restore the last-viewed tab so a refresh lands back on it.
+const PROJECT_SETTINGS_TABS: TabName[] = ['settings', 'members', 'api-keys', 'data-sources'];
+// The four project pages share one sidebar item and one page with a section list.
+const isProjectSettingsTab = (tab: TabName): tab is ProjectSettingsSection =>
+  PROJECT_SETTINGS_TABS.includes(tab);
+
+// Restore the last-viewed tab so a refresh lands back on it; a first visit opens the Overview.
+// Per browser tab (sessionStorage): a reload keeps the page, a new visit lands on Overview.
+const readStoredTab = (): string | null => {
+  try {
+    return sessionStorage.getItem(SELECTED_TAB_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+};
+
+// A notification's "Open in Obzly" link this page was opened with (read once per load).
+const INITIAL_LINK = parseNotificationLink(window.location.search);
+
 const getInitialSelectedTab = (): TabName => {
-  const stored = localStorage.getItem(SELECTED_TAB_STORAGE_KEY);
+  if (INITIAL_LINK) return INITIAL_LINK.tab;
+  const stored = readStoredTab();
   // The Site registry moved into Obzly settings.
   if (stored === 'sites') {
     rememberSettingsTab('sites');
     return 'obzly-settings';
   }
-  return TAB_NAMES.includes(stored as TabName) ? (stored as TabName) : 'search';
+  return TAB_NAMES.includes(stored as TabName) ? (stored as TabName) : 'overview';
 };
 
 export const MainScreenComponent = () => {
   const { message } = App.useApp();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, definition } = useTheme();
+  // Semi-dark: light pages, but the top bar and rail draw dark (`dark` scopes Tailwind's dark: to them).
+  const isDarkChrome = definition.darkChrome && theme === 'light';
+  const chromeClass = isDarkChrome ? 'dark' : '';
   const screenHeight = useScreenHeight();
   const contentHeight = screenHeight - 95;
 
@@ -151,11 +179,21 @@ export const MainScreenComponent = () => {
   const [tracesOpenTrace, setTracesOpenTrace] = useState<
     { traceId: string; at: string } | undefined
   >(undefined);
+  // The Posture view the Cost summary's links open; cleared on leaving Posture.
+  const [postureView, setPostureView] = useState<PostureView | undefined>(undefined);
+  useEffect(() => {
+    if (selectedTab !== 'posture') setPostureView(undefined);
+  }, [selectedTab]);
   useEffect(() => {
     if (selectedTab !== 'traces') {
       setTracesServiceFilter(undefined);
       setTracesOpenTrace(undefined);
     }
+  }, [selectedTab]);
+  // A new alert rule the Alerts tab opens (from Logs › Chart › Create alert); cleared on leaving it.
+  const [alertRuleDraft, setAlertRuleDraft] = useState<Partial<RuleRequest> | undefined>();
+  useEffect(() => {
+    if (selectedTab !== 'alerts') setAlertRuleDraft(undefined);
   }, [selectedTab]);
   const [diskUsage, setDiskUsage] = useState<DiskUsage | undefined>(undefined);
   // centralUser is the account on this deployment (gates admin tabs and the
@@ -164,9 +202,17 @@ export const MainScreenComponent = () => {
   const [isCentralLoading, setIsCentralLoading] = useState(true);
   const [user, setUser] = useState<UserProfile | undefined>(undefined);
   const [globalSettings, setGlobalSettings] = useState<UsersSettings | undefined>(undefined);
+  useThemeProfileSync(centralUser, globalSettings);
 
   const [projects, setProjects] = useState<ProjectResponse[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectResponse | undefined>(undefined);
+  // The project and incident a notification link opens, until applied.
+  const [linkProjectId, setLinkProjectId] = useState(INITIAL_LINK?.projectId);
+  const [linkSessionId, setLinkSessionId] = useState(INITIAL_LINK?.sessionId);
+  const linkSiteApplied = useRef(false);
+  useEffect(() => {
+    if (selectedTab !== 'incidents') setLinkSessionId(undefined);
+  }, [selectedTab]);
 
   const [isLoading, setIsLoading] = useState(false);
   // The Site's own refusal relayed by the control plane; shown instead of
@@ -332,8 +378,38 @@ export const MainScreenComponent = () => {
     }
   }, [selectedProject, selectedProjectStorageKey]);
 
+  // A notification link: drop it from the address (a reload shouldn't reopen it), switch to its
+  // Site, then select its project once that Site's projects are loaded.
   useEffect(() => {
-    localStorage.setItem(SELECTED_TAB_STORAGE_KEY, selectedTab);
+    if (!INITIAL_LINK) return;
+    window.history.replaceState(
+      null,
+      '',
+      window.location.pathname + withoutNotificationLink(window.location.search),
+    );
+  }, []);
+  useEffect(() => {
+    if (!INITIAL_LINK?.siteId || !IS_CONTROL_PLANE || linkSiteApplied.current) return;
+    const site = sites.find((s) => s.id === INITIAL_LINK.siteId);
+    if (!site) return;
+    linkSiteApplied.current = true;
+    if (site.id !== selectedSite?.id) selectSite(site);
+  }, [sites, selectedSite?.id]);
+  useEffect(() => {
+    if (!linkProjectId || projects.length === 0) return;
+    if (IS_CONTROL_PLANE && INITIAL_LINK?.siteId && selectedSite?.id !== INITIAL_LINK.siteId)
+      return;
+    const project = projects.find((p) => p.id === linkProjectId);
+    setLinkProjectId(undefined);
+    if (project) setSelectedProject(project);
+  }, [projects, linkProjectId, selectedSite?.id]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(SELECTED_TAB_STORAGE_KEY, selectedTab);
+    } catch {
+      /* a reload opens Overview */
+    }
   }, [selectedTab]);
 
   const handleCreateProject = () => {
@@ -345,7 +421,7 @@ export const MainScreenComponent = () => {
       const projectsResponse = await projectApi.getProjects();
       setProjects(projectsResponse.projects);
       setSelectedProject(newProject);
-      setSelectedTab('search');
+      setSelectedTab('overview');
     } catch (e) {
       message.error((e as Error).message);
     }
@@ -367,132 +443,130 @@ export const MainScreenComponent = () => {
 
       <div
         style={{ height: screenHeight }}
-        className="hidden bg-[#f5f5f5] p-3 dark:bg-[#0b1220] [@media(min-width:450px)]:block"
+        className="hidden bg-gray-50 p-3 dark:bg-gray-900 [@media(min-width:450px)]:block"
       >
-        <div className="relative mb-3 flex h-[60px] items-center rounded bg-white p-3 shadow dark:bg-[#141b2d] dark:shadow-none">
-          {selectedEnvironment && (
-            <div
-              aria-hidden="true"
-              className={`absolute inset-x-0 bottom-0 h-[3px] rounded-b ${ENVIRONMENT_STYLE[selectedEnvironment].strip}`}
-            />
-          )}
-          <div className="flex items-center gap-3 hover:opacity-80">
-            <button
-              type="button"
-              onClick={() => setSelectedTab('search')}
-              className="cursor-pointer"
-            >
-              <img className="h-[35px] w-[35px]" src="/logo.svg" />
-            </button>
-          </div>
-
-          {IS_CONTROL_PLANE ? (
-            sites.length > 0 && (
-              <div className="ml-6">
-                <LocationPickerComponent
-                  sites={sites}
-                  selectedSite={selectedSite}
-                  projects={projects}
-                  projectsSiteId={projectsSiteId}
-                  isLoadingProjects={isLoading}
-                  selectedProject={selectedProject}
-                  isAdmin={centralUser?.role === UserRole.ADMIN}
-                  onSelect={handleLocationSelect}
-                  onCreateProject={handleCreateOnSite}
-                />
-              </div>
-            )
-          ) : (
-            <div className="ml-6">
-              {!isLoading && (
-                <ProjectSelectionComponent
-                  projects={projects}
-                  selectedProject={selectedProject}
-                  onCreateProject={handleCreateProject}
-                  onProjectSelect={setSelectedProject}
-                />
-              )}
+        <DarkChromeProvider enabled={isDarkChrome}>
+          <div
+            className={`${chromeClass} relative mb-3 flex h-[60px] items-center rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800`}
+          >
+            {selectedEnvironment && (
+              <div
+                aria-hidden="true"
+                className={`absolute inset-x-3 bottom-0 h-[3px] rounded-full ${ENVIRONMENT_STYLE[selectedEnvironment].strip}`}
+              />
+            )}
+            <div className="flex items-center gap-3 hover:opacity-80">
+              <button
+                type="button"
+                onClick={() => setSelectedTab('overview')}
+                aria-label="Overview"
+                className="cursor-pointer"
+              >
+                <img className="h-[35px] w-[35px]" src="/logo.svg" />
+              </button>
             </div>
-          )}
 
-          <div className="mr-3 ml-auto flex items-center gap-5">
-            {isUsedMoreThan95Percent && diskUsage && (
-              <Tooltip title="To make backups locally and restore them, you need to have enough space on your disk. For restore, you need to have same amount of space that the backup size.">
-                <div
-                  className={`cursor-pointer text-center text-xs ${isUsedMoreThan95Percent ? 'text-red-500' : 'text-gray-500 dark:text-gray-300'}`}
-                >
-                  {(diskUsage.usedSpaceBytes / 1024 ** 3).toFixed(1)} of{' '}
-                  {(diskUsage.totalSpaceBytes / 1024 ** 3).toFixed(1)} GB
-                  <br />
-                  ROM used (
-                  {((diskUsage.usedSpaceBytes / diskUsage.totalSpaceBytes) * 100).toFixed(1)}%)
+            {IS_CONTROL_PLANE ? (
+              sites.length > 0 && (
+                <div className="ml-6">
+                  <LocationPickerComponent
+                    sites={sites}
+                    selectedSite={selectedSite}
+                    projects={projects}
+                    projectsSiteId={projectsSiteId}
+                    isLoadingProjects={isLoading}
+                    selectedProject={selectedProject}
+                    isAdmin={centralUser?.role === UserRole.ADMIN}
+                    onSelect={handleLocationSelect}
+                    onCreateProject={handleCreateOnSite}
+                  />
                 </div>
-              </Tooltip>
+              )
+            ) : (
+              <div className="ml-6">
+                {!isLoading && (
+                  <ProjectSelectionComponent
+                    projects={projects}
+                    selectedProject={selectedProject}
+                    onCreateProject={handleCreateProject}
+                    onProjectSelect={setSelectedProject}
+                  />
+                )}
+              </div>
             )}
 
-            <Tooltip title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
-              <Button
-                type="text"
-                shape="circle"
-                icon={theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
-                onClick={toggleTheme}
-              />
-            </Tooltip>
+            <div className="mr-3 ml-auto flex items-center gap-5">
+              {isUsedMoreThan95Percent && diskUsage && (
+                <Tooltip title="To make backups locally and restore them, you need to have enough space on your disk. For restore, you need to have same amount of space that the backup size.">
+                  <div
+                    className={`cursor-pointer text-center text-xs ${isUsedMoreThan95Percent ? 'text-red-500' : 'text-gray-500 dark:text-gray-300'}`}
+                  >
+                    {(diskUsage.usedSpaceBytes / 1024 ** 3).toFixed(1)} of{' '}
+                    {(diskUsage.totalSpaceBytes / 1024 ** 3).toFixed(1)} GB
+                    <br />
+                    ROM used (
+                    {((diskUsage.usedSpaceBytes / diskUsage.totalSpaceBytes) * 100).toFixed(1)}%)
+                  </div>
+                </Tooltip>
+              )}
 
-            <Dropdown
-              menu={{
-                items: [
-                  {
-                    key: 'profile',
-                    label: 'Edit profile',
-                    icon: <UserOutlined />,
-                    onClick: () => setSelectedTab('profile'),
-                  },
-                  {
-                    key: 'about',
-                    label: 'About',
-                    icon: <InfoCircleOutlined />,
-                    onClick: () => setIsAboutModalOpen(true),
-                  },
-                  { type: 'divider' },
-                  {
-                    key: 'logout',
-                    label: 'Logout',
-                    icon: <LogoutOutlined />,
-                    danger: true,
-                    onClick: () => {
-                      userApi.logout();
-                      window.location.reload();
+              <ThemeMenuComponent />
+
+              <Dropdown
+                menu={{
+                  items: [
+                    {
+                      key: 'profile',
+                      label: 'Edit profile',
+                      icon: <UserOutlined />,
+                      onClick: () => setSelectedTab('profile'),
                     },
-                  },
-                ],
-              }}
-              trigger={['click']}
-            >
-              <Button
-                type={selectedTab === 'profile' ? 'primary' : 'default'}
-                className={
-                  selectedTab === 'profile'
-                    ? 'border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700'
-                    : ''
-                }
-                icon={<UserOutlined />}
+                    {
+                      key: 'about',
+                      label: 'About',
+                      icon: <InfoCircleOutlined />,
+                      onClick: () => setIsAboutModalOpen(true),
+                    },
+                    { type: 'divider' },
+                    {
+                      key: 'logout',
+                      label: 'Logout',
+                      icon: <LogoutOutlined />,
+                      danger: true,
+                      onClick: () => {
+                        userApi.logout();
+                        window.location.reload();
+                      },
+                    },
+                  ],
+                }}
+                trigger={['click']}
               >
-                {centralUser?.name || centralUser?.email || 'Profile'}
-                <DownOutlined className="!text-xs" />
-              </Button>
-            </Dropdown>
+                <Button
+                  type={selectedTab === 'profile' ? 'primary' : 'default'}
+                  className={
+                    selectedTab === 'profile'
+                      ? 'border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700'
+                      : ''
+                  }
+                  icon={<UserOutlined />}
+                >
+                  {centralUser?.name || centralUser?.email || 'Profile'}
+                  <DownOutlined className="!text-xs" />
+                </Button>
+              </Dropdown>
+            </div>
           </div>
-        </div>
+        </DarkChromeProvider>
 
         {isLoading || isCentralLoading || (IS_CONTROL_PLANE && isSiteLoading) ? (
           <div className="flex items-center justify-center py-2" style={{ height: contentHeight }}>
             <Spin indicator={<LoadingOutlined spin />} size="large" />
           </div>
         ) : (
-          <div className="relative flex">
+          <div className="relative flex gap-3">
             <div
-              className="max-w-[60px] min-w-[60px] rounded bg-white py-2 shadow dark:bg-[#141b2d] dark:shadow-none"
+              className={`${chromeClass} max-w-[64px] min-w-[64px] overflow-y-auto rounded-2xl border border-gray-200 bg-white py-2 dark:border-gray-700 dark:bg-gray-800`}
               style={{ height: contentHeight }}
             >
               {(() => {
@@ -506,6 +580,14 @@ export const MainScreenComponent = () => {
                 };
 
                 const allProjectTabs: (SidebarTab & { isVisible: boolean })[] = [
+                  {
+                    text: 'Overview',
+                    name: 'overview',
+                    icon: '/icons/menu/home-gray.svg',
+                    selectedIcon: '/icons/menu/home-white.svg',
+                    onClick: () => setSelectedTab('overview'),
+                    isVisible: !!selectedProject,
+                  },
                   {
                     text: 'Search',
                     name: 'search',
@@ -596,35 +678,11 @@ export const MainScreenComponent = () => {
                     isVisible: !!selectedProject,
                   },
                   {
-                    text: 'Project settings',
+                    text: 'Project Settings',
                     name: 'settings',
-                    icon: '/icons/menu/project-settings-gray.svg',
-                    selectedIcon: '/icons/menu/project-settings-white.svg',
+                    icon: '/icons/menu/global-settings-gray.svg',
+                    selectedIcon: '/icons/menu/global-settings-white.svg',
                     onClick: () => setSelectedTab('settings'),
-                    isVisible: !!selectedProject,
-                  },
-                  {
-                    text: 'Members',
-                    name: 'members',
-                    icon: '/icons/menu/users-gray.svg',
-                    selectedIcon: '/icons/menu/users-white.svg',
-                    onClick: () => setSelectedTab('members'),
-                    isVisible: !!selectedProject,
-                  },
-                  {
-                    text: 'API Keys',
-                    name: 'api-keys',
-                    icon: '/icons/menu/key-gray.svg',
-                    selectedIcon: '/icons/menu/key-white.svg',
-                    onClick: () => setSelectedTab('api-keys'),
-                    isVisible: !!selectedProject,
-                  },
-                  {
-                    text: 'Data Sources',
-                    name: 'data-sources',
-                    icon: '/icons/menu/data-sources-gray.svg',
-                    selectedIcon: '/icons/menu/data-sources-white.svg',
-                    onClick: () => setSelectedTab('data-sources'),
                     isVisible: !!selectedProject,
                   },
                 ];
@@ -632,7 +690,7 @@ export const MainScreenComponent = () => {
 
                 const allGlobalTabs: (SidebarTab & { isVisible: boolean })[] = [
                   {
-                    text: 'Obzly settings',
+                    text: 'Obzly Settings',
                     name: 'obzly-settings',
                     icon: '/icons/menu/global-settings-gray.svg',
                     selectedIcon: '/icons/menu/global-settings-white.svg',
@@ -663,17 +721,23 @@ export const MainScreenComponent = () => {
                     (centralUser?.role === UserRole.ADMIN || tab.name === 'organizations'),
                 );
 
+                const isActive = (tab: SidebarTab) =>
+                  selectedTab === tab.name ||
+                  (tab.name === 'settings' && isProjectSettingsTab(selectedTab));
+
                 const renderTab = (tab: SidebarTab) => (
                   <div key={tab.text} className="flex justify-center">
                     <Tooltip title={tab.text} placement="right">
                       <div
-                        className={`flex h-[50px] w-[50px] cursor-pointer items-center justify-center rounded ${selectedTab === tab.name ? 'bg-emerald-600' : 'hover:bg-blue-50 dark:hover:bg-gray-700'}`}
+                        className={`my-0.5 flex h-[44px] w-[44px] cursor-pointer items-center justify-center rounded-xl ${isActive(tab) ? 'bg-accent-600' : 'hover:bg-accent-50 dark:hover:bg-gray-700'}`}
                         onClick={tab.onClick}
                       >
                         <div className="mb-1">
                           <div className="flex justify-center">
                             <img
-                              src={selectedTab === tab.name ? tab.selectedIcon : tab.icon}
+                              src={isActive(tab) ? tab.selectedIcon : tab.icon}
+                              // The gray icons are drawn for a dark rail; darken them on light.
+                              className={isActive(tab) ? '' : 'brightness-50 dark:brightness-100'}
                               width={20}
                               alt={tab.text}
                               loading="lazy"
@@ -731,6 +795,10 @@ export const MainScreenComponent = () => {
             {selectedTab === 'cost' && IS_CONTROL_PLANE && (
               <CostComponent
                 contentHeight={contentHeight}
+                onOpenPosture={(view) => {
+                  setSelectedTab('posture');
+                  setPostureView(view);
+                }}
                 onManageCloud={
                   centralUser?.role === UserRole.ADMIN
                     ? () => {
@@ -744,6 +812,7 @@ export const MainScreenComponent = () => {
             {selectedTab === 'posture' && IS_CONTROL_PLANE && (
               <PostureComponent
                 contentHeight={contentHeight}
+                initialView={postureView}
                 onManageCloud={
                   centralUser?.role === UserRole.ADMIN
                     ? () => {
@@ -777,7 +846,7 @@ export const MainScreenComponent = () => {
                   type="primary"
                   size="large"
                   onClick={() => loadData()}
-                  className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+                  className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
                 >
                   Retry
                 </Button>
@@ -801,7 +870,7 @@ export const MainScreenComponent = () => {
                         rememberSettingsTab('sites');
                         setSelectedTab('obzly-settings');
                       }}
-                      className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+                      className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
                     >
                       Open Sites
                     </Button>
@@ -824,38 +893,32 @@ export const MainScreenComponent = () => {
                   type="primary"
                   size="large"
                   onClick={handleCreateProject}
-                  className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+                  className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
                 >
                   Create project
                 </Button>
               </div>
             ) : (
               <>
-                {selectedTab === 'settings' && selectedProject && user && (
-                  <ProjectSettingsComponent
+                {isProjectSettingsTab(selectedTab) && selectedProject && user && (
+                  <ProjectSettingsGroupComponent
                     projectResponse={selectedProject}
                     contentHeight={contentHeight}
                     user={user}
+                    initialSection={selectedTab}
+                    onSectionChange={setSelectedTab}
                   />
                 )}
-                {selectedTab === 'api-keys' && selectedProject && user && (
-                  <ProjectApiKeysComponent
-                    projectResponse={selectedProject}
+                {selectedTab === 'overview' && selectedProject && user && (
+                  <OverviewComponent
+                    projectId={selectedProject.id}
+                    projectName={selectedProject.name}
+                    siteId={selectedSite?.id ?? ''}
                     contentHeight={contentHeight}
-                    user={user}
-                  />
-                )}
-                {selectedTab === 'data-sources' && selectedProject && (
-                  <DataSourcesComponent
-                    projectResponse={selectedProject}
-                    contentHeight={contentHeight}
-                  />
-                )}
-                {selectedTab === 'members' && selectedProject && user && (
-                  <ProjectMembershipComponent
-                    projectResponse={selectedProject}
-                    contentHeight={contentHeight}
-                    user={user}
+                    onNavigate={(target, options) => {
+                      if (options?.serviceName) setTracesServiceFilter(options.serviceName);
+                      setSelectedTab(target);
+                    }}
                   />
                 )}
                 {selectedTab === 'search' && selectedProject && user && (
@@ -867,6 +930,11 @@ export const MainScreenComponent = () => {
                       setTracesOpenTrace({ traceId, at });
                       setSelectedTab('traces');
                     }}
+                    onCreateAlert={(draft) => {
+                      setAlertRuleDraft(draft);
+                      setSelectedTab('alerts');
+                    }}
+                    onOpenInfrastructure={() => setSelectedTab('infrastructure')}
                   />
                 )}
                 {selectedTab === 'traces' && selectedProject && user && (
@@ -891,6 +959,14 @@ export const MainScreenComponent = () => {
                   <SessionsListComponent
                     projectId={selectedProject.id}
                     contentHeight={contentHeight}
+                    initialSessionId={
+                      selectedProject.id === INITIAL_LINK?.projectId ? linkSessionId : undefined
+                    }
+                    canManageNotifications={
+                      user.role === UserRole.ADMIN ||
+                      selectedProject.userRole === ProjectRole.OWNER ||
+                      selectedProject.userRole === ProjectRole.ADMIN
+                    }
                   />
                 )}
                 {selectedTab === 'dashboards' && selectedProject && user && (
@@ -916,6 +992,15 @@ export const MainScreenComponent = () => {
                       user.role === UserRole.ADMIN ||
                       selectedProject.userRole !== ProjectRole.VIEWER
                     }
+                    onManageChannels={
+                      centralUser?.role === UserRole.ADMIN
+                        ? () => {
+                            rememberSettingsTab('notifications');
+                            setSelectedTab('obzly-settings');
+                          }
+                        : undefined
+                    }
+                    initialRuleDraft={alertRuleDraft}
                   />
                 )}
                 {selectedTab === 'ai-observability' && selectedProject && user && (
@@ -973,7 +1058,7 @@ export const MainScreenComponent = () => {
               href={WEBSITE_URL}
               target="_blank"
               rel="noreferrer"
-              className="text-sm text-emerald-600 hover:underline"
+              className="text-accent-600 text-sm hover:underline"
             >
               {WEBSITE_URL}
             </a>

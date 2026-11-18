@@ -131,7 +131,10 @@ type MetricsStatsDTO struct {
 	// TotalSizeMB is the compressed on-disk Parquet size.
 	TotalSizeMB float64 `json:"totalSizeMb"`
 	// RawSizeMB is the approximate uncompressed size of the ingested samples.
-	RawSizeMB        float64   `json:"rawSizeMb"`
-	OldestSampleTime time.Time `json:"oldestSampleTime"`
-	NewestSampleTime time.Time `json:"newestSampleTime"`
+	RawSizeMB float64 `json:"rawSizeMb"`
+	// ObjectStorageSizeMB: the part of TotalSizeMB already in object storage
+	// (0 without object storage); the rest is fresh segments on local disk.
+	ObjectStorageSizeMB float64   `json:"objectStorageSizeMb"`
+	OldestSampleTime    time.Time `json:"oldestSampleTime"`
+	NewestSampleTime    time.Time `json:"newestSampleTime"`
 }

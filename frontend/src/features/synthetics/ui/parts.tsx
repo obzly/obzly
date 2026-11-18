@@ -3,9 +3,10 @@ import { Button, Tooltip } from 'antd';
 import { type ReactNode, memo, useMemo, useState } from 'react';
 
 import type { CheckType } from '../../../entity/synthetics';
+import { Card, StatusStrip, type StripState } from '../../../shared/ui/v2';
 import { MAINTENANCE_HATCH, maintenanceRuns } from '../lib/maintenance';
 import { type MonitorStatus, STATUS_COLOR, STATUS_LABEL } from '../lib/status';
-import { slotAt, stripBackground, stripSummary } from '../lib/stripPaint';
+import { slotAt, stripSummary } from '../lib/stripPaint';
 import type { SlotStatus } from '../lib/useMonitorData';
 
 // Tooltips open above what they describe, never under the pointer as a
@@ -67,7 +68,7 @@ export const StatusBadge = ({ status, suffix }: { status: MonitorStatus; suffix?
 );
 
 export const TypeTag = ({ type }: { type: CheckType }) => (
-  <span className="rounded border border-gray-300 px-1.5 py-px font-mono text-[11px] tracking-wide text-gray-500 uppercase dark:border-gray-600 dark:text-gray-400">
+  <span className="rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[11px] tracking-wide text-gray-600 uppercase dark:bg-gray-700 dark:text-gray-300">
     {type}
   </span>
 );
@@ -117,10 +118,25 @@ const slotTime = new Intl.DateTimeFormat(undefined, {
 });
 const slotEnd = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
+// No runs (and maintenance, hatched on top) stay grey, never green.
+const STRIP_STATE: Record<SlotStatus, StripState> = {
+  up: 'ok',
+  warn: 'warn',
+  down: 'fail',
+  maintenance: 'none',
+  none: 'none',
+};
+
+// Where slot `index` (or a run of `length` slots) sits on a StatusStrip with 2px gaps.
+const slotLeft = (index: number, count: number) =>
+  `calc((100% - ${(count - 1) * 2}px) * ${index / count} + ${index * 2}px)`;
+const slotWidth = (length: number, count: number) =>
+  `calc((100% - ${(count - 1) * 2}px) * ${length / count} + ${(length - 1) * 2}px)`;
+
 /**
- * Availability over the range, one square per slot; the hovered one says when
- * and how. Painted as one background so a page of strips stays cheap: only
- * the hovered slot gets an element (the tooltip anchor) and a label.
+ * Availability over the range, one cell per slot (the shared StatusStrip);
+ * the hovered one says when and how in a tooltip above it, never a browser
+ * `title` under the pointer.
  */
 const StripView = ({
   slots,
@@ -132,9 +148,8 @@ const StripView = ({
   from: number;
 }) => {
   const [hovered, setHovered] = useState<number>();
-  const background = useMemo(() => stripBackground(slots), [slots]);
-  // Hatching can't be one stop of the single gradient: maintenance runs get
-  // an element each (rare, unlike slots).
+  const cells = useMemo(() => slots.map((slot) => ({ state: STRIP_STATE[slot] })), [slots]);
+  // Maintenance runs get a hatched element each (rare, unlike slots).
   const hatched = useMemo(() => maintenanceRuns(slots), [slots]);
   const label = (index: number) => {
     const start = from + index * slotSeconds * 1000;
@@ -149,10 +164,7 @@ const StripView = ({
   };
   return (
     <div
-      className="relative h-[18px] [--strip-empty:#e5e7eb] dark:[--strip-empty:#374151]"
-      style={{ background }}
-      role="img"
-      aria-label={`Availability: ${stripSummary(slots)}`}
+      className="relative"
       onMouseMove={(event) => {
         const box = event.currentTarget.getBoundingClientRect();
         const index = slotAt(event.clientX - box.left, box.width, slots.length);
@@ -160,13 +172,14 @@ const StripView = ({
       }}
       onMouseLeave={() => setHovered(undefined)}
     >
+      <StatusStrip cells={cells} height={18} label={`Availability: ${stripSummary(slots)}`} />
       {hatched.map((run) => (
         <i
           key={run.start}
           className="pointer-events-none absolute top-0 block h-full rounded-sm"
           style={{
-            left: `${(run.start * 100) / slots.length}%`,
-            width: `calc(${(run.length * 100) / slots.length}% - 2px)`,
+            left: slotLeft(run.start, slots.length),
+            width: slotWidth(run.length, slots.length),
             background: MAINTENANCE_HATCH,
           }}
         />
@@ -176,8 +189,8 @@ const StripView = ({
           <i
             className="pointer-events-none absolute top-0 block h-full rounded-sm outline outline-1 outline-gray-500/60"
             style={{
-              left: `${(hovered * 100) / slots.length}%`,
-              width: `calc(${100 / slots.length}% - 2px)`,
+              left: slotLeft(hovered, slots.length),
+              width: slotWidth(1, slots.length),
             }}
           />
         </Tooltip>
@@ -189,6 +202,20 @@ const StripView = ({
 /** Memoised: a page of strips re-renders only those whose slots changed. */
 export const Strip = memo(StripView);
 
+/** One location's latest result as a small pill: dot and name, the status on hover and for screen readers. */
+export const LocationPill = ({ location, status }: { location: string; status: MonitorStatus }) => (
+  <Tooltip title={`${location}: ${STATUS_LABEL[status]}`}>
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-1.5 py-px font-mono text-[11px] text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+      aria-label={`${location}: ${STATUS_LABEL[status]}`}
+    >
+      <StatusDot status={status} size={7} />
+      {location}
+    </span>
+  </Tooltip>
+);
+
+/** A v2 card with a title row; kept as Panel so Infrastructure and every Synthetics view share it. */
 export const Panel = ({
   title,
   subtitle,
@@ -202,16 +229,7 @@ export const Panel = ({
   children: ReactNode;
   className?: string;
 }) => (
-  <div
-    className={`min-w-0 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 ${className}`}
-  >
-    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-      <div>
-        <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{title}</div>
-        {subtitle && <div className="text-xs text-gray-500 dark:text-gray-400">{subtitle}</div>}
-      </div>
-      {extra}
-    </div>
+  <Card title={title} subtitle={subtitle} extra={extra} className={className}>
     {children}
-  </div>
+  </Card>
 );

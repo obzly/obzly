@@ -1,4 +1,10 @@
-import { CopyOutlined, LoadingOutlined } from '@ant-design/icons';
+import {
+  CopyOutlined,
+  FileTextOutlined,
+  LineChartOutlined,
+  LoadingOutlined,
+  NodeIndexOutlined,
+} from '@ant-design/icons';
 import {
   App,
   Button,
@@ -12,7 +18,7 @@ import {
   Tooltip,
 } from 'antd';
 import dayjs from 'dayjs';
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import { WEBSITE_URL } from '../../../constants';
 import { metricApi } from '../../../entity/metrics/api/metricApi';
@@ -28,7 +34,9 @@ import { ProjectRole } from '../../../entity/users/model/ProjectRole';
 import type { UserProfile } from '../../../entity/users/model/UserProfile';
 import { UserRole } from '../../../entity/users/model/UserRole';
 import { copyToClipboard } from '../../../shared/lib';
+import { Card } from '../../../shared/ui/v2';
 import { ProjectAuditLogsComponent } from './ProjectAuditLogsComponent';
+import { BANNER_WARN, ProjectPageShell, SaveBar } from './ProjectPageShell';
 import { PromotedFieldsComponent } from './PromotedFieldsComponent';
 import { RetentionPoliciesComponent } from './RetentionPoliciesComponent';
 
@@ -36,6 +44,7 @@ interface Props {
   projectResponse: ProjectResponse;
   user: UserProfile;
   contentHeight: number;
+  embedded?: boolean;
 }
 
 // Quota fields where 0 means unlimited; retention has no unlimited concept.
@@ -58,7 +67,31 @@ const orgPlanCaps = (project?: Project): string[] => {
     .map(([value, unit]) => `${value.toLocaleString()} ${unit}`);
 };
 
-export function ProjectSettingsComponent({ projectResponse, user, contentHeight }: Props) {
+// A labelled switch row inside a card, description under the label.
+const SwitchRow = ({
+  label,
+  description,
+  control,
+}: {
+  label: string;
+  description: ReactNode;
+  control: ReactNode;
+}) => (
+  <div className="flex items-start justify-between gap-4 border-t border-gray-200 pt-3 dark:border-gray-700">
+    <div className="min-w-0 flex-1">
+      <div className="font-medium text-gray-900 dark:text-gray-100">{label}</div>
+      <div className="mt-0.5 text-gray-500 dark:text-gray-400">{description}</div>
+    </div>
+    <div className="shrink-0 pt-0.5">{control}</div>
+  </div>
+);
+
+export function ProjectSettingsComponent({
+  projectResponse,
+  user,
+  contentHeight,
+  embedded,
+}: Props) {
   const { message, modal } = App.useApp();
   const [project, setProject] = useState<Project | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
@@ -267,10 +300,21 @@ export function ProjectSettingsComponent({ projectResponse, user, contentHeight 
     const fieldDisabled = !canEdit || !formProject.isRateLimitingEnabled || planFixed;
 
     return (
-      <div>
-        <div className="mb-1 flex items-center justify-between">
-          <div className="font-medium text-gray-900 dark:text-gray-100">{label}</div>
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-gray-500 dark:text-gray-300">
+      <div className="flex flex-col gap-1">
+        <div className="text-[13px] font-medium text-gray-700 dark:text-gray-200">{label}</div>
+        <div className="flex items-center gap-2">
+          <InputNumber
+            value={value}
+            onChange={(v) => handleFieldChange(field, v || 0)}
+            disabled={fieldDisabled || isUnlimited}
+            formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+            parser={(v) => v?.replace(/\$\s?|(,*)/g, '') as unknown as number}
+            min={min}
+            max={max}
+            className="!font-mono"
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-gray-500 dark:text-gray-300">
             <Checkbox
               checked={isUnlimited}
               disabled={fieldDisabled}
@@ -286,17 +330,7 @@ export function ProjectSettingsComponent({ projectResponse, user, contentHeight 
             Unlimited
           </label>
         </div>
-        <InputNumber
-          value={value}
-          onChange={(v) => handleFieldChange(field, v || 0)}
-          disabled={fieldDisabled || isUnlimited}
-          formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-          parser={(v) => v?.replace(/\$\s?|(,*)/g, '') as unknown as number}
-          min={min}
-          max={max}
-          style={{ width: '150px' }}
-        />
-        <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+        <div className="text-xs text-gray-500 dark:text-gray-400">
           {isUnlimited ? 'No limit' : description}
         </div>
       </div>
@@ -307,6 +341,8 @@ export function ProjectSettingsComponent({ projectResponse, user, contentHeight 
   // date range needs at least one row; an empty project's timestamps are placeholders.
   const renderStatsCard = (
     title: string,
+    icon: ReactNode,
+    color: string,
     isLoadingCard: boolean,
     totalLabel: string,
     totalValue: number | undefined,
@@ -314,36 +350,48 @@ export function ProjectSettingsComponent({ projectResponse, user, contentHeight 
     oldestTime: string | undefined,
     newestTime: string | undefined,
   ) => (
-    <div className="rounded border border-gray-200 p-4 dark:border-gray-700">
-      <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">{title}</div>
-      {isLoadingCard ? (
-        <div className="flex items-center py-2">
-          <Spin indicator={<LoadingOutlined spin />} />
-          <span className="ml-2 text-sm text-gray-500 dark:text-gray-300">Loading...</span>
-        </div>
-      ) : totalValue !== undefined ? (
-        <div className="space-y-1.5 text-sm">
-          <div className="flex justify-between">
-            <span className="text-gray-600 dark:text-gray-300">{totalLabel}:</span>
-            <span className="font-medium">{totalValue.toLocaleString()}</span>
+    <Card>
+      <div className="flex flex-col gap-3">
+        <span className="flex items-center gap-2.5">
+          <span
+            className="flex h-9 w-9 items-center justify-center rounded-[10px] text-base"
+            style={{ color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}
+            aria-hidden="true"
+          >
+            {icon}
+          </span>
+          <strong className="font-semibold text-gray-900 dark:text-gray-50">{title}</strong>
+        </span>
+        {isLoadingCard ? (
+          <div className="flex items-center py-1">
+            <Spin indicator={<LoadingOutlined spin />} />
+            <span className="ml-2 text-sm text-gray-500 dark:text-gray-300">Loading...</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600 dark:text-gray-300">Storage size:</span>
-            <span className="font-medium">{(sizeMb ?? 0).toFixed(2)} MB</span>
-          </div>
-          {totalValue > 0 && oldestTime && newestTime && (
-            <div className="flex justify-between">
-              <span className="text-gray-600 dark:text-gray-300">Date range:</span>
-              <span className="font-medium">
-                {dayjs(oldestTime).format('D MMM YYYY')} - {dayjs(newestTime).format('D MMM YYYY')}
-              </span>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="text-sm text-gray-500 dark:text-gray-300">No statistics available</div>
-      )}
-    </div>
+        ) : totalValue !== undefined ? (
+          <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+            <dt className="text-gray-500 dark:text-gray-400">{totalLabel}:</dt>
+            <dd className="m-0 text-right font-medium text-gray-900 dark:text-gray-50">
+              {totalValue.toLocaleString()}
+            </dd>
+            <dt className="text-gray-500 dark:text-gray-400">Storage size:</dt>
+            <dd className="m-0 text-right font-medium text-gray-900 dark:text-gray-50">
+              {(sizeMb ?? 0).toFixed(2)} MB
+            </dd>
+            {totalValue > 0 && oldestTime && newestTime && (
+              <>
+                <dt className="text-gray-500 dark:text-gray-400">Date range:</dt>
+                <dd className="m-0 text-right font-medium text-gray-900 dark:text-gray-50">
+                  {dayjs(oldestTime).format('D MMM YYYY')} -{' '}
+                  {dayjs(newestTime).format('D MMM YYYY')}
+                </dd>
+              </>
+            )}
+          </dl>
+        ) : (
+          <div className="text-sm text-gray-500 dark:text-gray-300">No statistics available</div>
+        )}
+      </div>
+    </Card>
   );
 
   const saveBasicInfo = async () => {
@@ -499,572 +547,481 @@ export function ProjectSettingsComponent({ projectResponse, user, contentHeight 
     });
   };
 
+  const resetBasicInfo = () => {
+    if (project) {
+      const updatedForm = { ...formProject, name: project.name };
+      setFormProject(updatedForm);
+      setBasicInfoChanges(false);
+      setNameError(false);
+    }
+  };
+
+  const resetSecurityPolicies = () => {
+    if (project) {
+      const updatedForm = {
+        ...formProject,
+        isApiKeyRequired: project.isApiKeyRequired,
+        isFilterByDomain: project.isFilterByDomain,
+        isFilterByIp: project.isFilterByIp,
+        allowedDomains: project.allowedDomains,
+        allowedIps: project.allowedIps,
+      };
+      setFormProject(updatedForm);
+      setSecurityPolicyChanges(false);
+      setDomainErrors([]);
+      setIpErrors([]);
+    }
+  };
+
+  const resetQuotas = () => {
+    if (project) {
+      const updatedForm = {
+        ...formProject,
+        isRateLimitingEnabled: project.isRateLimitingEnabled,
+        logsPerSecondLimit: project.logsPerSecondLimit,
+        maxLogsAmount: project.maxLogsAmount,
+        maxLogsSizeMb: project.maxLogsSizeMb,
+        maxLogsLifeDays: project.maxLogsLifeDays,
+        maxLogSizeKb: project.maxLogSizeKb,
+      };
+      setFormProject(updatedForm);
+      setQuotasChanges(false);
+    }
+  };
+
+  const toggleFilter = (
+    flag: 'isFilterByDomain' | 'isFilterByIp',
+    list: 'allowedDomains' | 'allowedIps',
+    checked: boolean,
+  ) => {
+    const newFormProject = {
+      ...formProject,
+      [flag]: checked,
+      ...(checked ? {} : { [list]: [] }),
+    };
+    setFormProject(newFormProject);
+
+    if (!checked) {
+      if (list === 'allowedDomains') setDomainErrors([]);
+      else setIpErrors([]);
+    }
+
+    if (project) {
+      setBasicInfoChanges(checkBasicInfoChanges(newFormProject));
+      setSecurityPolicyChanges(checkSecurityPolicyChanges(newFormProject));
+      setQuotasChanges(checkQuotasChanges(newFormProject));
+    }
+  };
+
+  const saveButtons = (onSave: () => void, onReset: () => void, resetLabel = 'Reset') => (
+    <SaveBar>
+      <Button size="small" onClick={onReset} disabled={isSaving}>
+        {resetLabel}
+      </Button>
+      <Button size="small" type="primary" onClick={onSave} loading={isSaving} disabled={isSaving}>
+        {isSaving ? 'Saving...' : 'Save Changes'}
+      </Button>
+    </SaveBar>
+  );
+
   return (
-    <div className="flex grow pl-3">
-      <div className="w-full">
-        <div
-          className="grow overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
-          style={{ height: contentHeight }}
-        >
-          <h1 className="mb-6 text-2xl font-bold">Settings</h1>
+    <ProjectPageShell
+      embedded={embedded}
+      contentHeight={contentHeight}
+      title="Settings"
+      subtitle={projectResponse.name}
+    >
+      {isLoading || !project ? (
+        <Spin indicator={<LoadingOutlined spin />} size="large" />
+      ) : (
+        <>
+          {!canEdit && (
+            <div className={BANNER_WARN}>
+              You don&apos;t have permission to modify these settings. Only project owners, project
+              admins and system administrators can change project settings.
+            </div>
+          )}
 
-          {isLoading || !project ? (
-            <Spin indicator={<LoadingOutlined spin />} size="large" />
-          ) : (
-            <>
-              {!canEdit && (
-                <div className="my-4 rounded-md bg-yellow-50 p-3">
-                  <div className="text-sm text-yellow-800">
-                    You don&apos;t have permission to modify these settings. Only project owners,
-                    project admins and system administrators can change project settings.
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,420px),1fr))] gap-4 text-sm">
+            <Card title="Basic info">
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1">
+                  <div className="text-[13px] font-medium text-gray-700 dark:text-gray-200">
+                    Project name
                   </div>
-                </div>
-              )}
-
-              <div className="space-y-6 text-sm">
-                <div className="max-w-2xl border-b border-gray-200 pb-6 dark:border-gray-700">
-                  <div className="max-w-md">
-                    <div className="mb-1 font-medium text-gray-900 dark:text-gray-100">
-                      Project name
-                    </div>
-                    <Input
-                      value={formProject.name || ''}
-                      onChange={(e) => {
-                        setNameError(false);
-                        handleFieldChange('name', e.target.value);
-                      }}
-                      disabled={!canEdit}
-                      placeholder="Enter project name"
-                      maxLength={100}
-                      status={nameError ? 'error' : undefined}
-                    />
-                  </div>
-
-                  {/* Read-only for everyone: needed to grant access to this
-                      project from a control plane, and in API calls. */}
-                  <div className="mt-4 max-w-md">
-                    <div className="mb-1 font-medium text-gray-900 dark:text-gray-100">
-                      Project ID
-                    </div>
-                    <Space.Compact className="w-full">
-                      <Input value={project.id} readOnly className="!font-mono" />
-                      <Tooltip title="Copy project ID">
-                        <Button
-                          icon={<CopyOutlined />}
-                          aria-label="Copy project ID"
-                          onClick={async () => {
-                            await copyToClipboard(project.id);
-                            message.success('Project ID copied');
-                          }}
-                        />
-                      </Tooltip>
-                    </Space.Compact>
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Used when granting access to this project from a control plane, and in API
-                      calls.
-                    </div>
-                  </div>
-
-                  {basicInfoChanges && canEdit && (
-                    <div className="mt-4 flex space-x-2">
-                      <Button
-                        type="primary"
-                        onClick={saveBasicInfo}
-                        loading={isSaving}
-                        disabled={isSaving}
-                        className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                      >
-                        {isSaving ? 'Saving...' : 'Save Changes'}
-                      </Button>
-
-                      <Button
-                        type="default"
-                        onClick={() => {
-                          if (project) {
-                            const updatedForm = { ...formProject, name: project.name };
-                            setFormProject(updatedForm);
-                            setBasicInfoChanges(false);
-                            setNameError(false);
-                          }
-                        }}
-                        disabled={isSaving}
-                      >
-                        Reset
-                      </Button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="max-w-2xl border-b border-gray-200 pb-6 dark:border-gray-700">
-                  <h2 className="mb-4 text-xl font-bold text-gray-900 dark:text-gray-100">
-                    Security policies
-                  </h2>
-
-                  <div className="space-y-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 pr-20">
-                        <div className="font-medium text-gray-900 dark:text-gray-100">
-                          Require API key
-                        </div>
-                        <div className="mt-1 text-gray-500 dark:text-gray-300">
-                          When enabled, all log ingestion requests must include a valid API key
-                        </div>
-                      </div>
-                      <div className="ml-4">
-                        <Switch
-                          checked={formProject.isApiKeyRequired ?? false}
-                          onChange={(checked) => handleFieldChange('isApiKeyRequired', checked)}
-                          disabled={!canEdit}
-                          style={{
-                            backgroundColor: formProject.isApiKeyRequired ? '#059669' : undefined,
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 pr-20">
-                          <div className="font-medium text-gray-900 dark:text-gray-100">
-                            Filter by domain
-                          </div>
-                          <div className="mt-1 text-gray-500 dark:text-gray-300">
-                            When enabled, only requests from allowed domains will be accepted
-                          </div>
-                        </div>
-                        <div className="ml-4">
-                          <Switch
-                            checked={formProject.isFilterByDomain ?? false}
-                            onChange={(checked) => {
-                              const newFormProject = {
-                                ...formProject,
-                                isFilterByDomain: checked,
-                                ...(checked ? {} : { allowedDomains: [] }),
-                              };
-                              setFormProject(newFormProject);
-
-                              if (!checked) {
-                                setDomainErrors([]);
-                              }
-
-                              if (project) {
-                                setBasicInfoChanges(checkBasicInfoChanges(newFormProject));
-                                setSecurityPolicyChanges(
-                                  checkSecurityPolicyChanges(newFormProject),
-                                );
-                                setQuotasChanges(checkQuotasChanges(newFormProject));
-                              }
-                            }}
-                            disabled={!canEdit}
-                            style={{
-                              backgroundColor: formProject.isFilterByDomain ? '#059669' : undefined,
-                            }}
-                          />
-                        </div>
-                      </div>
-
-                      {formProject.isFilterByDomain && (
-                        <div className="ml-0">
-                          <div className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">
-                            Allowed domains
-                          </div>
-                          <Select
-                            mode="tags"
-                            value={formProject.allowedDomains || []}
-                            onChange={(value) => handleFieldChange('allowedDomains', value)}
-                            disabled={!canEdit}
-                            placeholder="Enter domains (e.g., example.com, subdomain.example.com)"
-                            className="w-full"
-                            style={
-                              {
-                                '--ant-color-primary': '#059669',
-                                '--ant-color-primary-hover': '#047857',
-                              } as React.CSSProperties
-                            }
-                            status={domainErrors.some((error) => error) ? 'error' : undefined}
-                            tokenSeparators={[',', ' ']}
-                          />
-                          {domainErrors.length > 0 && domainErrors.some((error) => error) && (
-                            <div className="mt-1 text-xs text-red-600">
-                              {domainErrors.map((error, index) =>
-                                error ? (
-                                  <div key={index}>
-                                    Domain {index + 1}: {error}
-                                  </div>
-                                ) : null,
-                              )}
-                            </div>
-                          )}
-                          <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-                            Press Enter or comma to add multiple domains. Only requests from these
-                            domains will be accepted.
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 pr-20">
-                          <div className="font-medium text-gray-900 dark:text-gray-100">
-                            Filter by IP address
-                          </div>
-                          <div className="mt-1 text-gray-500 dark:text-gray-300">
-                            When enabled, only requests from allowed IP addresses will be accepted
-                          </div>
-                        </div>
-                        <div className="ml-4">
-                          <Switch
-                            checked={formProject.isFilterByIp ?? false}
-                            onChange={(checked) => {
-                              const newFormProject = {
-                                ...formProject,
-                                isFilterByIp: checked,
-                                ...(checked ? {} : { allowedIps: [] }),
-                              };
-                              setFormProject(newFormProject);
-
-                              if (!checked) {
-                                setIpErrors([]);
-                              }
-
-                              if (project) {
-                                setBasicInfoChanges(checkBasicInfoChanges(newFormProject));
-                                setSecurityPolicyChanges(
-                                  checkSecurityPolicyChanges(newFormProject),
-                                );
-                                setQuotasChanges(checkQuotasChanges(newFormProject));
-                              }
-                            }}
-                            disabled={!canEdit}
-                            style={{
-                              backgroundColor: formProject.isFilterByIp ? '#059669' : undefined,
-                            }}
-                          />
-                        </div>
-                      </div>
-
-                      {formProject.isFilterByIp && (
-                        <div className="ml-0">
-                          <div className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">
-                            Allowed IP addresses
-                          </div>
-                          <Select
-                            mode="tags"
-                            value={formProject.allowedIps || []}
-                            onChange={(value) => handleFieldChange('allowedIps', value)}
-                            disabled={!canEdit}
-                            placeholder="Enter IP addresses (e.g., 192.168.1.1, 10.0.0.0/8)"
-                            className="w-full"
-                            style={
-                              {
-                                '--ant-color-primary': '#059669',
-                                '--ant-color-primary-hover': '#047857',
-                              } as React.CSSProperties
-                            }
-                            status={ipErrors.some((error) => error) ? 'error' : undefined}
-                            tokenSeparators={[',', ' ']}
-                          />
-                          {ipErrors.length > 0 && ipErrors.some((error) => error) && (
-                            <div className="mt-1 text-xs text-red-600">
-                              {ipErrors.map((error, index) =>
-                                error ? (
-                                  <div key={index}>
-                                    IP {index + 1}: {error}
-                                  </div>
-                                ) : null,
-                              )}
-                            </div>
-                          )}
-                          <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-                            Press Enter or comma to add multiple IP addresses. Supports both IPv4
-                            and IPv6 formats.
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {securityPolicyChanges && canEdit && (
-                    <div className="mt-4 flex space-x-2">
-                      <Button
-                        type="primary"
-                        onClick={saveSecurityPolicies}
-                        loading={isSaving}
-                        disabled={isSaving}
-                        className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                      >
-                        {isSaving ? 'Saving...' : 'Save Changes'}
-                      </Button>
-                      <Button
-                        type="default"
-                        onClick={() => {
-                          if (project) {
-                            const updatedForm = {
-                              ...formProject,
-                              isApiKeyRequired: project.isApiKeyRequired,
-                              isFilterByDomain: project.isFilterByDomain,
-                              isFilterByIp: project.isFilterByIp,
-                              allowedDomains: project.allowedDomains,
-                              allowedIps: project.allowedIps,
-                            };
-                            setFormProject(updatedForm);
-                            setSecurityPolicyChanges(false);
-                            setDomainErrors([]);
-                            setIpErrors([]);
-                          }
-                        }}
-                        disabled={isSaving}
-                      >
-                        Reset
-                      </Button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="max-w-2xl border-b border-gray-200 pb-6 dark:border-gray-700">
-                  <h2 className="text-xl leading-1.5 font-bold text-gray-900 dark:text-gray-100">
-                    Rate limiting & quotas
-                  </h2>
-
-                  <div className="mt-3 text-sm text-gray-500 dark:text-gray-300">
-                    Read more about settings you can{' '}
-                    <a
-                      href={`${WEBSITE_URL}/settings`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-bold !text-emerald-600"
-                    >
-                      here
-                    </a>
-                  </div>
-
-                  {project?.plan?.warningText && (
-                    <div className="mt-1 text-orange-600 opacity-60">
-                      {project.plan.warningText}
-                    </div>
-                  )}
-
-                  {orgPlanCaps(project).length > 0 && (
-                    <div className="mt-2 text-gray-500 dark:text-gray-300">
-                      Your organization&apos;s plan caps this project, even with rate limiting off:{' '}
-                      {orgPlanCaps(project).join(', ')}.
-                    </div>
-                  )}
-
-                  {/* Doesn't touch log retention: a data-lifecycle setting, not a capacity guard. */}
-                  <div className="mt-4 flex items-start justify-between">
-                    <div className="flex-1 pr-20">
-                      <div className="font-medium text-gray-900 dark:text-gray-100">
-                        Rate limiting & quotas
-                      </div>
-                      <div className="mt-1 text-gray-500 dark:text-gray-300">
-                        When disabled, logs are never rejected or deleted for rate/size/count/
-                        storage reasons - use this if you&apos;d rather stream without any risk of
-                        losing data. Log retention (below) is unaffected either way.
-                      </div>
-                    </div>
-                    <div className="ml-4">
-                      <Switch
-                        checked={formProject.isRateLimitingEnabled ?? true}
-                        onChange={(checked) => handleFieldChange('isRateLimitingEnabled', checked)}
-                        disabled={!canEdit}
-                        style={{
-                          backgroundColor: formProject.isRateLimitingEnabled
-                            ? '#059669'
-                            : undefined,
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div
-                    className={`mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 ${
-                      formProject.isRateLimitingEnabled ? '' : 'opacity-50'
-                    }`}
-                  >
-                    {renderQuotaField(
-                      'logsPerSecondLimit',
-                      'Logs per second limit',
-                      'Maximum logs that can be ingested per second',
-                      1,
-                      100000,
-                      1000,
-                    )}
-                    {renderQuotaField(
-                      'maxLogSizeKb',
-                      'Maximum log size (KB)',
-                      'Maximum size allowed for a single log entry',
-                      1,
-                      1024,
-                      64,
-                    )}
-                    {renderQuotaField(
-                      'maxLogsAmount',
-                      'Maximum logs amount',
-                      'Maximum total number of logs that can be stored',
-                      1,
-                      1000000000000000,
-                      100_000_000,
-                    )}
-                    {renderQuotaField(
-                      'maxLogsSizeMb',
-                      'Maximum storage size (MB)',
-                      'Maximum total storage size for all logs',
-                      1,
-                      1000000000000000,
-                      100_000,
-                    )}
-                  </div>
-
-                  {/* Retention stays active regardless of the quotas switch. */}
-                  <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <div className="mb-1 font-medium text-gray-900 dark:text-gray-100">
-                        Log retention (days)
-                      </div>
-                      <InputNumber
-                        value={formProject.maxLogsLifeDays}
-                        onChange={(value) => handleFieldChange('maxLogsLifeDays', value || 0)}
-                        formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                        parser={(value) => value?.replace(/\$\s?|(,*)/g, '') as unknown as number}
-                        disabled={!canEdit || (project.plan && project.plan.maxLogsLifeDays != 0)}
-                        min={1}
-                        max={3650}
-                        style={{ width: '150px' }}
-                      />
-                      <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-                        How long logs should be kept before automatic deletion
-                      </div>
-                    </div>
-                  </div>
-
-                  {quotasChanges && canEdit && (
-                    <div className="mt-4 flex space-x-2">
-                      <Button
-                        type="primary"
-                        onClick={saveQuotas}
-                        loading={isSaving}
-                        disabled={isSaving}
-                        className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                      >
-                        {isSaving ? 'Saving...' : 'Save Changes'}
-                      </Button>
-                      <Button
-                        type="default"
-                        onClick={() => {
-                          if (project) {
-                            const updatedForm = {
-                              ...formProject,
-                              isRateLimitingEnabled: project.isRateLimitingEnabled,
-                              logsPerSecondLimit: project.logsPerSecondLimit,
-                              maxLogsAmount: project.maxLogsAmount,
-                              maxLogsSizeMb: project.maxLogsSizeMb,
-                              maxLogsLifeDays: project.maxLogsLifeDays,
-                              maxLogSizeKb: project.maxLogSizeKb,
-                            };
-                            setFormProject(updatedForm);
-                            setQuotasChanges(false);
-                          }
-                        }}
-                        disabled={isSaving}
-                      >
-                        Reset
-                      </Button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="max-w-2xl border-b border-gray-200 pb-6 dark:border-gray-700">
-                  <h2 className="mb-4 text-xl font-bold text-gray-900 dark:text-gray-100">
-                    Promoted log fields
-                  </h2>
-                  <PromotedFieldsComponent projectId={project.id} canEdit={canEdit} />
-                </div>
-
-                <div className="max-w-2xl border-b border-gray-200 pb-6 dark:border-gray-700">
-                  <h2 className="mb-4 text-xl font-bold text-gray-900 dark:text-gray-100">
-                    Retention &amp; sampling
-                  </h2>
-                  <RetentionPoliciesComponent
-                    projectId={project.id}
-                    canEdit={canEdit}
-                    logRetentionDays={project.maxLogsLifeDays}
+                  <Input
+                    value={formProject.name || ''}
+                    onChange={(e) => {
+                      setNameError(false);
+                      handleFieldChange('name', e.target.value);
+                    }}
+                    disabled={!canEdit}
+                    placeholder="Enter project name"
+                    maxLength={100}
+                    status={nameError ? 'error' : undefined}
                   />
                 </div>
 
-                <div className="max-w-2xl border-b border-gray-200 pb-6 dark:border-gray-700">
-                  <h2 className="mb-4 text-xl font-bold text-gray-900 dark:text-gray-100">
-                    Danger Zone
-                  </h2>
+                {/* Read-only for everyone: needed to grant access to this
+                    project from a control plane, and in API calls. */}
+                <div className="flex flex-col gap-1">
+                  <div className="text-[13px] font-medium text-gray-700 dark:text-gray-200">
+                    Project ID
+                  </div>
+                  <Space.Compact className="w-full">
+                    <Input value={project.id} readOnly className="!font-mono" />
+                    <Tooltip title="Copy project ID">
+                      <Button
+                        icon={<CopyOutlined />}
+                        aria-label="Copy project ID"
+                        onClick={async () => {
+                          await copyToClipboard(project.id);
+                          message.success('Project ID copied');
+                        }}
+                      />
+                    </Tooltip>
+                  </Space.Compact>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    Used when granting access to this project from a control plane, and in API
+                    calls.
+                  </div>
+                </div>
 
-                  <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="font-medium text-red-900">Delete this project</div>
-                        <div className="mt-1 text-sm text-red-700">
-                          Once you delete a project, there is no going back. All logs and data
-                          associated with this project will be permanently removed.
-                        </div>
-                      </div>
+                {basicInfoChanges && canEdit && saveButtons(saveBasicInfo, resetBasicInfo)}
+              </div>
+            </Card>
 
-                      <div className="ml-4">
-                        <Button
-                          type="primary"
-                          danger
-                          onClick={handleDeleteProject}
-                          disabled={!canEdit || isDeleting || isSaving}
-                          loading={isDeleting}
-                          className="bg-red-600 hover:bg-red-700"
-                        >
-                          {isDeleting ? 'Deleting...' : 'Delete project'}
-                        </Button>
+            <Card title="Security policies" subtitle="Who may send data to this project">
+              <div className="flex flex-col gap-3">
+                <SwitchRow
+                  label="Require API key"
+                  description="When enabled, all log ingestion requests must include a valid API key"
+                  control={
+                    <Switch
+                      aria-label="Require API key"
+                      checked={formProject.isApiKeyRequired ?? false}
+                      onChange={(checked) => handleFieldChange('isApiKeyRequired', checked)}
+                      disabled={!canEdit}
+                    />
+                  }
+                />
+
+                <SwitchRow
+                  label="Filter by domain"
+                  description="When enabled, only requests from allowed domains will be accepted"
+                  control={
+                    <Switch
+                      aria-label="Filter by domain"
+                      checked={formProject.isFilterByDomain ?? false}
+                      onChange={(checked) =>
+                        toggleFilter('isFilterByDomain', 'allowedDomains', checked)
+                      }
+                      disabled={!canEdit}
+                    />
+                  }
+                />
+                {formProject.isFilterByDomain && (
+                  <div className="flex flex-col gap-1">
+                    <div className="text-[13px] font-medium text-gray-700 dark:text-gray-200">
+                      Allowed domains
+                    </div>
+                    <Select
+                      mode="tags"
+                      value={formProject.allowedDomains || []}
+                      onChange={(value) => handleFieldChange('allowedDomains', value)}
+                      disabled={!canEdit}
+                      placeholder="Enter domains (e.g., example.com, subdomain.example.com)"
+                      className="w-full"
+                      status={domainErrors.some((error) => error) ? 'error' : undefined}
+                      tokenSeparators={[',', ' ']}
+                    />
+                    {domainErrors.length > 0 && domainErrors.some((error) => error) && (
+                      <div className="text-xs text-[var(--v2-red)]">
+                        {domainErrors.map((error, index) =>
+                          error ? (
+                            <div key={index}>
+                              Domain {index + 1}: {error}
+                            </div>
+                          ) : null,
+                        )}
                       </div>
+                    )}
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      Press Enter or comma to add multiple domains. Only requests from these domains
+                      will be accepted.
                     </div>
                   </div>
+                )}
+
+                <SwitchRow
+                  label="Filter by IP address"
+                  description="When enabled, only requests from allowed IP addresses will be accepted"
+                  control={
+                    <Switch
+                      aria-label="Filter by IP address"
+                      checked={formProject.isFilterByIp ?? false}
+                      onChange={(checked) => toggleFilter('isFilterByIp', 'allowedIps', checked)}
+                      disabled={!canEdit}
+                    />
+                  }
+                />
+                {formProject.isFilterByIp && (
+                  <div className="flex flex-col gap-1">
+                    <div className="text-[13px] font-medium text-gray-700 dark:text-gray-200">
+                      Allowed IP addresses
+                    </div>
+                    <Select
+                      mode="tags"
+                      value={formProject.allowedIps || []}
+                      onChange={(value) => handleFieldChange('allowedIps', value)}
+                      disabled={!canEdit}
+                      placeholder="Enter IP addresses (e.g., 192.168.1.1, 10.0.0.0/8)"
+                      className="w-full"
+                      status={ipErrors.some((error) => error) ? 'error' : undefined}
+                      tokenSeparators={[',', ' ']}
+                    />
+                    {ipErrors.length > 0 && ipErrors.some((error) => error) && (
+                      <div className="text-xs text-[var(--v2-red)]">
+                        {ipErrors.map((error, index) =>
+                          error ? (
+                            <div key={index}>
+                              IP {index + 1}: {error}
+                            </div>
+                          ) : null,
+                        )}
+                      </div>
+                    )}
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      Press Enter or comma to add multiple IP addresses. Supports both IPv4 and IPv6
+                      formats.
+                    </div>
+                  </div>
+                )}
+
+                {securityPolicyChanges &&
+                  canEdit &&
+                  saveButtons(saveSecurityPolicies, resetSecurityPolicies)}
+              </div>
+            </Card>
+
+            <Card
+              title="Rate limiting & quotas"
+              subtitle={
+                <>
+                  Read more about settings you can{' '}
+                  <a
+                    href={`${WEBSITE_URL}/settings`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-semibold !text-[var(--v2-accent)]"
+                  >
+                    here
+                  </a>
+                </>
+              }
+            >
+              <div className="flex flex-col gap-3">
+                {project?.plan?.warningText && (
+                  <div className="text-[13px] text-[var(--v2-orange)]">
+                    {project.plan.warningText}
+                  </div>
+                )}
+
+                {orgPlanCaps(project).length > 0 && (
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    Your organization&apos;s plan caps this project, even with rate limiting off:{' '}
+                    {orgPlanCaps(project).join(', ')}.
+                  </div>
+                )}
+
+                {/* Doesn't touch log retention: a data-lifecycle setting, not a capacity guard. */}
+                <SwitchRow
+                  label="Rate limiting & quotas"
+                  description={
+                    <>
+                      When disabled, logs are never rejected or deleted for rate/size/count/storage
+                      reasons - use this if you&apos;d rather stream without any risk of losing
+                      data. Log retention (below) is unaffected either way.
+                    </>
+                  }
+                  control={
+                    <Switch
+                      aria-label="Rate limiting & quotas"
+                      checked={formProject.isRateLimitingEnabled ?? true}
+                      onChange={(checked) => handleFieldChange('isRateLimitingEnabled', checked)}
+                      disabled={!canEdit}
+                    />
+                  }
+                />
+
+                <div
+                  className={`grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-3 ${
+                    formProject.isRateLimitingEnabled ? '' : 'opacity-50'
+                  }`}
+                >
+                  {renderQuotaField(
+                    'logsPerSecondLimit',
+                    'Logs per second limit',
+                    'Maximum logs that can be ingested per second',
+                    1,
+                    100000,
+                    1000,
+                  )}
+                  {renderQuotaField(
+                    'maxLogSizeKb',
+                    'Maximum log size (KB)',
+                    'Maximum size allowed for a single log entry',
+                    1,
+                    1024,
+                    64,
+                  )}
+                  {renderQuotaField(
+                    'maxLogsAmount',
+                    'Maximum logs amount',
+                    'Maximum total number of logs that can be stored',
+                    1,
+                    1000000000000000,
+                    100_000_000,
+                  )}
+                  {renderQuotaField(
+                    'maxLogsSizeMb',
+                    'Maximum storage size (MB)',
+                    'Maximum total storage size for all logs',
+                    1,
+                    1000000000000000,
+                    100_000,
+                  )}
                 </div>
 
-                <div className="max-w-2xl">
-                  <h2 className="mb-4 text-xl font-bold text-gray-900 dark:text-gray-100">
-                    Project statistics
-                  </h2>
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                    {renderStatsCard(
-                      'Logs',
-                      isLoadingStats,
-                      'Total logs',
-                      projectStats?.totalLogs,
-                      projectStats?.totalSizeMb,
-                      projectStats?.oldestLogTime,
-                      projectStats?.newestLogTime,
-                    )}
-                    {renderStatsCard(
-                      'Traces',
-                      isLoadingSpanStats,
-                      'Total spans',
-                      spanStats?.totalSpans,
-                      spanStats?.totalSizeMb,
-                      spanStats?.oldestSpanTime,
-                      spanStats?.newestSpanTime,
-                    )}
-                    {renderStatsCard(
-                      'Metrics',
-                      isLoadingMetricStats,
-                      'Total samples',
-                      metricStats?.totalSamples,
-                      metricStats?.totalSizeMb,
-                      metricStats?.oldestSampleTime,
-                      metricStats?.newestSampleTime,
-                    )}
+                {/* Retention stays active regardless of the quotas switch. */}
+                <div className="flex flex-col gap-1 border-t border-gray-200 pt-3 dark:border-gray-700">
+                  <div className="text-[13px] font-medium text-gray-700 dark:text-gray-200">
+                    Log retention (days)
+                  </div>
+                  <InputNumber
+                    value={formProject.maxLogsLifeDays}
+                    onChange={(value) => handleFieldChange('maxLogsLifeDays', value || 0)}
+                    formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                    parser={(value) => value?.replace(/\$\s?|(,*)/g, '') as unknown as number}
+                    disabled={!canEdit || (project.plan && project.plan.maxLogsLifeDays != 0)}
+                    min={1}
+                    max={3650}
+                    className="!font-mono"
+                    style={{ width: '150px' }}
+                  />
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    How long logs should be kept before automatic deletion
                   </div>
                 </div>
 
-                <ProjectAuditLogsComponent projectId={project.id} />
+                {quotasChanges && canEdit && saveButtons(saveQuotas, resetQuotas)}
               </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+            </Card>
+
+            <Card
+              title="Promoted log fields"
+              subtitle="Stored as columns so filters and group-bys on them are fast"
+            >
+              <PromotedFieldsComponent projectId={project.id} canEdit={canEdit} />
+            </Card>
+
+            <Card
+              className="col-span-full"
+              title="Retention & sampling"
+              subtitle="How long traces and metrics are kept, and how much is kept"
+            >
+              <RetentionPoliciesComponent
+                projectId={project.id}
+                canEdit={canEdit}
+                logRetentionDays={project.maxLogsLifeDays}
+                storageMb={{
+                  logs: projectStats?.totalSizeMb,
+                  traces: spanStats?.totalSizeMb,
+                  metrics: metricStats?.totalSizeMb,
+                }}
+                objectStorageMb={{
+                  logs: projectStats?.objectStorageSizeMb,
+                  traces: spanStats?.objectStorageSizeMb,
+                  metrics: metricStats?.objectStorageSizeMb,
+                }}
+              />
+            </Card>
+          </div>
+
+          <section aria-labelledby="project-statistics" className="flex flex-col gap-3">
+            <h2
+              id="project-statistics"
+              className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-50"
+            >
+              Project statistics
+            </h2>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-4">
+              {renderStatsCard(
+                'Logs',
+                <FileTextOutlined />,
+                'var(--v2-accent)',
+                isLoadingStats,
+                'Total logs',
+                projectStats?.totalLogs,
+                projectStats?.totalSizeMb,
+                projectStats?.oldestLogTime,
+                projectStats?.newestLogTime,
+              )}
+              {renderStatsCard(
+                'Traces',
+                <NodeIndexOutlined />,
+                'var(--v2-blue)',
+                isLoadingSpanStats,
+                'Total spans',
+                spanStats?.totalSpans,
+                spanStats?.totalSizeMb,
+                spanStats?.oldestSpanTime,
+                spanStats?.newestSpanTime,
+              )}
+              {renderStatsCard(
+                'Metrics',
+                <LineChartOutlined />,
+                'var(--v2-purple)',
+                isLoadingMetricStats,
+                'Total samples',
+                metricStats?.totalSamples,
+                metricStats?.totalSizeMb,
+                metricStats?.oldestSampleTime,
+                metricStats?.newestSampleTime,
+              )}
+            </div>
+          </section>
+
+          <Card
+            className="!border-red-500/40"
+            title={<span className="text-[var(--v2-red)]">Danger Zone</span>}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-gray-900 dark:text-gray-50">
+                  Delete this project
+                </div>
+                <div className="mt-0.5 text-gray-500 dark:text-gray-400">
+                  Once you delete a project, there is no going back. All logs and data associated
+                  with this project will be permanently removed.
+                </div>
+              </div>
+              <Button
+                danger
+                onClick={handleDeleteProject}
+                disabled={!canEdit || isDeleting || isSaving}
+                loading={isDeleting}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete project'}
+              </Button>
+            </div>
+          </Card>
+
+          <Card>
+            <ProjectAuditLogsComponent projectId={project.id} />
+          </Card>
+        </>
+      )}
+    </ProjectPageShell>
   );
 }

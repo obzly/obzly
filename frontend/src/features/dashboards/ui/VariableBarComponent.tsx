@@ -46,8 +46,8 @@ export const VariableBarComponent = ({
   if (variables.length === 0) return null;
 
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded border border-gray-100 bg-gray-50 px-2 py-1 dark:border-gray-700 dark:bg-gray-900">
-      <FunctionOutlined className="text-gray-400" />
+    <div role="group" aria-label="Variables" className="flex flex-wrap items-center gap-2">
+      <FunctionOutlined className="text-gray-500 dark:text-gray-400" />
       {variables.map((variable) => (
         <Select
           size="small"

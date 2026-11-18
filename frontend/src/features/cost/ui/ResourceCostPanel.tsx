@@ -1,12 +1,13 @@
 // One resource's cost in the Infrastructure asset drawer, matched by its cloud ID, with its open
 // savings recommendations.
-import { LoadingOutlined } from '@ant-design/icons';
-import { Spin } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
 import { type CostRecommendation, type ResourceCostResponse, costApi } from '../../../entity/cost';
-import { type ChartColors, EChart, Panel } from '../../synthetics';
+import { Card } from '../../../shared/ui/v2';
+import { type ChartColors, EChart } from '../../synthetics';
 import { formatMoney } from '../lib/format';
+import { ServiceIcon } from './CloudIcon';
+import { Loading } from './parts';
 
 interface Props {
   siteId: string;
@@ -76,7 +77,7 @@ export const ResourceCostPanel = ({ siteId, cloudId }: Props) => {
           type: 'bar' as const,
           data: (block?.days ?? []).map((day) => ({
             value: day.amount,
-            itemStyle: { color: '#009966', opacity: day.estimated ? 0.45 : 1 },
+            itemStyle: { color: colors.accent, opacity: day.estimated ? 0.45 : 1 },
           })),
         },
       ],
@@ -85,13 +86,15 @@ export const ResourceCostPanel = ({ siteId, cloudId }: Props) => {
   );
 
   return (
-    <Panel title="Cost" subtitle={`Effective cost, last ${DAYS} days, from FOCUS exports`}>
+    <Card
+      title="Cost"
+      subtitle={`Effective cost, last ${DAYS} days, from FOCUS exports`}
+      extra={<ServiceIcon text={cloudId} />}
+    >
       {error ? (
         <div className="text-xs text-gray-500 dark:text-gray-400">Cost unavailable: {error}</div>
       ) : !data ? (
-        <div className="flex justify-center py-4">
-          <Spin indicator={<LoadingOutlined spin />} />
-        </div>
+        <Loading className="py-4" />
       ) : !block ? (
         <div className="text-xs text-gray-500 dark:text-gray-400">
           {data.covered
@@ -131,7 +134,7 @@ export const ResourceCostPanel = ({ siteId, cloudId }: Props) => {
         </div>
       )}
       {recommendations.length > 0 && (
-        <div className="mt-3 flex flex-col gap-1 border-t border-gray-100 pt-2 dark:border-gray-700">
+        <div className="mt-3 flex flex-col gap-1 border-t border-gray-200 pt-2 dark:border-gray-700">
           <div className="text-xs font-medium text-gray-700 dark:text-gray-200">
             Recommendations (Cost → Recommendations)
           </div>
@@ -147,6 +150,6 @@ export const ResourceCostPanel = ({ siteId, cloudId }: Props) => {
           ))}
         </div>
       )}
-    </Panel>
+    </Card>
   );
 };

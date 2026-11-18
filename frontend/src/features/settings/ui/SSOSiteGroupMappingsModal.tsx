@@ -1,4 +1,4 @@
-import { App, Button, Input, Modal, Select, Table, Tag } from 'antd';
+import { App, Button, Input, Modal, Select, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -186,7 +186,12 @@ export const SSOSiteGroupMappingsModal = ({ connector, onClose }: Props) => {
       title: 'Access',
       key: 'access',
       render: (_: unknown, row: Row) => {
-        if (row.kind === 'controlPlaneAdmin') return <Tag color="gold">Control plane admin</Tag>;
+        if (row.kind === 'controlPlaneAdmin')
+          return (
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-[var(--v2-orange)]">
+              Control plane admin
+            </span>
+          );
         const site = siteName.get(row.siteId) ?? row.siteId;
         if (!row.projectId) {
           return (
@@ -226,14 +231,14 @@ export const SSOSiteGroupMappingsModal = ({ connector, onClose }: Props) => {
     >
       <div className="space-y-3">
         {!connector.groupsClaim && (
-          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+          <div className="rounded-xl bg-orange-500/10 px-3.5 py-3 text-xs text-[var(--v2-orange)]">
             No groups claim is set on this connector, so these mappings are ignored. Edit the
             connector and set it (AWS Cognito uses <code>cognito:groups</code>).
           </div>
         )}
 
         {connector.providerType === SSOProviderType.ENTRA_ID && (
-          <div className="rounded border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+          <div className="rounded-xl bg-blue-500/10 px-3.5 py-3 text-xs text-[var(--v2-blue)]">
             Entra ID sends each group&apos;s <strong>Object ID</strong> (a GUID), not its name.
             Enter the Object ID from Entra ID → Groups.
           </div>
@@ -302,7 +307,7 @@ export const SSOSiteGroupMappingsModal = ({ connector, onClose }: Props) => {
                 {siteProjects !== null && (
                   <button
                     type="button"
-                    className="font-normal text-emerald-600 hover:underline"
+                    className="text-accent-600 font-normal hover:underline"
                     onClick={() => {
                       setIsManualProjectId((m) => !m);
                       setProjectId('');
@@ -337,7 +342,7 @@ export const SSOSiteGroupMappingsModal = ({ connector, onClose }: Props) => {
             type="primary"
             loading={isSaving}
             onClick={handleAdd}
-            className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+            className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
           >
             Add
           </Button>

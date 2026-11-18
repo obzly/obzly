@@ -2,6 +2,7 @@ import { getApiBase, getApplicationServer } from '../../../constants';
 import RequestOptions from '../../../shared/api/RequestOptions';
 import { apiHelper } from '../../../shared/api/apiHelper';
 import type { SystemDashboard } from '../../query/model/SystemDashboard';
+import type { LatestRelease } from '../model/LatestRelease';
 import type { SystemUsage } from '../model/SystemUsage';
 import type { UpgradeStatus } from '../model/UpgradeStatus';
 
@@ -17,6 +18,16 @@ const base = (scope: UpgradeStatusScope) => {
 export const systemApi = {
   async getUpgradeStatus(scope: UpgradeStatusScope): Promise<UpgradeStatus> {
     return apiHelper.fetchGetJson(`${base(scope)}/system/upgrade-status`, new RequestOptions());
+  },
+  /**
+   * The newest Obzly release, which this origin's server asks GitHub for (cached 6 h); refresh
+   * asks again if the answer is over a minute old. Never through a Site.
+   */
+  async getLatestRelease(refresh = false): Promise<LatestRelease> {
+    return apiHelper.fetchGetJson(
+      `${getApplicationServer()}/api/v1/system/latest-release${refresh ? '?refresh=true' : ''}`,
+      new RequestOptions(),
+    );
   },
   /** Hourly ingest over a day and data kept, by signal; Sites only. */
   async getUsage(scope: UpgradeStatusScope): Promise<SystemUsage> {

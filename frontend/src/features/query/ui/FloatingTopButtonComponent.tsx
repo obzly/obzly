@@ -78,7 +78,8 @@ export const FloatingTopButtonComponent = ({
     <div
       className="fixed z-50"
       style={{
-        top: '100px',
+        // Bottom-right: the top-right corner holds the details panel's close button.
+        bottom: '24px',
         right: '25px',
         // Below antd's Drawer/Modal z-index (1000) so open overlays stay on top.
         zIndex: 100,
@@ -86,11 +87,12 @@ export const FloatingTopButtonComponent = ({
     >
       <Button
         type="primary"
-        className="border-emerald-600 bg-emerald-600 shadow-lg hover:border-emerald-700 hover:bg-emerald-700"
+        className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700 shadow-lg"
         shape="circle"
         icon={<UpOutlined />}
         size="large"
         onClick={scrollToTop}
+        aria-label="Back to top"
       />
     </div>
   );

@@ -49,7 +49,7 @@ function prettifyLabelKey(key: string): string {
 
 // Legend text for a metric series: label values only ("aws-eks-nodeagent · kube-system");
 // hovering a legend item shows the full label set.
-function shortLegendName(name: string): string {
+export function shortLegendName(name: string): string {
   const labels = parseLabelSet(name);
   return labels ? [...labels.values()].join(' · ') : name;
 }
@@ -134,46 +134,65 @@ function axisTooltipFormatter(unit: Panel['unit'], borderColor: string) {
   };
 }
 
-// ECharts ignores the page's dark class, so every text and line color is set per theme.
-function themeColors(isDark: boolean) {
+// ECharts draws on a canvas, which CSS classes and variables can't reach, so the
+// caller passes the active theme's colours (useTheme: definition.colors + chartColors).
+export interface ChartPalette {
+  text: string;
+  muted: string;
+  /** Axis lines and the tooltip border. */
+  border: string;
+  /** Grid lines and tooltip row separators. */
+  track: string;
+  /** Tooltip background and pie slice borders. */
+  panel: string;
+  series: string[];
+}
+
+export function chartPalette(
+  colors: { text: string; muted: string; border: string; track: string; panel: string },
+  series: string[],
+): ChartPalette {
   return {
-    text: isDark ? '#e5e7eb' : '#374151', // gray-200 / gray-700
-    axisLine: isDark ? '#4b5563' : '#d1d5db', // gray-600 / gray-300
-    splitLine: isDark ? '#374151' : '#e5e7eb', // gray-700 / gray-200
-    tooltipBg: isDark ? '#1f2937' : '#ffffff', // gray-800 / white
-    tooltipBorder: isDark ? '#4b5563' : '#e5e7eb',
+    text: colors.text,
+    muted: colors.muted,
+    border: colors.border,
+    track: colors.track,
+    panel: colors.panel,
+    series,
   };
 }
 
-// Builds the ECharts option for a line/bar/pie panel (stat and table panels
-// don't use ECharts). `isDark` follows the app theme, not the OS.
+// Builds the ECharts option for a line/bar/stackedBar/pie panel (the other
+// kinds don't use ECharts). `c` follows the app theme, not the OS.
 export function buildEchartsOption(
   panel: Panel,
   data: AggregationResponse,
-  isDark: boolean,
+  c: ChartPalette,
 ): EChartsOption {
-  const c = themeColors(isDark);
   const tooltip = {
-    backgroundColor: c.tooltipBg,
-    borderColor: c.tooltipBorder,
+    backgroundColor: c.panel,
+    borderColor: c.border,
     textStyle: { color: c.text },
   };
 
   if (panel.type === 'pie') {
     return {
+      color: c.series,
       tooltip: { trigger: 'item', ...tooltip },
       legend: {
         bottom: 0,
         type: 'scroll',
-        textStyle: { color: c.text },
+        textStyle: { color: c.muted },
         formatter: shortLegendName,
         tooltip: { show: true },
       },
       series: [
         {
           type: 'pie',
-          radius: ['35%', '65%'],
+          radius: ['42%', '66%'],
           avoidLabelOverlap: true,
+          itemStyle: { borderColor: c.panel, borderWidth: 2 },
+          label: { color: c.muted },
           data: data.buckets.map((bucket) => ({
             name: bucket.groupKey || '(none)',
             value: bucket.value,
@@ -183,13 +202,14 @@ export function buildEchartsOption(
     };
   }
 
-  const seriesType = panel.type === 'bar' ? 'bar' : 'line';
+  const isStacked = panel.type === 'stackedBar';
+  const seriesType = panel.type === 'bar' || isStacked ? 'bar' : 'line';
   const hasGroups = data.buckets.some((bucket) => bucket.groupKey);
 
   const axisStyle = {
-    axisLine: { lineStyle: { color: c.axisLine } },
-    axisLabel: { color: c.text },
-    splitLine: { lineStyle: { color: c.splitLine } },
+    axisLine: { lineStyle: { color: c.border } },
+    axisLabel: { color: c.muted },
+    splitLine: { lineStyle: { color: c.track } },
   };
   const valueAxisStyle = {
     ...axisStyle,
@@ -198,10 +218,11 @@ export function buildEchartsOption(
 
   if (!hasGroups) {
     return {
+      color: c.series,
       tooltip: {
         trigger: 'axis',
         ...tooltip,
-        formatter: axisTooltipFormatter(panel.unit, c.splitLine),
+        formatter: axisTooltipFormatter(panel.unit, c.track),
       },
       // Small top/bottom margins: ECharts only triggers an 'axis' tooltip inside the
       // grid, so a big margin makes the tooltip vanish near the edges.
@@ -222,20 +243,23 @@ export function buildEchartsOption(
   const groupKeys = Array.from(new Set(data.buckets.map((bucket) => bucket.groupKey || '')));
 
   return {
+    color: c.series,
     tooltip: {
       trigger: 'axis',
       ...tooltip,
-      formatter: axisTooltipFormatter(panel.unit, c.splitLine),
+      formatter: axisTooltipFormatter(panel.unit, c.track),
     },
+    // A stacked bar panel's footer is its legend (with each series' share).
     legend: {
+      show: !isStacked,
       bottom: 0,
       type: 'scroll',
-      textStyle: { color: c.text },
+      textStyle: { color: c.muted },
       formatter: shortLegendName,
       tooltip: { show: true },
     },
     // As above; bottom is larger to fit the legend under the time labels.
-    grid: { left: 8, right: 16, top: 8, bottom: 32, containLabel: true },
+    grid: { left: 8, right: 16, top: 8, bottom: isStacked ? 20 : 32, containLabel: true },
     xAxis: { type: 'time', ...axisStyle },
     yAxis: { type: 'value', ...valueAxisStyle },
     series: groupKeys.map((groupKey) => ({

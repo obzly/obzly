@@ -9,7 +9,6 @@ import {
 } from '@ant-design/icons';
 import {
   App,
-  Badge,
   Button,
   Drawer,
   Form,
@@ -19,7 +18,6 @@ import {
   Spin,
   Switch,
   Table,
-  Tag,
   Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -40,6 +38,7 @@ import {
   siteGroupKey,
   useSite,
 } from '../../../shared/site';
+import { Card } from '../../../shared/ui/v2';
 import { SiteGrantsComponent } from './SiteGrantsComponent';
 
 interface Props {
@@ -60,15 +59,28 @@ const MAX_DISPLAY_NAME_LENGTH = 64;
 
 const STATUS_REFRESH_MS = 30_000;
 
-const HEALTH_BADGE: Record<
-  SiteHealth,
-  { status: 'success' | 'warning' | 'error' | 'default'; label: string }
-> = {
-  up: { status: 'success', label: 'Up' },
-  degraded: { status: 'warning', label: 'Degraded' },
-  down: { status: 'error', label: 'Down' },
-  disabled: { status: 'default', label: 'Disabled' },
+const PILL = 'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium';
+const TONE = {
+  ok: 'bg-[var(--v2-ok-soft)] text-[var(--v2-accent)]',
+  warn: 'bg-orange-500/15 text-[var(--v2-orange)]',
+  bad: 'bg-red-500/15 text-[var(--v2-red)]',
+  neutral: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+  info: 'bg-blue-500/15 text-[var(--v2-blue)]',
 };
+
+const HEALTH_BADGE: Record<SiteHealth, { tone: keyof typeof TONE; label: string }> = {
+  up: { tone: 'ok', label: 'Up' },
+  degraded: { tone: 'warn', label: 'Degraded' },
+  down: { tone: 'bad', label: 'Down' },
+  disabled: { tone: 'neutral', label: 'Disabled' },
+};
+
+const statusPill = (tone: keyof typeof TONE, label: string) => (
+  <span className={`${PILL} ${TONE[tone]}`}>
+    <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
+    {label}
+  </span>
+);
 
 function statusTooltip(status: SiteStatus): string {
   const parts = [
@@ -235,12 +247,10 @@ export function SitesComponent({ focusSiteId }: Props) {
       width: 120,
       render: (_, site) => {
         const status = statuses[site.id];
-        if (!status) return <Badge status="processing" text="Checking" />;
+        if (!status) return statusPill('info', 'Checking');
         const badge = HEALTH_BADGE[status.status];
         return (
-          <Tooltip title={statusTooltip(status)}>
-            <Badge status={badge.status} text={badge.label} />
-          </Tooltip>
+          <Tooltip title={statusTooltip(status)}>{statusPill(badge.tone, badge.label)}</Tooltip>
         );
       },
     },
@@ -256,12 +266,12 @@ export function SitesComponent({ focusSiteId }: Props) {
       render: (_, site) => {
         const version = statuses[site.id]?.version;
         if (!version) return <span className="text-gray-400">-</span>;
-        if (version === APP_VERSION) return <Tag className="font-mono">{version}</Tag>;
+        if (version === APP_VERSION) {
+          return <span className={`${PILL} ${TONE.neutral} font-mono`}>{version}</span>;
+        }
         return (
           <Tooltip title={`Differs from the control plane (${APP_VERSION})`}>
-            <Tag color="orange" className="font-mono">
-              {version}
-            </Tag>
+            <span className={`${PILL} ${TONE.warn} font-mono`}>{version}</span>
           </Tooltip>
         );
       },
@@ -303,10 +313,10 @@ export function SitesComponent({ focusSiteId }: Props) {
       key: 'name',
       render: (_, site) => (
         <span className="inline-flex items-center gap-2">
-          {site.name}
+          <span className="font-medium">{site.name}</span>
           {site.environment && (
             <span
-              className={`rounded px-1.5 py-0.5 text-xs ${ENVIRONMENT_STYLE[site.environment].badge}`}
+              className={`rounded-full px-2 py-0.5 text-xs ${ENVIRONMENT_STYLE[site.environment].badge}`}
             >
               {ENVIRONMENT_STYLE[site.environment].label}
             </span>
@@ -314,12 +324,21 @@ export function SitesComponent({ focusSiteId }: Props) {
         </span>
       ),
     },
-    { title: 'API URL', dataIndex: 'apiUrl', key: 'apiUrl' },
+    {
+      title: 'API URL',
+      dataIndex: 'apiUrl',
+      key: 'apiUrl',
+      render: (url: string) => <span className="font-mono text-xs">{url}</span>,
+    },
     {
       title: 'Enabled',
       key: 'enabled',
       render: (_, site) =>
-        site.enabled ? <Tag color="green">Enabled</Tag> : <Tag color="default">Disabled</Tag>,
+        site.enabled ? (
+          <span className={`${PILL} ${TONE.ok}`}>Enabled</span>
+        ) : (
+          <span className={`${PILL} ${TONE.neutral}`}>Disabled</span>
+        ),
     },
     {
       title: 'Actions',
@@ -340,11 +359,17 @@ export function SitesComponent({ focusSiteId }: Props) {
           <Button size="small" onClick={() => setGrantsForSite(site)}>
             Grants
           </Button>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(site)} />
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            aria-label={`Edit ${site.name}`}
+            onClick={() => openEdit(site)}
+          />
           <Button
             size="small"
             danger
             icon={<DeleteOutlined />}
+            aria-label={`Remove ${site.name}`}
             onClick={() => handleDelete(site)}
           />
         </div>
@@ -353,16 +378,15 @@ export function SitesComponent({ focusSiteId }: Props) {
   ];
 
   return (
-    <div>
-      <div className="mb-4 flex items-center justify-between">
-        <div className="text-sm text-gray-500 dark:text-gray-300">
-          Every Site this control plane fronts, its address and who can open it.
-        </div>
+    <Card
+      title="Sites"
+      subtitle="Every Site this control plane fronts, its address and who can open it."
+      extra={
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           Register site
         </Button>
-      </div>
-
+      }
+    >
       {isLoading ? (
         <div className="flex justify-center py-10">
           <Spin indicator={<LoadingOutlined spin />} size="large" />
@@ -372,11 +396,10 @@ export function SitesComponent({ focusSiteId }: Props) {
           rowKey="id"
           columns={columns}
           dataSource={sites}
+          size="small"
           pagination={false}
           scroll={{ x: 900 }}
-          rowClassName={(site) =>
-            site.id === focusSiteId ? 'bg-amber-50 dark:bg-amber-900/20' : ''
-          }
+          rowClassName={(site) => (site.id === focusSiteId ? 'bg-orange-500/10' : '')}
         />
       )}
 
@@ -454,6 +477,6 @@ export function SitesComponent({ focusSiteId }: Props) {
       >
         {grantsForSite && <SiteGrantsComponent site={grantsForSite} />}
       </Drawer>
-    </div>
+    </Card>
   );
 }

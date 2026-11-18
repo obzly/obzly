@@ -1,5 +1,4 @@
-import { LoadingOutlined } from '@ant-design/icons';
-import { Button, Empty, Segmented, Spin, Table, Tooltip } from 'antd';
+import { Button, Empty, Segmented, Table, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -9,7 +8,8 @@ import {
   type ExploreResponse,
   costApi,
 } from '../../../entity/cost';
-import { type ChartColors, EChart, Panel, baseOption } from '../../synthetics';
+import { Card, RankedList } from '../../../shared/ui/v2';
+import { type ChartColors, EChart, baseOption } from '../../synthetics';
 import { valueLabel } from '../lib/explorer';
 import { formatChange, formatMoney, formatMoneyCompact } from '../lib/format';
 import {
@@ -22,7 +22,8 @@ import {
 } from '../lib/merge';
 import { addDays, resolveRange } from '../lib/ranges';
 import { fanOut } from '../lib/sites';
-import { RankList, SiteErrors, SourceBadge, Tile } from './parts';
+import { DimensionIcon, IconLabel, ProviderMark } from './CloudIcon';
+import { Loading, SiteErrors, SourceBadge, TileRow, TipTile } from './parts';
 
 interface Props {
   sites: CostSite[];
@@ -30,6 +31,8 @@ interface Props {
   /** Opens the Explorer grouped by a dimension, filtered to a value when one is given. */
   onExplore: (groupBy: CostDimension, filter?: { dimension: CostDimension; value: string }) => void;
   onManageCloud?: () => void;
+  /** Opens Budgets & anomalies. */
+  onAnomalies?: () => void;
 }
 
 interface Data {
@@ -41,9 +44,8 @@ interface Data {
 }
 
 const TOP = 6;
-const ANOMALY_COLOR = '#dc2626';
 
-export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props) => {
+export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud, onAnomalies }: Props) => {
   const [data, setData] = useState<Data>();
   const [currency, setCurrency] = useState<string>();
   const [days, setDays] = useState<30 | 90>(30);
@@ -119,7 +121,7 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
               `<b>${point.day}</b>`,
               `${money(point.amount)}${point.estimated ? ' (estimated, not final yet)' : ''}`,
               anomaly
-                ? `<span style="color:${ANOMALY_COLOR}">Anomaly: ${anomaly.service || 'whole account'} expected ${money(anomaly.expected)}, was ${money(anomaly.actual)}</span>`
+                ? `<span style="color:${colors.status.bad}">Anomaly: ${anomaly.service || 'whole account'} expected ${money(anomaly.expected)}, was ${money(anomaly.actual)}</span>`
                 : '',
             ]
               .filter(Boolean)
@@ -146,7 +148,7 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
             type: 'bar' as const,
             data: points.map((point) => ({
               value: point.amount,
-              itemStyle: { color: '#009966', opacity: point.estimated ? 0.45 : 1 },
+              itemStyle: { color: colors.accent, opacity: point.estimated ? 0.45 : 1 },
             })),
           },
           {
@@ -156,7 +158,7 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
             lineStyle: { width: 0 },
             symbol: 'circle',
             symbolSize: 9,
-            itemStyle: { color: ANOMALY_COLOR },
+            itemStyle: { color: colors.status.bad },
             tooltip: { show: false },
           },
         ],
@@ -165,13 +167,7 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
     [current, data, days, money],
   );
 
-  if (!data) {
-    return (
-      <div className="flex justify-center py-16">
-        <Spin indicator={<LoadingOutlined spin />} />
-      </div>
-    );
-  }
+  if (!data) return <Loading />;
 
   const { summary } = data;
   if (summary.sources.length === 0 && summary.currencies.length === 0) {
@@ -196,11 +192,26 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
     (response.currencies.find((block) => block.currency === current?.currency)?.rows ?? [])
       .slice(0, TOP)
       .map((row) => ({
-        key: row.key,
-        label: valueLabel(dimension, row.key, row.label),
-        amount: row.total,
+        key: row.key || '__none',
+        label: (
+          <IconLabel icon={<DimensionIcon dimension={dimension} value={row.key} />}>
+            {valueLabel(dimension, row.key, row.label)}
+          </IconLabel>
+        ),
+        value: row.total,
+        display: money(row.total),
+        onClick: () =>
+          dimension === 'service'
+            ? onExplore('resource', { dimension: 'service', value: row.key })
+            : onExplore('service', { dimension: 'account', value: row.key }),
       }));
   const estimatedDays = (current?.daily ?? []).filter((point) => point.estimated).length;
+  const lastMonthName = dayjs(summary.today).subtract(1, 'month').format('MMMM');
+  const change = current ? formatChange(current.monthToDate, current.lastMonthSameDays) : '';
+  // This month's days so far, for the month-to-date tile's trend.
+  const monthDays = (current?.daily ?? [])
+    .filter((point) => point.day >= `${summary.today.slice(0, 8)}01`)
+    .map((point) => point.amount);
 
   return (
     <div className="flex flex-col gap-4">
@@ -210,6 +221,7 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
           Currency
           <Segmented
             size="small"
+            aria-label="Currency"
             value={current?.currency}
             onChange={(value) => setCurrency(value as string)}
             options={summary.currencies.map((item) => item.currency)}
@@ -221,36 +233,65 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
       )}
 
       {current && (
-        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-          <Tile
+        <TileRow label="Summary">
+          <TipTile
             label="Month to date"
+            tooltip="Effective (amortized) cost, so a reservation's upfront fee is spread over its term"
             value={money(current.monthToDate)}
-            hint={
-              current.lastMonthSameDays
-                ? `${formatChange(current.monthToDate, current.lastMonthSameDays)} vs the same days last month`
+            change={
+              change
+                ? {
+                    text: change,
+                    // More spend than last month is bad news, less is good.
+                    tone: current.monthToDate > current.lastMonthSameDays ? 'bad' : 'good',
+                  }
                 : undefined
             }
-            tooltip="Effective (amortized) cost, so a reservation's upfront fee is spread over its term"
+            note={change ? `${change} vs the same days last month` : 'Effective (amortized) cost'}
+            trend={monthDays}
           />
-          <Tile
+          <TipTile
             label="Month-end forecast"
-            value={current.forecast !== undefined ? money(current.forecast) : 'Not available'}
-            hint={
+            value={
+              current.forecast !== undefined ? (
+                money(current.forecast)
+              ) : (
+                <span className="text-gray-400 dark:text-gray-500">Not available</span>
+              )
+            }
+            note={
               current.forecast !== undefined
                 ? 'Month to date plus the providers’ forecast'
                 : 'A provider forecast is missing for some connection'
             }
           />
-          <Tile label="Last month" value={money(current.lastMonth)} />
-          <Tile
+          <TipTile
+            label="Last month"
+            value={money(current.lastMonth)}
+            tooltip={
+              current.lastMonthFinal
+                ? 'Every provider has finalised these days'
+                : 'Some days are estimated or not yet finalised by the provider'
+            }
+            note={`${lastMonthName}, ${
+              current.lastMonthFinal
+                ? 'final'
+                : current.lastMonth === 0
+                  ? 'no data'
+                  : 'can still change'
+            }`}
+          />
+          <TipTile
             label="Open anomalies"
             value={summary.openAnomalies}
-            hint="Last 90 days, see Budgets & anomalies"
+            change={summary.openAnomalies > 0 ? { text: 'review', tone: 'bad' } : undefined}
+            note="Last 90 days, see Budgets & anomalies"
+            onClick={onAnomalies}
           />
-        </div>
+        </TileRow>
       )}
 
-      <Panel
+      <Card
         title="Daily cost"
         subtitle={
           estimatedDays
@@ -260,6 +301,7 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
         extra={
           <Segmented
             size="small"
+            aria-label="Days shown"
             value={days}
             onChange={(value) => setDays(value as 30 | 90)}
             options={[
@@ -270,10 +312,10 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
         }
       >
         <EChart option={trend} height={260} />
-      </Panel>
+      </Card>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel
+        <Card
           title="Top services"
           subtitle="Month to date"
           extra={
@@ -282,13 +324,9 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
             </Button>
           }
         >
-          <RankList
-            rows={ranked(data.services, 'service')}
-            format={money}
-            onClick={(value) => onExplore('resource', { dimension: 'service', value })}
-          />
-        </Panel>
-        <Panel
+          <RankedList rows={ranked(data.services, 'service')} empty="No cost" />
+        </Card>
+        <Card
           title="Top accounts"
           subtitle="Month to date"
           extra={
@@ -297,15 +335,11 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
             </Button>
           }
         >
-          <RankList
-            rows={ranked(data.accounts, 'account')}
-            format={money}
-            onClick={(value) => onExplore('service', { dimension: 'account', value })}
-          />
-        </Panel>
+          <RankedList rows={ranked(data.accounts, 'account')} empty="No cost" />
+        </Card>
       </div>
 
-      <Panel title="Data status" subtitle="What each connection's cost source last delivered">
+      <Card title="Data status" subtitle="What each connection's cost source last delivered">
         <Table<SiteSource>
           size="small"
           pagination={false}
@@ -315,7 +349,13 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
           dataSource={summary.sources}
           scroll={{ x: 'max-content' }}
           columns={[
-            { title: 'Connection', dataIndex: 'connectionName' },
+            {
+              title: 'Connection',
+              dataIndex: 'connectionName',
+              render: (name: string, source) => (
+                <IconLabel icon={<ProviderMark provider={source.provider} />}>{name}</IconLabel>
+              ),
+            },
             ...(sites.length > 1 ? [{ title: 'Site', dataIndex: 'siteName' }] : []),
             {
               title: 'Source',
@@ -345,7 +385,7 @@ export const OverviewTab = ({ sites, refresh, onExplore, onManageCloud }: Props)
             },
           ]}
         />
-      </Panel>
+      </Card>
     </div>
   );
 };

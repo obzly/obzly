@@ -5,6 +5,7 @@ import { useState } from 'react';
 
 import type { AssetKind, SiteAsset } from '../../../entity/inventory';
 import { useVisibleInterval } from '../../../shared/lib';
+import { PageHeader } from '../../../shared/ui/v2';
 import { useInventory } from '../lib/useInventory';
 import { AssetDetailDrawer, type NavigateTarget } from './AssetDetailDrawer';
 import { AssetsTableComponent } from './AssetsTableComponent';
@@ -45,49 +46,48 @@ export const InfrastructureComponent = ({
 
   return (
     <div
-      className="w-full overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
+      className="w-full overflow-y-auto rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800"
       style={{ height: contentHeight }}
     >
-      <div className="mb-1 flex flex-wrap items-center gap-3">
-        <h1 className="m-0 text-xl font-semibold text-gray-900 dark:text-gray-100">
-          Infrastructure
-        </h1>
-        <span className="text-sm text-gray-500 dark:text-gray-400">
-          {multiSite ? 'All Sites you can reach' : 'This Site'}
-        </span>
-        {multiSite &&
-          data.sites.map((site) => (
-            <Tooltip key={site.siteId} title={site.error ?? `${site.assets} assets`}>
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs ${site.error ? 'border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950 dark:text-red-400' : 'border-gray-200 text-gray-600 dark:border-gray-600 dark:text-gray-300'}`}
+      <PageHeader
+        title="Infrastructure"
+        subtitle={multiSite ? 'All Sites you can reach' : 'This Site'}
+        actions={
+          <>
+            {multiSite &&
+              data.sites.map((site) => (
+                <Tooltip key={site.siteId} title={site.error ?? `${site.assets} assets`}>
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${site.error ? 'border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950 dark:text-red-400' : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300'}`}
+                  >
+                    <span
+                      className={`inline-block h-2 w-2 rounded-full ${site.error ? 'bg-red-500' : 'bg-emerald-500'}`}
+                    />
+                    {site.siteName}
+                    {site.error && ': unavailable'}
+                  </span>
+                </Tooltip>
+              ))}
+            {view !== 'cloud' && (
+              <Button
+                icon={<ReloadOutlined />}
+                loading={data.loading && refresh > 0}
+                onClick={() => setRefresh((value) => value + 1)}
               >
-                <span
-                  className={`inline-block h-2 w-2 rounded-full ${site.error ? 'bg-red-500' : 'bg-emerald-500'}`}
-                />
-                {site.siteName}
-                {site.error && ': unavailable'}
-              </span>
-            </Tooltip>
-          ))}
-        <div className="flex-1" />
-        {view !== 'cloud' && (
-          <Button
-            icon={<ReloadOutlined />}
-            loading={data.loading && refresh > 0}
-            onClick={() => setRefresh((value) => value + 1)}
-          >
-            Refresh
-          </Button>
-        )}
-      </div>
+                Refresh
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      {data.error && <Alert className="my-3" type="error" showIcon title={data.error} />}
+      {data.error && <Alert className="mt-4" type="error" showIcon title={data.error} />}
       {failed.length > 0 && !multiSite && (
-        <Alert className="my-3" type="error" showIcon title={failed[0].error} />
+        <Alert className="mt-4" type="error" showIcon title={failed[0].error} />
       )}
       {truncated.length > 0 && (
         <Alert
-          className="my-3"
+          className="mt-4"
           type="info"
           showIcon
           title={`Showing the first 5000 assets of ${truncated.map((site) => `${site.siteName || 'this Site'} (${site.assets})`).join(', ')}, worst health first.`}
@@ -95,6 +95,7 @@ export const InfrastructureComponent = ({
       )}
 
       <Tabs
+        className="mt-3"
         activeKey={view}
         onChange={(key) => setView(key as View)}
         items={[
@@ -102,11 +103,13 @@ export const InfrastructureComponent = ({
           {
             key: 'assets',
             label: (
-              <span>
-                Assets{' '}
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  {data.assets.length || ''}
-                </span>
+              <span className="inline-flex items-center gap-1.5">
+                Assets
+                {data.assets.length > 0 && (
+                  <span className="rounded-full bg-gray-100 px-2 py-px text-xs text-gray-500 tabular-nums dark:bg-gray-700 dark:text-gray-300">
+                    {data.assets.length}
+                  </span>
+                )}
               </span>
             ),
           },
@@ -127,6 +130,8 @@ export const InfrastructureComponent = ({
             <OverviewComponent
               assets={data.assets}
               changes={data.changes}
+              // Capped asset lists undercount the tiles, so they get no change pills then.
+              history={truncated.length ? { trend: data.history.trend } : data.history}
               multiSite={multiSite}
               onOpen={openAsset}
               onOpenKind={(kind) => {

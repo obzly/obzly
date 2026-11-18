@@ -31,17 +31,17 @@ export const UsageChart = ({
 }: Props): React.JSX.Element => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ECharts | null>(null);
-  const { theme } = useTheme();
+  // ECharts can't use CSS variables, so the theme's colours come from the registry.
+  const { definition, chartColors } = useTheme();
 
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = chartRef.current ?? echarts.init(containerRef.current);
     chartRef.current = chart;
 
-    const isDark = theme === 'dark';
-    const text = isDark ? '#e5e7eb' : '#374151';
-    const axisLine = isDark ? '#4b5563' : '#d1d5db';
-    const splitLine = isDark ? '#374151' : '#e5e7eb';
+    const text = definition.colors.muted;
+    const axisLine = definition.colors.border;
+    const splitLine = definition.colors.track;
 
     // ECharts stacks by data index, not by x value, so every series needs a
     // value (zero if absent) for every bucket or bars float mid-air.
@@ -62,10 +62,11 @@ export const UsageChart = ({
 
     const option: EChartsOption = {
       animation: false,
+      color: chartColors,
       grid: { left: 60, right: 16, top: 16, bottom: 56 },
       tooltip: {
         trigger: 'axis',
-        backgroundColor: isDark ? '#1f2937' : '#ffffff',
+        backgroundColor: definition.colors.panel,
         borderColor: axisLine,
         textStyle: { color: text },
         valueFormatter: (value) => formatValue(metric, Number(value)),
@@ -89,11 +90,12 @@ export const UsageChart = ({
         stack: 'total',
         barMaxWidth: 24,
         barMinWidth: 2,
+        itemStyle: { borderRadius: 2 },
         data,
       })),
     };
     chart.setOption(option, true);
-  }, [points, metric, bucketSeconds, from, to, theme]);
+  }, [points, metric, bucketSeconds, from, to, definition, chartColors]);
 
   useEffect(() => {
     const handleResize = () => chartRef.current?.resize();

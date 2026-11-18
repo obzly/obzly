@@ -154,46 +154,40 @@ func (r *UserRepository) SetBootstrapTokenHash(userID uuid.UUID, tokenHash strin
 		Update("bootstrap_token_hash", tokenHash).Error
 }
 
-func (r *UserRepository) GetUsers(
-	limit, offset int,
-	beforeCreatedAt *time.Time,
-	query string,
-) ([]*users_models.User, int64, error) {
+func (r *UserRepository) GetUsers(limit, offset int, filter UserListFilter) ([]*users_models.User, int64, error) {
 	var users []*users_models.User
 	var total int64
 
-	countQuery := storage.GetDb().Model(&users_models.User{})
-	if beforeCreatedAt != nil {
-		countQuery = countQuery.Where("created_at < ?", *beforeCreatedAt)
-	}
-	if query != "" {
-		searchPattern := "%" + query + "%"
-		countQuery = countQuery.Where("email ILIKE ? OR name ILIKE ?", searchPattern, searchPattern)
-	}
-
-	if err := countQuery.Count(&total).Error; err != nil {
+	if err := filter.apply(storage.GetDb().Model(&users_models.User{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	dataQuery := storage.GetDb().
-		Preload("Plan").
+	dataQuery := filter.apply(storage.GetDb().Preload("Plan")).
 		Limit(limit).
 		Offset(offset).
 		Order("created_at DESC")
-
-	if beforeCreatedAt != nil {
-		dataQuery = dataQuery.Where("created_at < ?", *beforeCreatedAt)
-	}
-	if query != "" {
-		searchPattern := "%" + query + "%"
-		dataQuery = dataQuery.Where("email ILIKE ? OR name ILIKE ?", searchPattern, searchPattern)
-	}
-
 	if err := dataQuery.Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
 
 	return users, total, nil
+}
+
+// Summary counts users for the Users page in one pass over the table.
+func (r *UserRepository) Summary(now time.Time) (*UsersSummary, error) {
+	summary := &UsersSummary{}
+	err := storage.GetDb().Raw(`SELECT
+			count(*) AS total,
+			count(*) FILTER (WHERE status = 'ACTIVE') AS active_accounts,
+			count(*) FILTER (WHERE status = 'INVITED') AS invited,
+			count(*) FILTER (WHERE status = 'INACTIVE') AS deactivated,
+			count(*) FILTER (WHERE status = 'ACTIVE' AND `+lastSeenSQL+` >= ?) AS active_last7_days,
+			count(*) FILTER (WHERE `+inactiveSQL+`) AS inactive,
+			count(*) FILTER (WHERE status = 'ACTIVE' AND mfa_enabled) AS mfa_enabled,
+			count(*) FILTER (WHERE role = 'ADMIN') AS admins,
+			count(*) FILTER (WHERE role = 'ADMIN' AND NOT mfa_enabled) AS admins_without_mfa
+		FROM users`, now.Add(-7*24*time.Hour), now.Add(-InactiveAfter)).Scan(summary).Error
+	return summary, err
 }
 
 func (r *UserRepository) UpdateUserStatus(userID uuid.UUID, status users_enums.UserStatus) error {
@@ -313,6 +307,12 @@ func (r *UserRepository) UpdateUserInfo(userID uuid.UUID, name *string, email *s
 	return storage.GetDb().Model(&users_models.User{}).
 		Where("id = ?", userID).
 		Updates(updates).Error
+}
+
+func (r *UserRepository) UpdateUIPreferences(userID uuid.UUID, prefs *users_models.UIPreferences) error {
+	return storage.GetDb().Model(&users_models.User{}).
+		Where("id = ?", userID).
+		Update("ui_preferences", prefs).Error
 }
 
 func (r *UserRepository) CountUsersByPlan(planID uuid.UUID) (int64, error) {

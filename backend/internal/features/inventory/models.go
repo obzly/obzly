@@ -95,6 +95,18 @@ type Change struct {
 
 func (Change) TableName() string { return "inventory_changes" }
 
+// countRow is a project's assets of one kind and health at the end of an hour (the last build
+// in it). Kind "" holds the project's total, so an hour without assets still has a row.
+type countRow struct {
+	ProjectID uuid.UUID `gorm:"column:project_id;primaryKey"`
+	Hour      time.Time `gorm:"column:hour;primaryKey"`
+	Kind      string    `gorm:"column:kind;primaryKey"`
+	Health    string    `gorm:"column:health;primaryKey"`
+	Count     int64     `gorm:"column:count"`
+}
+
+func (countRow) TableName() string { return "inventory_counts_hourly" }
+
 // Reason is why an asset has its health, shown next to it.
 type Reason struct {
 	Health string `json:"health"`

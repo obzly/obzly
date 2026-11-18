@@ -19,6 +19,13 @@ func (r *AuditLogRepository) Create(auditLog *AuditLog) error {
 	return storage.GetDb().Create(auditLog).Error
 }
 
+// RecentForOrg reads idx_audit_logs_org_id: at most limit rows.
+func (r *AuditLogRepository) RecentForOrg(orgID uuid.UUID, limit int) ([]*AuditLog, error) {
+	logs := []*AuditLog{}
+	err := storage.GetDb().Where("org_id = ?", orgID).Order("created_at DESC").Limit(limit).Find(&logs).Error
+	return logs, err
+}
+
 // AuditLogFilter narrows and orders the global or a project's audit log.
 type AuditLogFilter struct {
 	ProjectID  *uuid.UUID // nil = every project (the global log)

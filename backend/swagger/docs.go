@@ -128,7 +128,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "The full token is returned once. Requires the MFA code when MFA is enabled.",
+                "description": "The full token is returned once. Requires the MFA code when MFA is enabled. write=true adds the mcp:write scope (MCP write tools) and needs a session that passed MFA.",
                 "consumes": [
                     "application/json"
                 ],
@@ -141,7 +141,7 @@ const docTemplate = `{
                 "summary": "Create a personal access token for the MCP endpoint",
                 "parameters": [
                     {
-                        "description": "Token name, lifetime and MFA code",
+                        "description": "Token name, lifetime, MFA code and write access",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -493,6 +493,12 @@ const docTemplate = `{
                         "description": "Timeseries bucket size; picked from the range when omitted",
                         "name": "bucketSeconds",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "previous: add the summary of the equally long window before the range",
+                        "name": "compare",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -597,6 +603,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Timeseries split: model (default) or user",
                         "name": "groupBy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "previous: add the summary of the equally long window before the range",
+                        "name": "compare",
                         "in": "query"
                     }
                 ],
@@ -2957,6 +2969,83 @@ const docTemplate = `{
                 }
             }
         },
+        "/correlation/sessions/{projectId}/{sessionId}/impact": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Error logs and error spans per service within the session window, for the session's services, most first",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "correlation"
+                ],
+                "summary": "Get an incident session's impact by service",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "sessionId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/correlation_core.SessionImpactDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/disk/usage": {
             "get": {
                 "description": "Returns information about disk space usage",
@@ -3205,6 +3294,12 @@ const docTemplate = `{
                         "description": "Only this project",
                         "name": "projectId",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Add the last 7 days' hourly counts by kind and those of 24 h ago",
+                        "name": "history",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3233,7 +3328,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Each message pattern's count in current against baseline, scaled to current's length: patterns new in current, spiking (at least twice their baseline) or dropping (at most half), with each one's template and newest log. Counts read per-minute counts where segments have them.",
+                "description": "Each message pattern's count in current against baseline, scaled to current's length: patterns new in current, spiking (at least twice their baseline) or dropping (at most half), with each one's template and newest log. Counts read per-minute counts where segments have them. With countOnly, only newCount/spikeCount/dropCount over whole minutes (cached briefly; counted is false when the query needs raw logs, e.g. a message search).",
                 "consumes": [
                     "application/json"
                 ],
@@ -3636,6 +3731,88 @@ const docTemplate = `{
                 }
             }
         },
+        "/logs/query/explain/{projectId}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Field values (service, namespace, container, pod, ReplicaSet, level) whose share of the lines matching query grew most from baseline to current (both with from and to, at most 31 days), read from per-minute counts. Values with fewer than minCount lines in current (default 20) are left out.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "logs-query"
+                ],
+                "summary": "Explain a range of logs (\"Explain this spike\")",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Explain request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.ExplainRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.ExplainResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/logs/query/field-values/{projectId}": {
             "post": {
                 "security": [
@@ -3778,6 +3955,179 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/logs/query/health-map/{projectId}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Lines, error lines and warning lines per workload grouped by namespace (groupBy k8s; a workload is a pod name without its generated parts), per service grouped by host (host; reads raw logs, host_name is not a per-minute dimension) or per service (service) over timeRange (from and to, at most 31 days), with each tile's lines 24 h earlier. At most 150 tiles, biggest first. Cached for a minute.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "logs-query"
+                ],
+                "summary": "Log health map (Logs › Health map)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Health map request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.HealthMapRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.HealthMapResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/logs/query/pattern-trends/{projectId}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Lines per pattern per bucket over timeRange (from and to required, at most 31 days; cut to whole minutes), read from per-minute counts: the biggest patterns plus every new, spiking or dropping one, each with its template, newest log, main level, services, and lines in the same window 24 h earlier and in the 7 days before. New: not seen in those; spike: at least twice its count 24 h earlier; drop: at most half. Other is the rest per bucket. Cached for a minute.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "logs-query"
+                ],
+                "summary": "Message patterns over time (Logs › Patterns)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Pattern trends request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.PatternTrendsRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.PatternTrendsResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4098,6 +4448,88 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/logs/query/volume/{projectId}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Lines per UTC day by service over the last days (default 14, at most 31), lines per level over 7 days, today so far against yesterday at the same time, the project's stored and ingested bytes per line, and the 10 biggest patterns per service and level over 7 days with their template - all from per-minute counts. Cached for a minute.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "logs-query"
+                ],
+                "summary": "Log volume and noise (Logs › Volume \u0026 noise)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Volume request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.VolumeRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/logs_core.VolumeResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4596,6 +5028,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "allowWrite grants mcp:write only when the client requested it and the session passed MFA; otherwise the grant is read-only.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4606,6 +5039,17 @@ const docTemplate = `{
                     "oauth"
                 ],
                 "summary": "Approve or deny an OAuth authorization request",
+                "parameters": [
+                    {
+                        "description": "Authorization request parameters, decision and write toggle",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/oauth.DecisionRequest"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -5524,6 +5968,76 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{orgId}/scim-events": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Owners and global admins: the latest provisioning changes SCIM made (users created, updated, deactivated or removed, teams changed), newest first, from the audit log",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "An organization's recent SCIM changes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "orgId",
+                        "name": "orgId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "At most this many (default 20, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/organizations.SCIMEvent"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8724,6 +9238,95 @@ const docTemplate = `{
                 }
             }
         },
+        "/projects/dashboards/{projectId}/{dashboardId}/panels": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project members who can write. tabId empty means the first tab; the panel is validated like a full save and gets a new ID. The MCP add_dashboard_panel tool uses it.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dashboards"
+                ],
+                "summary": "Add one panel to the bottom of a dashboard tab",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Dashboard ID",
+                        "name": "dashboardId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Tab and panel",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dashboards_dto.AppendPanelRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/dashboards_dto.AppendPanelResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/projects/dashboards/{projectId}/{dashboardId}/pin": {
             "put": {
                 "security": [
@@ -10233,6 +10836,67 @@ const docTemplate = `{
                 }
             }
         },
+        "/projects/{id}/alert-rules/activity": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Each rule's firings (series going from pending to firing) and delivered notifications per UTC day over the last 7 days, today included (any member). Days before trackedSince, or before a rule was created, are unknown.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Alert rule activity",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.RuleActivityResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/projects/{id}/alert-rules/preview": {
             "post": {
                 "security": [
@@ -10548,6 +11212,67 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/alerts/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Alerts firing and pending now, rules, and current or upcoming silences (any member): the Alerts page header",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Alerts summary",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.AlertsSummary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -10972,6 +11697,208 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/incident-notifications": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "A project's \"Notify when an incident opens/ends\" settings, or the defaults (off); any member",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Get incident notification settings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.IncidentNotificationSettings"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project owners and admins. Thresholds: an incident notifies once it holds minSignals error signals or minServices services",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Update incident notification settings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Settings",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alerting.IncidentNotificationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.IncidentNotificationSettings"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/ingestion-status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Each source (identified by obzly_source, else Kubernetes workload, else service and host) with its signals, last seen, recent rate and health. Sources seen in the last 7 days; refreshed about every 30 seconds.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ingestion"
+                ],
+                "summary": "List the sources sending to a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/ingestion.IngestionStatusDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -11655,7 +12582,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Members who can write to the project",
+                "description": "Members who can write to the project. mcpClient labels a silence the MCP create_silence tool made.",
                 "consumes": [
                     "application/json"
                 ],
@@ -11809,6 +12736,335 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/silences/{silenceId}/expire": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Members who can write to the project. Ends a current or upcoming silence and keeps it on record (the MCP expire_silence tool uses it). A maintenance window's silence (managedBy set) or one already over is refused with 409",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "End a silence now",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "ID",
+                        "name": "silenceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.Silence"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/web-analytics/report": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requests, visitors, status codes and top lists for a range: closed hours from hourly rollups (built a few minutes after each hour) merged with the current hour read from raw logs. Ranges under 2 hours are read from raw logs. The first report of a project starts its rollups (the last 7 days are backfilled).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "web-analytics"
+                ],
+                "summary": "Web analytics report from a project's access logs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Range start (RFC 3339, default 24 hours before to)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Range end (RFC 3339, default now)",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated source keys (default all)",
+                        "name": "sources",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this virtual host",
+                        "name": "host",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/webanalytics.ReportDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/web-analytics/settings": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "web-analytics"
+                ],
+                "summary": "Web analytics settings, sources and rollup status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/webanalytics.SettingsDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Project admins only. Visitor IPs (truncate, hash or full), crawlers and static extensions apply to hours summarised afterwards. Sources can be renamed or merged into another. Every change is audit-logged.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "web-analytics"
+                ],
+                "summary": "Change Web analytics settings and source names",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID (UUID format)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Settings to change",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/webanalytics.UpdateSettingsDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/webanalytics.SettingsDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -13107,6 +14363,86 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/channels/{channelId}/template": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Admins; the organisation default, or the channel's own template (validated). On a Site enrolled in a control plane, refused (managed there)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Set a channel's message template and emoji switch",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Channel ID",
+                        "name": "channelId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Template",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alerting.ChannelTemplateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.SettingsChannel"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/settings/channels/{channelId}/test": {
             "post": {
                 "security": [
@@ -13197,6 +14533,294 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/message-templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Admins. Each channel kind's organisation default (stored, or the built-in one) with its last send-time render error",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "List the organisation's message templates",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.MessageTemplatesView"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/message-templates/preview": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Admins. Renders an unsaved template against sample firing (each severity), resolved, test and incident notifications; errors carry line numbers",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Preview a message template",
+                "parameters": [
+                    {
+                        "description": "Template",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alerting.TemplatePreviewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.TemplatePreviewResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/message-templates/test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Admins. Sends a test notification rendered with the given (unsaved) template through a channel of the same kind",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Send a test rendered with a message template",
+                "parameters": [
+                    {
+                        "description": "Template and channel",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alerting.TemplateTestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/message-templates/{kind}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Admins; validated (syntax, size, renders every sample, webhook JSON). Audit-logged. On a Site enrolled in a control plane, refused (managed there)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Save a channel kind's message template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "email, slack, pagerduty or webhook",
+                        "name": "kind",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Template",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alerting.MessageTemplate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.MessageTemplatesView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Admins; audit-logged",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alerting"
+                ],
+                "summary": "Reset a channel kind's message template to the built-in one",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "email, slack, pagerduty or webhook",
+                        "name": "kind",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/alerting.MessageTemplatesView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -16105,6 +17729,48 @@ const docTemplate = `{
                 }
             }
         },
+        "/system/latest-release": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The newest release on GitHub (version, date, link), asked server-side with an anonymous request and cached for 6 hours. status is known, unknown (the check failed) or disabled (UPDATE_CHECK=false); neither of the last two means up to date.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "The latest Obzly release (admin)",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Ask GitHub again if the answer is over a minute old",
+                        "name": "refresh",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/system_upgradestatus.LatestReleaseDTO"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/system/live": {
             "get": {
                 "description": "Kubernetes liveness probe: 200 while the HTTP server answers. It checks no dependency, so a database outage does not restart every replica.",
@@ -16192,7 +17858,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "For Settings → Overview: uncompressed bytes and rows that arrived in each of the last 24 hours (by the hour of each segment's newest row, so approximate after compaction), and compressed and uncompressed bytes kept with the oldest row, for logs, metrics and traces. Cached for a minute.",
+                "description": "For Settings → Overview and Organizations → Sites: the Site's project count, and uncompressed bytes and rows that arrived in each of the last 24 hours (by the hour of each segment's newest row, so approximate after compaction), and compressed and uncompressed bytes kept with the oldest row, for logs, metrics and traces. Cached for a minute.",
                 "produces": [
                     "application/json"
                 ],
@@ -16468,6 +18134,97 @@ const docTemplate = `{
                 }
             }
         },
+        "/traces/query/service-errors/{projectId}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Each service's entry spans (SERVER/CONSUMER spans and trace roots) and failed ones in the range and the same-length range before it, most errors first. Ranges over 7 days are clamped to the last 7 days.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "traces-query"
+                ],
+                "summary": "Get the services with the most errors",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Range and limit",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/traces_querying.ServiceErrorsRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/traces_querying.ServiceErrorsResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/traces/query/services/{projectId}": {
             "get": {
                 "security": [
@@ -16592,6 +18349,97 @@ const docTemplate = `{
                 }
             }
         },
+        "/traces/query/summary/{projectId}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requests (root spans, or the picked service's spans), error rate, p50 and p95 for the range and the same-length range before it, bucketed trends, and a capped count of traces matching the filters",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "traces-query"
+                ],
+                "summary": "Get the trace search summary",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Search filters",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/traces_querying.TraceSummaryRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/traces_querying.TraceSummaryResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/users": {
             "get": {
                 "security": [
@@ -16634,6 +18482,30 @@ const docTemplate = `{
                         "description": "Search by email or name (case-insensitive)",
                         "name": "query",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "ADMIN or MEMBER",
+                        "name": "role",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "on or off",
+                        "name": "mfa",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Account status: ACTIVE, INVITED or INACTIVE",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "inactive: not ACTIVE, or no sign-in or request for 30 days; active: the rest",
+                        "name": "activity",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -16641,6 +18513,15 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/users_dto.ListUsersResponseDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid filter",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "401": {
@@ -16986,6 +18867,72 @@ const docTemplate = `{
                 }
             }
         },
+        "/users/me/preferences": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Saves the caller's own theme choice (mode, light and dark theme, colour-blind charts) so it",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Save the current user's UI preferences",
+                "parameters": [
+                    {
+                        "description": "Preferences",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/users_dto.UpdateUIPreferencesRequestDTO"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/users_models.UIPreferences"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/users/mfa/disable": {
             "post": {
                 "security": [
@@ -17263,7 +19210,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Update global users settings (admin only)",
+                "description": "Update global users settings (admin only). Theme defaults are validated against the",
                 "consumes": [
                     "application/json"
                 ],
@@ -17281,7 +19228,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/users_models.UsersSettings"
+                            "$ref": "#/definitions/users_dto.UpdateUsersSettingsRequestDTO"
                         }
                     }
                 ],
@@ -17401,6 +19348,58 @@ const docTemplate = `{
                     },
                     "429": {
                         "description": "Rate limit exceeded",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/users/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Headline counts for the Users page: accounts by status, active in the last 7 days, inactive (not ACTIVE, or no sign-in or request for 30 days), MFA on among active accounts, and admins. No seat limit: only organization plans cap members.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-management"
+                ],
+                "summary": "Users summary (admin only)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/users_dto.UsersSummaryResponseDTO"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -17664,6 +19663,85 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/users/{id}/detail": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "For the Users page's side panel: the ways the account can sign in (password, SSO connectors, GitHub, Google), the organization whose SCIM created it, its organizations and teams, its control-plane Site grants (own, SSO-synced and through teams; project names live on the Site) and its roles on this instance's own projects. On a control plane, roles given on a Site itself aren't known (projectRolesOnSites).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-management"
+                ],
+                "summary": "A user's sign-in methods and access (admin only)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/useraccess.UserDetail"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid user ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "User not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -18096,6 +20174,10 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 100,
                     "minLength": 1
+                },
+                "write": {
+                    "description": "Write adds the mcp:write scope (MCP write tools). Needs a session that passed MFA.",
+                    "type": "boolean"
                 }
             }
         },
@@ -18521,6 +20603,14 @@ const docTemplate = `{
                     "description": "Newest call in the range, Unix ms (0 when there is none).",
                     "type": "integer"
                 },
+                "previous": {
+                    "description": "Previous: the summary of the equally long window before the range (compare=previous only).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/aiusage.LLMSummaryDTO"
+                        }
+                    ]
+                },
                 "summary": {
                     "$ref": "#/definitions/aiusage.LLMSummaryDTO"
                 },
@@ -18717,6 +20807,14 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/aiusage.BreakdownRowDTO"
                     }
+                },
+                "previous": {
+                    "description": "Previous: the summary of the equally long window before the range (compare=previous only).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/aiusage.UsageSummaryDTO"
+                        }
+                    ]
                 },
                 "summary": {
                     "$ref": "#/definitions/aiusage.UsageSummaryDTO"
@@ -18949,6 +21047,10 @@ const docTemplate = `{
                 "createdBy": {
                     "type": "string"
                 },
+                "description": {
+                    "description": "Description is the rule's runbook text, .Rule.Description in templates.",
+                    "type": "string"
+                },
                 "enabled": {
                     "type": "boolean"
                 },
@@ -18985,6 +21087,10 @@ const docTemplate = `{
                 },
                 "repeatSeconds": {
                     "type": "integer"
+                },
+                "severity": {
+                    "description": "Severity is critical, high, medium or low.",
+                    "type": "string"
                 },
                 "source": {
                     "type": "string"
@@ -19041,6 +21147,23 @@ const docTemplate = `{
                 }
             }
         },
+        "alerting.AlertsSummary": {
+            "type": "object",
+            "properties": {
+                "firing": {
+                    "type": "integer"
+                },
+                "pending": {
+                    "type": "integer"
+                },
+                "rules": {
+                    "type": "integer"
+                },
+                "silences": {
+                    "type": "integer"
+                }
+            }
+        },
         "alerting.ChannelConfig": {
             "type": "object",
             "properties": {
@@ -19064,6 +21187,81 @@ const docTemplate = `{
                 }
             }
         },
+        "alerting.ChannelTemplateRequest": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "useEmoji": {
+                    "type": "boolean"
+                },
+                "useOrgDefault": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "alerting.IncidentNotificationRequest": {
+            "type": "object",
+            "properties": {
+                "channelIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "minServices": {
+                    "type": "integer"
+                },
+                "minSignals": {
+                    "type": "integer"
+                },
+                "notifyEnd": {
+                    "type": "boolean"
+                },
+                "notifyOpen": {
+                    "type": "boolean"
+                },
+                "severity": {
+                    "type": "string"
+                }
+            }
+        },
+        "alerting.IncidentNotificationSettings": {
+            "type": "object",
+            "properties": {
+                "channelIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "minServices": {
+                    "type": "integer"
+                },
+                "minSignals": {
+                    "type": "integer"
+                },
+                "notifyEnd": {
+                    "type": "boolean"
+                },
+                "notifyOpen": {
+                    "type": "boolean"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "alerting.Labels": {
             "type": "object",
             "additionalProperties": {
@@ -19081,6 +21279,65 @@ const docTemplate = `{
                 },
                 "value": {
                     "type": "string"
+                }
+            }
+        },
+        "alerting.MessageTemplate": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                }
+            }
+        },
+        "alerting.MessageTemplateView": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "defaultBody": {
+                    "type": "string"
+                },
+                "defaultSubject": {
+                    "type": "string"
+                },
+                "isDefault": {
+                    "description": "IsDefault: nothing stored, the built-in template applies.",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "lastError": {
+                    "description": "LastError is the last send-time render failure (the built-in template\nwas sent instead), on the deployment that sends.",
+                    "type": "string"
+                },
+                "lastErrorAt": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "alerting.MessageTemplatesView": {
+            "type": "object",
+            "properties": {
+                "managed": {
+                    "type": "boolean"
+                },
+                "templates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/alerting.MessageTemplateView"
+                    }
                 }
             }
         },
@@ -19118,8 +21375,29 @@ const docTemplate = `{
                     "description": "Target is a non-secret description of where it sends (a URL's host,\na key's last characters, the recipients).",
                     "type": "string"
                 },
+                "templateBody": {
+                    "type": "string"
+                },
+                "templateError": {
+                    "description": "TemplateError is the last render failure of its template at send time\n(the built-in default was sent instead); cleared by the next success.",
+                    "type": "string"
+                },
+                "templateErrorAt": {
+                    "type": "string"
+                },
+                "templateOverride": {
+                    "description": "TemplateOverride: its own template (TemplateSubject/TemplateBody)\ninstead of the organisation default for its kind.",
+                    "type": "boolean"
+                },
+                "templateSubject": {
+                    "type": "string"
+                },
                 "updatedAt": {
                     "type": "string"
+                },
+                "useEmoji": {
+                    "description": "UseEmoji: .Emoji is empty in its messages when false.",
+                    "type": "boolean"
                 }
             }
         },
@@ -19134,6 +21412,54 @@ const docTemplate = `{
                 },
                 "value": {
                     "type": "number"
+                }
+            }
+        },
+        "alerting.RuleActivity": {
+            "type": "object",
+            "properties": {
+                "fired": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "firedTotal": {
+                    "type": "integer"
+                },
+                "notifications": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "notificationsTotal": {
+                    "type": "integer"
+                },
+                "ruleId": {
+                    "type": "string"
+                }
+            }
+        },
+        "alerting.RuleActivityResponse": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "description": "Days are the UTC days counted, oldest first; the last is today so far.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/alerting.RuleActivity"
+                    }
+                },
+                "trackedSince": {
+                    "description": "TrackedSince is when this Site started counting (day precision); earlier days are\nunknown, as are days before a rule was created. Nil when it can't be told.",
+                    "type": "string"
                 }
             }
         },
@@ -19197,6 +21523,10 @@ const docTemplate = `{
                 "comparison": {
                     "type": "string"
                 },
+                "description": {
+                    "description": "Description is the rule's runbook text (.Rule.Description in templates).",
+                    "type": "string"
+                },
                 "enabled": {
                     "type": "boolean"
                 },
@@ -19217,6 +21547,10 @@ const docTemplate = `{
                 },
                 "repeatSeconds": {
                     "type": "integer"
+                },
+                "severity": {
+                    "description": "Severity is critical, high, medium or low; empty takes it from the\nseverity label, else medium.",
+                    "type": "string"
                 },
                 "source": {
                     "type": "string"
@@ -19262,8 +21596,28 @@ const docTemplate = `{
                 "target": {
                     "type": "string"
                 },
+                "templateBody": {
+                    "type": "string"
+                },
+                "templateError": {
+                    "description": "TemplateError is the last send-time render failure of its template\n(on the deployment that sends: a Site or a standalone install).",
+                    "type": "string"
+                },
+                "templateErrorAt": {
+                    "type": "string"
+                },
+                "templateOverride": {
+                    "type": "boolean"
+                },
+                "templateSubject": {
+                    "type": "string"
+                },
                 "updatedAt": {
                     "type": "string"
+                },
+                "useEmoji": {
+                    "description": "UseEmoji and the template override: see ChannelTemplateRequest.",
+                    "type": "boolean"
                 },
                 "usedBy": {
                     "type": "integer"
@@ -19324,6 +21678,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/alerting.Matcher"
                     }
                 },
+                "mcpClient": {
+                    "description": "MCPClient names the AI assistant (OAuth app or access token) that\ncreated it through MCP; empty when created in the UI. A label only:\nCreatedBy and the audit log say who made it.",
+                    "type": "string"
+                },
                 "projectId": {
                     "type": "string"
                 },
@@ -19347,8 +21705,117 @@ const docTemplate = `{
                         "$ref": "#/definitions/alerting.Matcher"
                     }
                 },
+                "mcpClient": {
+                    "type": "string"
+                },
                 "startsAt": {
                     "type": "string"
+                }
+            }
+        },
+        "alerting.TemplateError": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string"
+                },
+                "line": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "alerting.TemplatePreviewRequest": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "useEmoji": {
+                    "description": "UseEmoji defaults to on.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "alerting.TemplatePreviewResponse": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/alerting.TemplateError"
+                    }
+                },
+                "samples": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/alerting.TemplatePreviewSample"
+                    }
+                }
+            }
+        },
+        "alerting.TemplatePreviewSample": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "description": "Body is a webhook's JSON, indented.",
+                    "type": "string"
+                },
+                "color": {
+                    "type": "string"
+                },
+                "emoji": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "alerting.TemplateTestRequest": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "channelId": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "useEmoji": {
+                    "description": "UseEmoji defaults to on.",
+                    "type": "boolean"
                 }
             }
         },
@@ -19926,6 +22393,10 @@ const docTemplate = `{
                 },
                 "lastMonth": {
                     "type": "number"
+                },
+                "lastMonthFinal": {
+                    "description": "LastMonthFinal: no day of last month is estimated any more and every source that\ndelivered it has finalised it, so it won't change.",
+                    "type": "boolean"
                 },
                 "lastMonthSameDays": {
                     "type": "number"
@@ -20646,6 +23117,23 @@ const docTemplate = `{
                 }
             }
         },
+        "correlation_core.ServiceImpactDTO": {
+            "type": "object",
+            "properties": {
+                "errorLogs": {
+                    "type": "integer"
+                },
+                "errorSpans": {
+                    "type": "integer"
+                },
+                "serviceName": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "correlation_core.SessionDetailDTO": {
             "type": "object",
             "properties": {
@@ -20657,6 +23145,26 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/correlation_core.SignalDetailDTO"
                     }
+                }
+            }
+        },
+        "correlation_core.SessionImpactDTO": {
+            "type": "object",
+            "properties": {
+                "services": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/correlation_core.ServiceImpactDTO"
+                    }
+                },
+                "sessionId": {
+                    "type": "string"
+                },
+                "windowEnd": {
+                    "type": "string"
+                },
+                "windowStart": {
+                    "type": "string"
                 }
             }
         },
@@ -20741,6 +23249,31 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "traceId": {
+                    "type": "string"
+                }
+            }
+        },
+        "dashboards_dto.AppendPanelRequestDTO": {
+            "type": "object",
+            "properties": {
+                "panel": {
+                    "$ref": "#/definitions/dashboards_models.Panel"
+                },
+                "tabId": {
+                    "type": "string"
+                }
+            }
+        },
+        "dashboards_dto.AppendPanelResponseDTO": {
+            "type": "object",
+            "properties": {
+                "dashboard": {
+                    "$ref": "#/definitions/dashboards_models.Dashboard"
+                },
+                "panel": {
+                    "$ref": "#/definitions/dashboards_models.Panel"
+                },
+                "tabId": {
                     "type": "string"
                 }
             }
@@ -21053,9 +23586,15 @@ const docTemplate = `{
                 "gridPos": {
                     "$ref": "#/definitions/dashboards_models.GridPos"
                 },
+                "groupBands": {
+                    "type": "string"
+                },
                 "groupField": {
                     "description": "GroupField is any log field for a logs panel, a spans_core.GroupField\nfor a spans panel.",
                     "type": "string"
+                },
+                "higherIs": {
+                    "$ref": "#/definitions/dashboards_models.PanelHigherIs"
                 },
                 "id": {
                     "type": "string"
@@ -21063,8 +23602,21 @@ const docTemplate = `{
                 "limit": {
                     "type": "integer"
                 },
+                "max": {
+                    "type": "number"
+                },
+                "measure": {
+                    "$ref": "#/definitions/logs_core.AggregationMeasure"
+                },
+                "measureField": {
+                    "type": "string"
+                },
                 "metric": {
                     "type": "string"
+                },
+                "min": {
+                    "description": "Display settings of the v2 kinds; like Unit they never affect the\nquery. Min/Max bound a gauge's arc.",
+                    "type": "number"
                 },
                 "operationName": {
                     "type": "string"
@@ -21074,7 +23626,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "query": {
-                    "description": "Logs-source only.",
+                    "description": "Logs-source only. Measure (\"\" counts lines) reads MeasureField;\nTopGroups keeps a time series' N largest groups; GroupBands groups a\nnumeric GroupField into log bands (previews only, never saved).",
                     "allOf": [
                         {
                             "$ref": "#/definitions/logs_core.QueryNode"
@@ -21091,8 +23643,14 @@ const docTemplate = `{
                 "source": {
                     "$ref": "#/definitions/dashboards_models.PanelSource"
                 },
+                "thresholds": {
+                    "$ref": "#/definitions/dashboards_models.PanelThresholds"
+                },
                 "title": {
                     "type": "string"
+                },
+                "topGroups": {
+                    "type": "integer"
                 },
                 "type": {
                     "$ref": "#/definitions/dashboards_models.PanelType"
@@ -21101,6 +23659,19 @@ const docTemplate = `{
                     "$ref": "#/definitions/dashboards_models.PanelUnit"
                 }
             }
+        },
+        "dashboards_models.PanelHigherIs": {
+            "type": "string",
+            "enum": [
+                "",
+                "good",
+                "bad"
+            ],
+            "x-enum-varnames": [
+                "PanelHigherIsUnset",
+                "PanelHigherIsGood",
+                "PanelHigherIsBad"
+            ]
         },
         "dashboards_models.PanelSource": {
             "type": "string",
@@ -21115,6 +23686,17 @@ const docTemplate = `{
                 "PanelSourceMetrics"
             ]
         },
+        "dashboards_models.PanelThresholds": {
+            "type": "object",
+            "properties": {
+                "critical": {
+                    "type": "number"
+                },
+                "warn": {
+                    "type": "number"
+                }
+            }
+        },
         "dashboards_models.PanelType": {
             "type": "string",
             "enum": [
@@ -21122,14 +23704,26 @@ const docTemplate = `{
                 "bar",
                 "pie",
                 "stat",
-                "table"
+                "table",
+                "statTrend",
+                "rankedList",
+                "donut",
+                "gauge",
+                "stackedBar",
+                "statusStrip"
             ],
             "x-enum-varnames": [
                 "PanelTypeLine",
                 "PanelTypeBar",
                 "PanelTypePie",
                 "PanelTypeStat",
-                "PanelTypeTable"
+                "PanelTypeTable",
+                "PanelTypeStatTrend",
+                "PanelTypeRankedList",
+                "PanelTypeDonut",
+                "PanelTypeGauge",
+                "PanelTypeStackedBar",
+                "PanelTypeStatusStrip"
             ]
         },
         "dashboards_models.PanelUnit": {
@@ -21247,6 +23841,129 @@ const docTemplate = `{
                 "PlatformLinux",
                 "PlatformWindows"
             ]
+        },
+        "ingestion.IngestionStatusDTO": {
+            "type": "object",
+            "properties": {
+                "generatedAt": {
+                    "type": "string"
+                },
+                "quietAfterMinutes": {
+                    "description": "QuietAfterMinutes: a signal with nothing for this long is quiet.",
+                    "type": "integer"
+                },
+                "rateWindowMinutes": {
+                    "description": "RateWindowMinutes: PerMinute averages over this window.",
+                    "type": "integer"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/ingestion.SourceStatusDTO"
+                    }
+                },
+                "stoppedAfterHours": {
+                    "description": "StoppedAfterHours: a signal with nothing for this long is stopped.",
+                    "type": "integer"
+                },
+                "truncated": {
+                    "description": "Truncated: more sources than the response holds; the quietest are left out.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "ingestion.SignalStatusDTO": {
+            "type": "object",
+            "properties": {
+                "firstSeen": {
+                    "type": "string"
+                },
+                "health": {
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "type": "string"
+                },
+                "perMinute": {
+                    "description": "PerMinute: RecentCount per minute over the window, or since first seen when later.",
+                    "type": "number"
+                },
+                "recentCount": {
+                    "description": "RecentCount: records (logs, spans, metric data points) accepted in the rate window.",
+                    "type": "integer"
+                },
+                "signal": {
+                    "description": "Signal: logs, traces or metrics.",
+                    "type": "string"
+                }
+            }
+        },
+        "ingestion.SourceLocationDTO": {
+            "type": "object",
+            "properties": {
+                "cluster": {
+                    "type": "string"
+                },
+                "host": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "sdkLanguage": {
+                    "type": "string"
+                },
+                "serviceName": {
+                    "type": "string"
+                },
+                "serviceNamespace": {
+                    "type": "string"
+                },
+                "workload": {
+                    "type": "string"
+                },
+                "workloadKind": {
+                    "type": "string"
+                }
+            }
+        },
+        "ingestion.SourceStatusDTO": {
+            "type": "object",
+            "properties": {
+                "dataSource": {
+                    "description": "DataSource: the Data Sources catalog id it most likely is, \"\" when unknown.",
+                    "type": "string"
+                },
+                "firstSeen": {
+                    "type": "string"
+                },
+                "health": {
+                    "type": "string"
+                },
+                "id": {
+                    "description": "ID is stable for the same source.",
+                    "type": "string"
+                },
+                "identifiedBy": {
+                    "description": "IdentifiedBy: obzly_source, k8s_workload, service, k8s_cluster, host or unidentified.",
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "type": "string"
+                },
+                "location": {
+                    "$ref": "#/definitions/ingestion.SourceLocationDTO"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "signals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/ingestion.SignalStatusDTO"
+                    }
+                }
+            }
         },
         "inventory.AssetDTO": {
             "type": "object",
@@ -21471,6 +24188,43 @@ const docTemplate = `{
                 }
             }
         },
+        "inventory.HistoryDTO": {
+            "type": "object",
+            "properties": {
+                "hours": {
+                    "description": "Hours with counts over the last 7 days, oldest first.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "kinds": {
+                    "description": "Kinds: each kind's assets (every health) at each of Hours.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer",
+                            "format": "int64"
+                        }
+                    }
+                },
+                "previous": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer",
+                            "format": "int64"
+                        }
+                    }
+                },
+                "previousAt": {
+                    "description": "PreviousAt is the newest hour at least 24 h old (absent when none is from the 2 hours\nbefore that); Previous counts its assets by kind, then health.",
+                    "type": "string"
+                }
+            }
+        },
         "inventory.Metrics": {
             "type": "object",
             "properties": {
@@ -21547,6 +24301,14 @@ const docTemplate = `{
                         "format": "int64"
                     }
                 },
+                "history": {
+                    "description": "History: only with history=true.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/inventory.HistoryDTO"
+                        }
+                    ]
+                },
                 "kinds": {
                     "description": "Kinds counts assets by kind, then health.",
                     "type": "object",
@@ -21575,6 +24337,31 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
+        },
+        "logs_core.AggregationMeasure": {
+            "type": "string",
+            "enum": [
+                "count",
+                "distinct",
+                "sum",
+                "avg",
+                "min",
+                "max",
+                "p50",
+                "p95",
+                "p99"
+            ],
+            "x-enum-varnames": [
+                "AggregationMeasureCount",
+                "AggregationMeasureDistinct",
+                "AggregationMeasureSum",
+                "AggregationMeasureAvg",
+                "AggregationMeasureMin",
+                "AggregationMeasureMax",
+                "AggregationMeasureP50",
+                "AggregationMeasureP95",
+                "AggregationMeasureP99"
+            ]
         },
         "logs_core.ConditionNode": {
             "type": "object",
@@ -21675,6 +24462,68 @@ const docTemplate = `{
                 }
             }
         },
+        "logs_core.ExplainFieldDTO": {
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "type": "integer"
+                },
+                "baselineShare": {
+                    "type": "number"
+                },
+                "current": {
+                    "type": "integer"
+                },
+                "currentShare": {
+                    "type": "number"
+                },
+                "field": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "logs_core.ExplainRequestDTO": {
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "$ref": "#/definitions/logs_core.TimeRangeDTO"
+                },
+                "current": {
+                    "$ref": "#/definitions/logs_core.TimeRangeDTO"
+                },
+                "minCount": {
+                    "description": "MinCount: fewest lines in Current for a value to be listed; 0 means 20.",
+                    "type": "integer"
+                },
+                "query": {
+                    "$ref": "#/definitions/logs_core.QueryNode"
+                }
+            }
+        },
+        "logs_core.ExplainResponseDTO": {
+            "type": "object",
+            "properties": {
+                "baselineTotal": {
+                    "type": "integer"
+                },
+                "currentTotal": {
+                    "type": "integer"
+                },
+                "fields": {
+                    "description": "Fields: values whose share grew most, largest gain first.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/logs_core.ExplainFieldDTO"
+                    }
+                },
+                "partial": {
+                    "type": "boolean"
+                }
+            }
+        },
         "logs_core.FieldValueDTO": {
             "type": "object",
             "properties": {
@@ -21754,6 +24603,79 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/logs_core.QueryableField"
                     }
+                }
+            }
+        },
+        "logs_core.HealthGroupDTO": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "tiles": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/logs_core.HealthTileDTO"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "logs_core.HealthMapRequestDTO": {
+            "type": "object",
+            "properties": {
+                "groupBy": {
+                    "description": "GroupBy: k8s (namespace and workload), host (host and service) or service.",
+                    "type": "string"
+                },
+                "query": {
+                    "$ref": "#/definitions/logs_core.QueryNode"
+                },
+                "timeRange": {
+                    "$ref": "#/definitions/logs_core.TimeRangeDTO"
+                }
+            }
+        },
+        "logs_core.HealthMapResponseDTO": {
+            "type": "object",
+            "properties": {
+                "groupBy": {
+                    "type": "string"
+                },
+                "groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/logs_core.HealthGroupDTO"
+                    }
+                },
+                "hiddenTiles": {
+                    "description": "HiddenTiles: smaller tiles left out to keep the map readable.",
+                    "type": "integer"
+                },
+                "partial": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "logs_core.HealthTileDTO": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "previous": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "warnings": {
+                    "type": "integer"
                 }
             }
         },
@@ -22044,6 +24966,10 @@ const docTemplate = `{
                 "newestLogTime": {
                     "type": "string"
                 },
+                "objectStorageSizeMb": {
+                    "description": "ObjectStorageSizeMB: the part of TotalSizeMB already in object storage\n(0 without object storage); the rest is fresh segments on local disk.",
+                    "type": "number"
+                },
                 "oldestLogTime": {
                     "type": "string"
                 },
@@ -22057,6 +24983,33 @@ const docTemplate = `{
                 "totalSizeMb": {
                     "description": "TotalSizeMB is the compressed on-disk Parquet size.",
                     "type": "number"
+                }
+            }
+        },
+        "logs_core.NoisyPatternDTO": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "level": {
+                    "type": "string"
+                },
+                "pattern": {
+                    "type": "string"
+                },
+                "perDay": {
+                    "description": "PerDay: Count over the days of the 7 that had logs.",
+                    "type": "number"
+                },
+                "sample": {
+                    "type": "string"
+                },
+                "service": {
+                    "type": "string"
                 }
             }
         },
@@ -22095,6 +25048,10 @@ const docTemplate = `{
                 "baseline": {
                     "$ref": "#/definitions/logs_core.TimeRangeDTO"
                 },
+                "countOnly": {
+                    "description": "CountOnly: only NewCount, SpikeCount and DropCount, for the Anomalies button. Answered\nonly when the query filters on per-minute count dimensions (level, service, namespace,\ncontainer, pod, pattern), so it reads logs_1m rather than raw logs; otherwise Counted\nis false. The ranges are cut to whole minutes and the answer is cached briefly.",
+                    "type": "boolean"
+                },
                 "current": {
                     "$ref": "#/definitions/logs_core.TimeRangeDTO"
                 },
@@ -22124,7 +25081,133 @@ const docTemplate = `{
                         "$ref": "#/definitions/logs_core.PatternChangeDTO"
                     }
                 },
+                "counted": {
+                    "description": "Counted is false when a CountOnly request wasn't answered (its query needs raw logs).",
+                    "type": "boolean"
+                },
                 "currentTotal": {
+                    "type": "integer"
+                },
+                "dropCount": {
+                    "type": "integer"
+                },
+                "newCount": {
+                    "description": "NewCount, SpikeCount, DropCount: how many patterns changed each way, before Limit.",
+                    "type": "integer"
+                },
+                "spikeCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "logs_core.PatternTrendDTO": {
+            "type": "object",
+            "properties": {
+                "change": {
+                    "type": "string"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "level": {
+                    "description": "Level: the level most of its lines have.",
+                    "type": "string"
+                },
+                "pattern": {
+                    "type": "string"
+                },
+                "previousWeek": {
+                    "description": "PreviousWeek: lines in the 7 days before the range.",
+                    "type": "integer"
+                },
+                "sample": {
+                    "type": "string"
+                },
+                "series": {
+                    "description": "Series: lines per bucket, one per PatternTrendsResponseDTO.Buckets.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "services": {
+                    "description": "Services: the services logging it, most lines first (at most 5).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "yesterday": {
+                    "description": "Yesterday: lines in the same window 24 h earlier.",
+                    "type": "integer"
+                }
+            }
+        },
+        "logs_core.PatternTrendsRequestDTO": {
+            "type": "object",
+            "properties": {
+                "bucketMs": {
+                    "description": "BucketMs: whole minutes; 0 picks one giving at most 60 buckets.",
+                    "type": "integer"
+                },
+                "limit": {
+                    "description": "Limit: the biggest patterns listed (changed ones are listed too); 0 means 30, at most 50.",
+                    "type": "integer"
+                },
+                "query": {
+                    "$ref": "#/definitions/logs_core.QueryNode"
+                },
+                "timeRange": {
+                    "$ref": "#/definitions/logs_core.TimeRangeDTO"
+                }
+            }
+        },
+        "logs_core.PatternTrendsResponseDTO": {
+            "type": "object",
+            "properties": {
+                "bucketMs": {
+                    "type": "integer"
+                },
+                "buckets": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "distinct": {
+                    "type": "integer"
+                },
+                "dropCount": {
+                    "type": "integer"
+                },
+                "newCount": {
+                    "type": "integer"
+                },
+                "other": {
+                    "description": "Other: lines per bucket of the patterns not listed.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "partial": {
+                    "description": "Partial: more patterns than one query counts; the smallest are left out.",
+                    "type": "boolean"
+                },
+                "patterns": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/logs_core.PatternTrendDTO"
+                    }
+                },
+                "spikeCount": {
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total: lines in the range; Distinct: patterns among them.",
                     "type": "integer"
                 }
             }
@@ -22340,6 +25423,96 @@ const docTemplate = `{
                 },
                 "to": {
                     "type": "string"
+                }
+            }
+        },
+        "logs_core.VolumeCountDTO": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "logs_core.VolumeRequestDTO": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "description": "Days: 0 means 14, at most 31.",
+                    "type": "integer"
+                }
+            }
+        },
+        "logs_core.VolumeResponseDTO": {
+            "type": "object",
+            "properties": {
+                "bytesPerLine": {
+                    "description": "BytesPerLine / RawBytesPerLine: the project's stored (compressed) and\ningested bytes per line; 0 when it has no logs.",
+                    "type": "number"
+                },
+                "days": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "levels": {
+                    "description": "Levels: lines per level over the last 7 days.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/logs_core.VolumeCountDTO"
+                    }
+                },
+                "noisy": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/logs_core.NoisyPatternDTO"
+                    }
+                },
+                "partial": {
+                    "type": "boolean"
+                },
+                "rawBytesPerLine": {
+                    "type": "number"
+                },
+                "services": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/logs_core.VolumeSeriesDTO"
+                    }
+                },
+                "storedBytes": {
+                    "type": "integer"
+                },
+                "today": {
+                    "description": "Today: lines since 00:00 UTC; YesterdaySoFar: lines yesterday up to the same time.",
+                    "type": "integer"
+                },
+                "yesterdaySoFar": {
+                    "type": "integer"
+                }
+            }
+        },
+        "logs_core.VolumeSeriesDTO": {
+            "type": "object",
+            "properties": {
+                "counts": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "other": {
+                    "type": "boolean"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -22561,6 +25734,10 @@ const docTemplate = `{
             "properties": {
                 "newestSampleTime": {
                     "type": "string"
+                },
+                "objectStorageSizeMb": {
+                    "description": "ObjectStorageSizeMB: the part of TotalSizeMB already in object storage\n(0 without object storage); the rest is fresh segments on local disk.",
+                    "type": "number"
                 },
                 "oldestSampleTime": {
                     "type": "string"
@@ -22808,6 +25985,49 @@ const docTemplate = `{
                 },
                 "verifiedIdentity": {
                     "type": "boolean"
+                },
+                "writeNeedsMfa": {
+                    "description": "WriteNeedsMFA: write was requested but the signed-in session hasn't\npassed MFA, so it can't be granted (set by the controller).",
+                    "type": "boolean"
+                },
+                "writeRequested": {
+                    "description": "WriteRequested: the client asked for mcp:write. It is granted only when\nthe user also ticks the consent page's write toggle.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "oauth.DecisionRequest": {
+            "type": "object",
+            "properties": {
+                "allowWrite": {
+                    "type": "boolean"
+                },
+                "approve": {
+                    "type": "boolean"
+                },
+                "client_id": {
+                    "type": "string"
+                },
+                "code_challenge": {
+                    "type": "string"
+                },
+                "code_challenge_method": {
+                    "type": "string"
+                },
+                "redirect_uri": {
+                    "type": "string"
+                },
+                "resource": {
+                    "type": "string"
+                },
+                "response_type": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
                 }
             }
         },
@@ -22990,6 +26210,13 @@ const docTemplate = `{
                 "suspended": {
                     "type": "boolean"
                 },
+                "teams": {
+                    "description": "Teams: names of the organization's teams the member is in.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "userId": {
                     "type": "string"
                 }
@@ -23113,6 +26340,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "organizations.SCIMEvent": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "message": {
                     "type": "string"
                 }
             }
@@ -24051,6 +27292,10 @@ const docTemplate = `{
                 "percent": {
                     "type": "number"
                 },
+                "reason": {
+                    "description": "Reason explains Sources from the scopes' latest reads, e.g. \"Security Hub in every scanned\nregion\" (Summary only).",
+                    "type": "string"
+                },
                 "sources": {
                     "type": "array",
                     "items": {
@@ -24335,6 +27580,13 @@ const docTemplate = `{
                 "level": {
                     "type": "string"
                 },
+                "pattern": {
+                    "description": "Pattern: a message pattern's pattern_hash; PatternText its template,\nonly shown in settings.",
+                    "type": "string"
+                },
+                "patternText": {
+                    "type": "string"
+                },
                 "rate": {
                     "type": "number"
                 },
@@ -24607,6 +27859,16 @@ const docTemplate = `{
                 "deployment": {
                     "type": "string"
                 },
+                "errorRate": {
+                    "type": "number"
+                },
+                "errors": {
+                    "type": "integer"
+                },
+                "health": {
+                    "description": "Health is ok, degraded or failing (see healthOf); omitted with no requests.",
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -24617,11 +27879,22 @@ const docTemplate = `{
                 "node": {
                     "type": "string"
                 },
+                "p95LatencyMs": {
+                    "type": "number"
+                },
+                "requests": {
+                    "description": "RED over the window: a service's entry spans, or the client spans\ncalling an untraced peer. Omitted for network-only nodes. P95LatencyMs\nand ErrorRate are omitted with no requests (and P95 on \"other\").",
+                    "type": "integer"
+                },
                 "sources": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
+                },
+                "type": {
+                    "description": "Type is service, database, cache, messaging or external; omitted when\nunknown (a network-only node, or the \"other\" bucket).",
+                    "type": "string"
                 }
             }
         },
@@ -24639,6 +27912,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/servicemap.ServiceMapNodeDTO"
                     }
+                },
+                "windowSeconds": {
+                    "description": "WindowSeconds is the window after clamping, to turn counts into rates.",
+                    "type": "number"
                 }
             }
         },
@@ -24994,6 +28271,10 @@ const docTemplate = `{
             "properties": {
                 "newestSpanTime": {
                     "type": "string"
+                },
+                "objectStorageSizeMb": {
+                    "description": "ObjectStorageSizeMB: the part of TotalSizeMB already in object storage\n(0 without object storage); the rest is fresh segments on local disk.",
+                    "type": "number"
                 },
                 "oldestSpanTime": {
                     "type": "string"
@@ -27354,6 +30635,31 @@ const docTemplate = `{
                 }
             }
         },
+        "system_upgradestatus.LatestReleaseDTO": {
+            "type": "object",
+            "properties": {
+                "checkedAt": {
+                    "type": "string"
+                },
+                "error": {
+                    "description": "Error says why the check failed (unknown only).",
+                    "type": "string"
+                },
+                "publishedAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "version": {
+                    "description": "Version without the leading v, e.g. \"1.2.0\".",
+                    "type": "string"
+                }
+            }
+        },
         "system_upgradestatus.Response": {
             "type": "object",
             "properties": {
@@ -27531,6 +30837,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/system_usage.Hour"
                     }
                 },
+                "projects": {
+                    "description": "Projects is how many projects the Site has (Organizations → Sites).",
+                    "type": "integer"
+                },
                 "storage": {
                     "type": "array",
                     "items": {
@@ -27554,6 +30864,331 @@ const docTemplate = `{
                 },
                 "signal": {
                     "type": "string"
+                }
+            }
+        },
+        "traces_querying.ServiceErrorsDTO": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "type": "integer"
+                },
+                "previousErrors": {
+                    "type": "integer"
+                },
+                "previousRequests": {
+                    "type": "integer"
+                },
+                "requests": {
+                    "type": "integer"
+                },
+                "serviceName": {
+                    "type": "string"
+                }
+            }
+        },
+        "traces_querying.ServiceErrorsRequestDTO": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "description": "Limit is how many services to return (default 10, at most 50).",
+                    "type": "integer"
+                },
+                "timeRange": {
+                    "$ref": "#/definitions/spans_core.TimeRangeDTO"
+                }
+            }
+        },
+        "traces_querying.ServiceErrorsResponseDTO": {
+            "type": "object",
+            "properties": {
+                "clamped": {
+                    "type": "boolean"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "previousFrom": {
+                    "type": "string"
+                },
+                "services": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/traces_querying.ServiceErrorsDTO"
+                    }
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "traces_querying.TraceSummaryRequestDTO": {
+            "type": "object",
+            "properties": {
+                "countOnly": {
+                    "description": "CountOnly returns only the matching-traces count (the summary tiles\nare hidden), skipping the tiles query.",
+                    "type": "boolean"
+                },
+                "errorsOnly": {
+                    "type": "boolean"
+                },
+                "maxDurationMs": {
+                    "type": "number"
+                },
+                "minDurationMs": {
+                    "type": "number"
+                },
+                "operationName": {
+                    "type": "string"
+                },
+                "serviceName": {
+                    "type": "string"
+                },
+                "timeRange": {
+                    "$ref": "#/definitions/spans_core.TimeRangeDTO"
+                }
+            }
+        },
+        "traces_querying.TraceSummaryResponseDTO": {
+            "type": "object",
+            "properties": {
+                "countTrend": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "current": {
+                    "$ref": "#/definitions/traces_querying.TraceSummaryTotalsDTO"
+                },
+                "errorRateTrend": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "matchingTraces": {
+                    "description": "MatchingTraces counts traces whose root span starts in the range and\nthat match the filters; past MatchingTracesCap it stops counting, says\nMatchingTracesCapped and holds the cap.",
+                    "type": "integer"
+                },
+                "matchingTracesCap": {
+                    "type": "integer"
+                },
+                "matchingTracesCapped": {
+                    "type": "boolean"
+                },
+                "p50Trend": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "p95Trend": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "previous": {
+                    "$ref": "#/definitions/traces_querying.TraceSummaryTotalsDTO"
+                },
+                "rootSpansOnly": {
+                    "type": "boolean"
+                },
+                "stepMs": {
+                    "type": "integer"
+                },
+                "windowMinutes": {
+                    "type": "number"
+                }
+            }
+        },
+        "traces_querying.TraceSummaryTotalsDTO": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "errors": {
+                    "type": "integer"
+                },
+                "p50Ms": {
+                    "type": "number"
+                },
+                "p95Ms": {
+                    "type": "number"
+                }
+            }
+        },
+        "useraccess.LocalProjectRole": {
+            "type": "object",
+            "properties": {
+                "org": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "projectName": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "team": {
+                    "type": "string"
+                },
+                "via": {
+                    "type": "string"
+                }
+            }
+        },
+        "useraccess.OrgMembership": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "orgId": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "suspended": {
+                    "type": "boolean"
+                },
+                "teams": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "useraccess.OrgRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "useraccess.SignInMethod": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "useraccess.SiteAccess": {
+            "type": "object",
+            "properties": {
+                "org": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "siteId": {
+                    "type": "string"
+                },
+                "siteName": {
+                    "type": "string"
+                },
+                "team": {
+                    "type": "string"
+                },
+                "via": {
+                    "type": "string"
+                }
+            }
+        },
+        "useraccess.UserDetail": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "isActive": {
+                    "type": "boolean"
+                },
+                "isRootAdmin": {
+                    "type": "boolean"
+                },
+                "lastActiveAt": {
+                    "type": "string"
+                },
+                "lastLoginAt": {
+                    "type": "string"
+                },
+                "mfaEnabled": {
+                    "type": "boolean"
+                },
+                "mfaRequired": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "organizations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/useraccess.OrgMembership"
+                    }
+                },
+                "projectRoles": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/useraccess.LocalProjectRole"
+                    }
+                },
+                "projectRolesOnSites": {
+                    "description": "ProjectRolesOnSites: on a control plane, roles given on a Site itself\n(its project settings) aren't known here; SiteAccess is what the\ncontrol plane grants.",
+                    "type": "boolean"
+                },
+                "provisionedBy": {
+                    "description": "ProvisionedBy is the organization whose SCIM created the account.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/useraccess.OrgRef"
+                        }
+                    ]
+                },
+                "role": {
+                    "$ref": "#/definitions/users_enums.UserRole"
+                },
+                "signInMethods": {
+                    "description": "SignInMethods are the ways the account can sign in (not which it used last).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/useraccess.SignInMethod"
+                    }
+                },
+                "siteAccess": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/useraccess.SiteAccess"
+                    }
+                },
+                "status": {
+                    "$ref": "#/definitions/users_enums.UserStatus"
                 }
             }
         },
@@ -27880,6 +31515,17 @@ const docTemplate = `{
                 }
             }
         },
+        "users_dto.UpdateUIPreferencesRequestDTO": {
+            "type": "object",
+            "required": [
+                "theme"
+            ],
+            "properties": {
+                "theme": {
+                    "$ref": "#/definitions/users_models.ThemePreferences"
+                }
+            }
+        },
         "users_dto.UpdateUserInfoRequestDTO": {
             "type": "object",
             "properties": {
@@ -27896,6 +31542,35 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "users_dto.UpdateUsersSettingsRequestDTO": {
+            "type": "object",
+            "properties": {
+                "defaultDarkTheme": {
+                    "type": "string"
+                },
+                "defaultLightTheme": {
+                    "type": "string"
+                },
+                "defaultThemeMode": {
+                    "type": "string"
+                },
+                "isAllowExternalRegistrations": {
+                    "type": "boolean"
+                },
+                "isAllowMemberInvitations": {
+                    "type": "boolean"
+                },
+                "isMemberAllowedToCreateProjects": {
+                    "type": "boolean"
+                },
+                "isMfaRequiredForEveryone": {
+                    "type": "boolean"
+                },
+                "isUserThemeChoiceAllowed": {
+                    "type": "boolean"
                 }
             }
         },
@@ -27934,6 +31609,50 @@ const docTemplate = `{
                 },
                 "role": {
                     "$ref": "#/definitions/users_enums.UserRole"
+                },
+                "uiPreferences": {
+                    "description": "UIPreferences is omitted until the user saves one (the theme menu does).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/users_models.UIPreferences"
+                        }
+                    ]
+                }
+            }
+        },
+        "users_dto.UsersSummaryResponseDTO": {
+            "type": "object",
+            "properties": {
+                "activeAccounts": {
+                    "description": "Accounts by status: ACTIVE, INVITED (sign-up pending), INACTIVE (deactivated).",
+                    "type": "integer"
+                },
+                "activeLast7Days": {
+                    "description": "ActiveLast7Days: active accounts with a sign-in or request in the last 7 days.",
+                    "type": "integer"
+                },
+                "admins": {
+                    "type": "integer"
+                },
+                "adminsWithoutMfa": {
+                    "type": "integer"
+                },
+                "deactivated": {
+                    "type": "integer"
+                },
+                "inactive": {
+                    "description": "Inactive matches the activity=inactive filter.",
+                    "type": "integer"
+                },
+                "invited": {
+                    "type": "integer"
+                },
+                "mfaEnabled": {
+                    "description": "MFAEnabled counts active accounts with an authenticator, out of ActiveAccounts.",
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -27973,6 +31692,44 @@ const docTemplate = `{
                 "UserRoleAdmin",
                 "UserRoleMember"
             ]
+        },
+        "users_enums.UserStatus": {
+            "type": "string",
+            "enum": [
+                "INVITED",
+                "ACTIVE",
+                "INACTIVE"
+            ],
+            "x-enum-varnames": [
+                "UserStatusInvited",
+                "UserStatusActive",
+                "UserStatusInactive"
+            ]
+        },
+        "users_models.ThemePreferences": {
+            "type": "object",
+            "properties": {
+                "colorBlindCharts": {
+                    "type": "boolean"
+                },
+                "dark": {
+                    "type": "string"
+                },
+                "light": {
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string"
+                }
+            }
+        },
+        "users_models.UIPreferences": {
+            "type": "object",
+            "properties": {
+                "theme": {
+                    "$ref": "#/definitions/users_models.ThemePreferences"
+                }
+            }
         },
         "users_models.UserPlan": {
             "type": "object",
@@ -28019,6 +31776,16 @@ const docTemplate = `{
         "users_models.UsersSettings": {
             "type": "object",
             "properties": {
+                "defaultDarkTheme": {
+                    "type": "string"
+                },
+                "defaultLightTheme": {
+                    "type": "string"
+                },
+                "defaultThemeMode": {
+                    "description": "Theme defaults for users who never picked one (light, dark or system).",
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -28037,6 +31804,576 @@ const docTemplate = `{
                 "isMfaRequiredForEveryone": {
                     "description": "every user, not only admins, must set up MFA at their next sign-in",
                     "type": "boolean"
+                },
+                "isUserThemeChoiceAllowed": {
+                    "description": "Off: everyone sees the default themes; users still pick light/dark/system mode.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "webanalytics.AttributeDTO": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "webanalytics.BucketDTO": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer"
+                },
+                "live": {
+                    "type": "boolean"
+                },
+                "other": {
+                    "type": "integer"
+                },
+                "requests": {
+                    "type": "integer"
+                },
+                "start": {
+                    "type": "string"
+                },
+                "status2xx": {
+                    "type": "integer"
+                },
+                "status3xx": {
+                    "type": "integer"
+                },
+                "status4xx": {
+                    "type": "integer"
+                },
+                "status5xx": {
+                    "type": "integer"
+                },
+                "visitors": {
+                    "type": "integer"
+                }
+            }
+        },
+        "webanalytics.BuildDTO": {
+            "type": "object",
+            "properties": {
+                "builtAt": {
+                    "type": "string"
+                },
+                "durationMs": {
+                    "type": "integer"
+                },
+                "hour": {
+                    "type": "string"
+                },
+                "rowsRead": {
+                    "type": "integer"
+                }
+            }
+        },
+        "webanalytics.GeoDTO": {
+            "type": "object",
+            "properties": {
+                "attribution": {
+                    "type": "string"
+                },
+                "available": {
+                    "type": "boolean"
+                },
+                "databaseType": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "webanalytics.HostDTO": {
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string"
+                },
+                "requests": {
+                    "type": "integer"
+                }
+            }
+        },
+        "webanalytics.HourCountDTO": {
+            "type": "object",
+            "properties": {
+                "hour": {
+                    "type": "string"
+                },
+                "requests": {
+                    "type": "integer"
+                }
+            }
+        },
+        "webanalytics.LiveInfoDTO": {
+            "type": "object",
+            "properties": {
+                "cached": {
+                    "type": "boolean"
+                },
+                "durationMs": {
+                    "type": "integer"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "rows": {
+                    "type": "integer"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "webanalytics.PanelsDTO": {
+            "type": "object",
+            "properties": {
+                "browsers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "countries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "devices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "ips": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "methods": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "notFound": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "pages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "protocols": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "referrers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "static": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "status": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "systems": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "tls": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                },
+                "vhosts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.RowDTO"
+                    }
+                }
+            }
+        },
+        "webanalytics.ReportDTO": {
+            "type": "object",
+            "properties": {
+                "bucketSeconds": {
+                    "description": "BucketSeconds is the width of a Series bucket.",
+                    "type": "integer"
+                },
+                "excludeBots": {
+                    "type": "boolean"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "geo": {
+                    "$ref": "#/definitions/webanalytics.GeoDTO"
+                },
+                "heatmap": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.HourCountDTO"
+                    }
+                },
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.HostDTO"
+                    }
+                },
+                "ipMode": {
+                    "type": "string"
+                },
+                "live": {
+                    "$ref": "#/definitions/webanalytics.LiveInfoDTO"
+                },
+                "panels": {
+                    "$ref": "#/definitions/webanalytics.PanelsDTO"
+                },
+                "previous": {
+                    "$ref": "#/definitions/webanalytics.TotalsDTO"
+                },
+                "rollups": {
+                    "$ref": "#/definitions/webanalytics.RollupInfoDTO"
+                },
+                "selected": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "series": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.BucketDTO"
+                    }
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.SourceDTO"
+                    }
+                },
+                "to": {
+                    "type": "string"
+                },
+                "totals": {
+                    "$ref": "#/definitions/webanalytics.TotalsDTO"
+                }
+            }
+        },
+        "webanalytics.RollupInfoDTO": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string"
+                },
+                "hours": {
+                    "type": "integer"
+                },
+                "lastBuiltAt": {
+                    "description": "LastBuiltAt is the newest build among the hours used.",
+                    "type": "string"
+                },
+                "missing": {
+                    "description": "Missing hours in the range are not summarised yet (the worker is\nbackfilling) and not in the report.",
+                    "type": "integer"
+                },
+                "to": {
+                    "type": "string"
+                },
+                "used": {
+                    "description": "Used is false for ranges under 2 hours, read entirely from raw logs.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "webanalytics.RowDTO": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer"
+                },
+                "country": {
+                    "type": "string"
+                },
+                "errors5xx": {
+                    "type": "integer"
+                },
+                "hits": {
+                    "type": "integer"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "type": "string"
+                },
+                "tag": {
+                    "type": "string"
+                },
+                "visitors": {
+                    "type": "integer"
+                }
+            }
+        },
+        "webanalytics.SchemaFieldDTO": {
+            "type": "object",
+            "properties": {
+                "aliases": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "label": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "webanalytics.SettingsDTO": {
+            "type": "object",
+            "properties": {
+                "build": {
+                    "$ref": "#/definitions/webanalytics.BuildDTO"
+                },
+                "buildDelayMinutes": {
+                    "type": "integer"
+                },
+                "canManage": {
+                    "type": "boolean"
+                },
+                "excludeBots": {
+                    "type": "boolean"
+                },
+                "geo": {
+                    "$ref": "#/definitions/webanalytics.GeoDTO"
+                },
+                "geoEnabled": {
+                    "type": "boolean"
+                },
+                "ipMode": {
+                    "type": "string"
+                },
+                "logRetentionDays": {
+                    "type": "integer"
+                },
+                "retentionDays": {
+                    "type": "integer"
+                },
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.SchemaFieldDTO"
+                    }
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.SourceDTO"
+                    }
+                },
+                "staticExtensions": {
+                    "type": "string"
+                },
+                "storage": {
+                    "$ref": "#/definitions/webanalytics.StorageDTO"
+                }
+            }
+        },
+        "webanalytics.SourceDTO": {
+            "type": "object",
+            "properties": {
+                "defaultName": {
+                    "type": "string"
+                },
+                "fields": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "firstSeen": {
+                    "type": "string"
+                },
+                "format": {
+                    "type": "string"
+                },
+                "hasDuration": {
+                    "type": "boolean"
+                },
+                "hasReferrer": {
+                    "type": "boolean"
+                },
+                "hasTls": {
+                    "type": "boolean"
+                },
+                "hasUserAgent": {
+                    "type": "boolean"
+                },
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "identifiedBy": {
+                    "type": "string"
+                },
+                "identity": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.AttributeDTO"
+                    }
+                },
+                "key": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "type": "string"
+                },
+                "mergedFrom": {
+                    "description": "MergedFrom lists the keys of sources merged into this one.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "mergedInto": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "requests": {
+                    "type": "integer"
+                },
+                "share": {
+                    "type": "number"
+                },
+                "where": {
+                    "type": "string"
+                }
+            }
+        },
+        "webanalytics.StorageDTO": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer"
+                },
+                "hours": {
+                    "type": "integer"
+                }
+            }
+        },
+        "webanalytics.TotalsDTO": {
+            "type": "object",
+            "properties": {
+                "botRequests": {
+                    "type": "integer"
+                },
+                "bytes": {
+                    "type": "integer"
+                },
+                "durationSources": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "notFound": {
+                    "type": "integer"
+                },
+                "p95Ms": {
+                    "type": "number"
+                },
+                "requests": {
+                    "type": "integer"
+                },
+                "visitors": {
+                    "type": "integer"
+                }
+            }
+        },
+        "webanalytics.UpdateSettingsDTO": {
+            "type": "object",
+            "properties": {
+                "excludeBots": {
+                    "type": "boolean"
+                },
+                "geoEnabled": {
+                    "type": "boolean"
+                },
+                "ipMode": {
+                    "type": "string"
+                },
+                "retentionDays": {
+                    "type": "integer"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/webanalytics.UpdateSourceDTO"
+                    }
+                },
+                "staticExtensions": {
+                    "type": "string"
+                }
+            }
+        },
+        "webanalytics.UpdateSourceDTO": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "mergedInto": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         }

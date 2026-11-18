@@ -3,9 +3,9 @@ package users_controllers
 import (
 	"net/http"
 
+	user_dto "obzly/internal/features/users/dto"
 	user_enums "obzly/internal/features/users/enums"
 	user_middleware "obzly/internal/features/users/middleware"
-	user_models "obzly/internal/features/users/models"
 	users_services "obzly/internal/features/users/services"
 
 	"github.com/gin-gonic/gin"
@@ -48,12 +48,13 @@ func (c *SettingsController) GetUsersSettings(ctx *gin.Context) {
 
 // UpdateUsersSettings
 // @Summary Update users settings
-// @Description Update global users settings (admin only)
+// @Description Update global users settings (admin only). Theme defaults are validated against the
+// known theme ids; an empty theme field or a missing isUserThemeChoiceAllowed keeps the stored value.
 // @Tags settings
 // @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param request body users_models.UsersSettings true "Settings update data"
+// @Param request body users_dto.UpdateUsersSettingsRequestDTO true "Settings update data"
 // @Success 200 {object} users_models.UsersSettings
 // @Failure 400 {object} map[string]string "Bad request"
 // @Failure 401 {object} map[string]string "Unauthorized"
@@ -66,7 +67,7 @@ func (c *SettingsController) UpdateUsersSettings(ctx *gin.Context) {
 		return
 	}
 
-	var request user_models.UsersSettings
+	var request user_dto.UpdateUsersSettingsRequestDTO
 	if err := ctx.ShouldBindJSON(&request); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
 		return

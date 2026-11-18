@@ -4,6 +4,7 @@ import { apiHelper } from '../../../shared/api/apiHelper';
 import type { GetAuditLogsRequest } from '../../audit-logs/model/GetAuditLogsRequest';
 import type { GetAuditLogsResponse } from '../../audit-logs/model/GetAuditLogsResponse';
 import type { CreateProjectRequest } from '../model/CreateProjectRequest';
+import type { IngestionStatus } from '../model/IngestionStatus';
 import type { ListProjectsResponse } from '../model/ListProjectsResponse';
 import type { Project } from '../model/Project';
 import type { ProjectResponse } from '../model/ProjectResponse';
@@ -40,6 +41,15 @@ export const projectApi = {
     const requestOptions: RequestOptions = new RequestOptions();
     requestOptions.setBody(JSON.stringify(project));
     return apiHelper.fetchPutJson(`${getApiBase()}/projects/${projectId}`, requestOptions);
+  },
+
+  /** Each source sending to the project, with health and recent rates (cached ~30 s server-side). */
+  async getIngestionStatus(projectId: string): Promise<IngestionStatus> {
+    const requestOptions: RequestOptions = new RequestOptions();
+    return apiHelper.fetchGetJson(
+      `${getApiBase()}/projects/${projectId}/ingestion-status`,
+      requestOptions,
+    );
   },
 
   async getRetentionPolicies(projectId: string): Promise<RetentionPolicy[]> {

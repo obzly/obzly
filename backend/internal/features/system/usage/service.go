@@ -70,6 +70,11 @@ func read(now time.Time) (*Response, error) {
 		return nil, err
 	}
 
+	var projects int64
+	if err := storage.GetDb().Raw("SELECT count(*) FROM projects").Scan(&projects).Error; err != nil {
+		return nil, err
+	}
+
 	hours := map[[2]string]*Hour{}
 	for _, row := range hourRows {
 		signal, ok := signals[row.Stream]
@@ -101,7 +106,7 @@ func read(now time.Time) (*Response, error) {
 		}
 	}
 
-	response := &Response{Hours: []Hour{}, Storage: []Storage{}}
+	response := &Response{Hours: []Hour{}, Storage: []Storage{}, Projects: projects}
 	for _, hour := range hours {
 		response.Hours = append(response.Hours, *hour)
 	}

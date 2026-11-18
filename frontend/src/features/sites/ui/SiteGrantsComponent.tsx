@@ -1,6 +1,6 @@
 // Who can reach one Site, and at what role. Central ADMIN only.
 import { DeleteOutlined, LoadingOutlined } from '@ant-design/icons';
-import { App, Button, Input, Select, Spin, Table, Tag } from 'antd';
+import { App, Button, Input, Select, Spin, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -158,16 +158,28 @@ export function SiteGrantsComponent({ site }: Props) {
   };
 
   const columns: ColumnsType<SiteGrant> = [
-    { title: 'User', dataIndex: 'userEmail', key: 'userEmail' },
+    {
+      title: 'User',
+      dataIndex: 'userEmail',
+      key: 'userEmail',
+      render: (email: string) => (
+        <span className="inline-flex items-center gap-2">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--v2-ok-soft)] text-xs font-semibold text-[var(--v2-accent)] uppercase">
+            {(email || '?').slice(0, 2)}
+          </span>
+          {email}
+        </span>
+      ),
+    },
     {
       title: 'Access',
       key: 'access',
       render: (_, grant) => {
         // Removing an SSO-synced grant only lasts until the user's next SSO sign-in.
         const ssoTag = grant.ssoManaged ? (
-          <Tag color="blue" className="ml-2">
+          <span className="ml-2 inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-[var(--v2-blue)]">
             via SSO group
-          </Tag>
+          </span>
         ) : null;
         if (!grant.projectId) {
           return (
@@ -181,7 +193,9 @@ export function SiteGrantsComponent({ site }: Props) {
         return (
           <span>
             {grant.role} on {name ? <b>{name}</b> : 'project'}{' '}
-            <span className="font-mono text-xs text-gray-400">{grant.projectId}</span>
+            <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
+              {grant.projectId}
+            </span>
             {ssoTag}
           </span>
         );
@@ -192,16 +206,22 @@ export function SiteGrantsComponent({ site }: Props) {
       key: 'actions',
       width: 60,
       render: (_, grant) => (
-        <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(grant)} />
+        <Button
+          type="text"
+          danger
+          icon={<DeleteOutlined />}
+          aria-label={`Remove grant for ${grant.userEmail}`}
+          onClick={() => handleDelete(grant)}
+        />
       ),
     },
   ];
 
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-end gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-gray-200 p-3 dark:border-gray-700">
         <div className="w-[260px]">
-          <div className="mb-1 text-xs text-gray-500">User</div>
+          <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">User</div>
           <Select
             showSearch
             filterOption={false}
@@ -214,17 +234,17 @@ export function SiteGrantsComponent({ site }: Props) {
           />
         </div>
         <div className="w-[200px]">
-          <div className="mb-1 text-xs text-gray-500">Role</div>
+          <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">Role</div>
           <Select value={role} onChange={setRole} options={ROLE_OPTIONS} className="w-full" />
         </div>
         {!isSiteWideRole(role) && (
           <div className="w-[280px]">
-            <div className="mb-1 flex items-center justify-between text-xs text-gray-500">
+            <div className="mb-1 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
               <span>Project (on this Site)</span>
               {siteProjects !== null && (
                 <button
                   type="button"
-                  className="text-emerald-600 hover:underline"
+                  className="text-accent-600 hover:underline"
                   onClick={() => {
                     setIsManualProjectId((m) => !m);
                     setProjectId('');
@@ -270,12 +290,12 @@ export function SiteGrantsComponent({ site }: Props) {
       </div>
 
       {!isSiteWideRole(role) && projectsError && (
-        <div className="-mt-2 mb-4 text-xs text-gray-500">
+        <div className="rounded-xl bg-gray-50 px-3.5 py-3 text-xs text-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
           Couldn&apos;t list this Site&apos;s projects ({projectsError}). The list uses your own
           access to the Site, so grant yourself <b>Site ADMIN</b> here first (then{' '}
           <button
             type="button"
-            className="text-emerald-600 hover:underline"
+            className="text-accent-600 hover:underline"
             onClick={loadSiteProjects}
           >
             retry

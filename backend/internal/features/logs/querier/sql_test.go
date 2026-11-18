@@ -1,6 +1,7 @@
 package logs_querier_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -128,33 +129,22 @@ func Test_ExecuteSQLQuery_InvalidSQL_ReturnsError(t *testing.T) {
 	}
 }
 
-func Test_ExecuteSQLQuery_ExternalAccessDisabled_BlocksFileReadEvenIfPastBlocklist(t *testing.T) {
-	// Defense in depth: a file-reading table function not in the keyword
-	// blocklist still fails, as the sandbox disables external access.
+func Test_ExecuteSQLQuery_ServerSettingOrFileFunction_IsRefused(t *testing.T) {
 	projectID, querier := seedProject(t, []*logs_core.LogItem{
 		{Timestamp: time.Now().UTC(), Level: logs_core.LogLevelInfo, Message: "x"},
 	})
 
-	_, err := querier.ExecuteSQLQuery(projectID, &logs_core.ExecuteSQLQueryRequestDTO{
-		SQL:       "SELECT * FROM read_csv_auto('/etc/passwd')",
-		TimeRange: timeRangeCoveringLast24h(),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Permission Error")
-}
-
-func Test_ExecuteSQLQuery_SandboxConfiguration_IsLocked(t *testing.T) {
-	projectID, querier := seedProject(t, []*logs_core.LogItem{
-		{Timestamp: time.Now().UTC(), Level: logs_core.LogLevelInfo, Message: "x"},
-	})
-
-	response, err := querier.ExecuteSQLQuery(projectID, &logs_core.ExecuteSQLQueryRequestDTO{
-		SQL:       "SELECT current_setting('lock_configuration') AS locked",
-		TimeRange: timeRangeCoveringLast24h(),
-	})
-	require.NoError(t, err)
-	require.Len(t, response.Rows, 1)
-	assert.Equal(t, true, response.Rows[0][0])
+	for _, statement := range []string{
+		"SELECT * FROM read_csv_auto('/etc/passwd')",
+		"SELECT current_setting('lock_configuration') AS locked",
+		"SELECT * FROM duckdb_settings()",
+	} {
+		_, err := querier.ExecuteSQLQuery(projectID, &logs_core.ExecuteSQLQueryRequestDTO{
+			SQL:       statement,
+			TimeRange: timeRangeCoveringLast24h(),
+		})
+		assert.ErrorContains(t, err, "disallowed function", statement)
+	}
 }
 
 func Test_ExecuteSQLQuery_RangeOverScanBudget_RefusedBeforeReading(t *testing.T) {
@@ -168,4 +158,20 @@ func Test_ExecuteSQLQuery_RangeOverScanBudget_RefusedBeforeReading(t *testing.T)
 		ScanBudget: 1,
 	})
 	require.ErrorIs(t, err, query.ErrScanBudget)
+}
+
+func Test_ExecuteSQLQueryContext_CancelledContext_StopsTheQuery(t *testing.T) {
+	now := time.Now().UTC()
+	projectID, querier := seedProject(t, []*logs_core.LogItem{
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "a"},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := querier.ExecuteSQLQueryContext(ctx, projectID, &logs_core.ExecuteSQLQueryRequestDTO{
+		SQL:       "SELECT count(*) FROM logs",
+		TimeRange: timeRangeCoveringLast24h(),
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
 }

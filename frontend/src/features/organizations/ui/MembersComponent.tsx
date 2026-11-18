@@ -1,5 +1,6 @@
 import { LoadingOutlined } from '@ant-design/icons';
-import { App, Button, Input, Popconfirm, Select, Spin, Table, Tag } from 'antd';
+import { App, Button, Input, Popconfirm, Select, Spin, Table, Tooltip } from 'antd';
+import dayjs from 'dayjs';
 import { useEffect, useState } from 'react';
 
 import {
@@ -8,7 +9,8 @@ import {
   type OrgRole,
   organizationsApi,
 } from '../../../entity/organizations';
-import { errorMessage } from './lib';
+import { Card } from '../../../shared/ui/v2';
+import { AVATAR_CLASS, errorMessage, initialsOf, pillClass } from './lib';
 
 interface Props {
   org: OrgDetail;
@@ -65,81 +67,130 @@ export const MembersComponent = ({ org, canManage, canMakeOwners }: Props) => {
     load();
   }, [org.id]);
 
-  if (isLoading) {
-    return <Spin indicator={<LoadingOutlined spin />} />;
-  }
-
   const roleOptions = ROLES.filter((r) => canMakeOwners || r.value !== 'ORG_OWNER');
 
   return (
-    <div>
+    <Card
+      title="Members"
+      subtitle={
+        isLoading ? undefined : `${members.length} member${members.length === 1 ? '' : 's'}`
+      }
+      bodyClassName="flex flex-col gap-4"
+    >
       {canManage && (
-        <div className="mb-4 flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input
             placeholder="User email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            style={{ width: 300 }}
+            className="min-w-0 flex-[1_1_220px]"
+            style={{ maxWidth: 320 }}
           />
           <Select value={role} onChange={setRole} options={roleOptions} style={{ width: 130 }} />
-          <Button disabled={!email.trim()} onClick={() => save({ email: email.trim(), role })}>
+          <Button
+            type="primary"
+            disabled={!email.trim()}
+            onClick={() => save({ email: email.trim(), role })}
+          >
             Add
           </Button>
         </div>
       )}
-      <Table
-        rowKey="userId"
-        dataSource={members}
-        pagination={false}
-        columns={[
-          {
-            title: 'User',
-            render: (_, m) => (
-              <span>
-                {m.name} ({m.email})
-                {m.suspended && (
-                  <Tag color="orange" className="ml-2">
-                    suspended by SCIM
-                  </Tag>
-                )}
-              </span>
-            ),
-          },
-          {
-            title: 'Role',
-            width: 170,
-            render: (_, m) =>
-              canManage && (canMakeOwners || m.role !== 'ORG_OWNER') ? (
-                <Select
-                  size="small"
-                  value={m.role}
-                  onChange={(value) => save({ userId: m.userId, role: value })}
-                  options={roleOptions}
-                  style={{ width: 120 }}
-                />
-              ) : (
-                ROLES.find((r) => r.value === m.role)?.label
+      {isLoading ? (
+        <Spin indicator={<LoadingOutlined spin />} />
+      ) : (
+        <Table
+          rowKey="userId"
+          size="small"
+          dataSource={members}
+          pagination={false}
+          scroll={{ x: 820 }}
+          columns={[
+            {
+              title: 'User',
+              render: (_, m) => (
+                <span className="flex items-center gap-2.5">
+                  <span className={AVATAR_CLASS} aria-hidden="true">
+                    {initialsOf(m.name, m.email)}
+                  </span>
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    <span className="text-gray-900 dark:text-gray-100">{m.name}</span>
+                    <span className="text-gray-500 dark:text-gray-400">({m.email})</span>
+                    {m.suspended && <span className={pillClass('warn')}>suspended by SCIM</span>}
+                  </span>
+                </span>
               ),
-          },
-          {
-            title: '',
-            width: 90,
-            render: (_, m) =>
-              canManage && (canMakeOwners || m.role !== 'ORG_OWNER') ? (
-                <Popconfirm
-                  title={`Remove ${m.email} from ${org.name} and its teams?`}
-                  okText="Remove"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => remove(m)}
-                >
-                  <Button size="small" danger>
-                    Remove
-                  </Button>
-                </Popconfirm>
-              ) : null,
-          },
-        ]}
-      />
-    </div>
+            },
+            {
+              title: 'Role',
+              width: 170,
+              render: (_, m) =>
+                canManage && (canMakeOwners || m.role !== 'ORG_OWNER') ? (
+                  <Select
+                    size="small"
+                    value={m.role}
+                    onChange={(value) => save({ userId: m.userId, role: value })}
+                    options={roleOptions}
+                    style={{ width: 120 }}
+                  />
+                ) : (
+                  <span className={pillClass(m.role === 'ORG_MEMBER' ? 'neutral' : 'ok')}>
+                    {ROLES.find((r) => r.value === m.role)?.label}
+                  </span>
+                ),
+            },
+            {
+              title: 'Teams',
+              render: (_, m) =>
+                m.teams === undefined ? (
+                  <span className="text-gray-400 dark:text-gray-500">n/a</span>
+                ) : m.teams.length === 0 ? (
+                  <span className="text-gray-400 dark:text-gray-500">None</span>
+                ) : (
+                  <span className="flex flex-wrap gap-1">
+                    {m.teams.map((team) => (
+                      <span key={team} className={pillClass('neutral')}>
+                        {team}
+                      </span>
+                    ))}
+                  </span>
+                ),
+            },
+            {
+              title: 'Joined',
+              width: 130,
+              render: (_, m) =>
+                m.createdAt ? (
+                  <Tooltip title={dayjs(m.createdAt).format('YYYY-MM-DD HH:mm')}>
+                    <span className="text-gray-500 dark:text-gray-400">
+                      {dayjs(m.createdAt).format('MMM D, YYYY')}
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <span className="text-gray-400 dark:text-gray-500">n/a</span>
+                ),
+            },
+            {
+              title: '',
+              width: 90,
+              align: 'right',
+              render: (_, m) =>
+                canManage && (canMakeOwners || m.role !== 'ORG_OWNER') ? (
+                  <Popconfirm
+                    title={`Remove ${m.email} from ${org.name} and its teams?`}
+                    okText="Remove"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => remove(m)}
+                  >
+                    <Button size="small" danger>
+                      Remove
+                    </Button>
+                  </Popconfirm>
+                ) : null,
+            },
+          ]}
+        />
+      )}
+    </Card>
   );
 };

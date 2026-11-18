@@ -5,10 +5,12 @@ import {
   MEMORY_LIMITER_PROCESSOR_YAML,
   OTLP_REMOTE_FIELD,
   RESOURCEDETECTION_PROCESSOR_YAML,
+  SOURCE_NAME_FIELD,
   extensionsYaml,
   otlpHttpExporterYaml,
   otlpReceiverYaml,
   serviceExtensionsYaml,
+  sourceNameAttributeYaml,
 } from './otelCollectorCommon';
 import type { DataSourceDefinition } from './types';
 
@@ -32,6 +34,7 @@ export const haproxyDataSource: DataSourceDefinition = {
       helpText:
         'HAProxy logs to syslog by default - point this at wherever your syslog daemon writes it.',
     },
+    SOURCE_NAME_FIELD,
     OTLP_REMOTE_FIELD,
   ],
   build: ({ baseUrl, apiKey, fieldValues }) => {
@@ -83,7 +86,7 @@ ${RESOURCEDETECTION_PROCESSOR_YAML}
     attributes:
       - key: service.name
         value: haproxy
-        action: upsert
+        action: upsert${sourceNameAttributeYaml(fieldValues)}
 
 ${extensionsYaml({ fileStorageDir: logPath ? FILE_STORAGE_DIR : undefined })}
 

@@ -4,6 +4,7 @@ import {
   CopyOutlined,
   DownloadOutlined,
   LoadingOutlined,
+  MenuUnfoldOutlined,
   MinusOutlined,
   PlusOutlined,
   SettingOutlined,
@@ -25,8 +26,19 @@ import {
   useDisplayTimezone,
 } from '../../../shared/time';
 import { levelColor } from '../lib/logLevels';
+import {
+  type DetailPlacement,
+  type DetailWidth,
+  LAYOUT_PRESETS,
+  type LogsViewSettings,
+  type RowDensity,
+  type TextSize,
+  activePreset,
+} from '../lib/logsViewSettings';
+import { LevelPillComponent } from './LevelPillComponent';
 import { LogContextPanelComponent } from './LogContextPanelComponent';
-import { LogDetailDrawerComponent } from './LogDetailDrawerComponent';
+import { type DetailViewMode, LogDetailPanelComponent } from './LogDetailPanelComponent';
+import { ToggleGroupComponent } from './ToggleGroupComponent';
 
 const STORAGE_KEY = 'obzly-message-length';
 const COLUMN_WIDTHS_STORAGE_KEY = 'obzly-query-results-column-widths';
@@ -50,6 +62,11 @@ const BUILT_IN_COLUMNS: { id: ColumnId; label: string }[] = [
 ];
 const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = ['timestamp', 'level', 'message'];
 const DEFAULT_COLUMN_WIDTHS: Record<string, number> = { timestamp: 175, level: 85, service: 160 };
+// The side details panel's S/M/L widths; it never takes more than DETAIL_MAX_SHARE.
+const DETAIL_WIDTHS: Record<DetailWidth, number> = { s: 340, m: 440, l: 600 };
+const DETAIL_MAX_SHARE = '45%';
+// The bottom details panel takes at most this share of the page height.
+const DETAIL_BELOW_SHARE = 0.45;
 
 // OTLP and plain REST ingest name the service field differently.
 const SERVICE_FIELD_KEYS = ['service_name', 'service'];
@@ -143,17 +160,6 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
   );
 };
 
-const LEVEL_BADGE_CLASSES: Record<string, string> = {
-  ERROR: 'bg-red-100 text-red-800 border-red-200',
-  WARN: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-  INFO: 'bg-blue-100 text-blue-800 border-blue-200',
-  DEBUG:
-    'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100 border-gray-200 dark:border-gray-700',
-  TRACE: 'bg-purple-100 text-purple-800 border-purple-200',
-  FATAL: 'bg-red-200 text-red-900 border-red-300',
-  CRITICAL: 'bg-red-200 text-red-900 border-red-300',
-};
-
 interface Props {
   queryResults: LogItem[];
   totalResults: number;
@@ -178,6 +184,20 @@ interface Props {
   onOpenContextAsSearch?: (scope: LogContextScope[], from: dayjs.Dayjs, to: dayjs.Dayjs) => void;
   /** "Open trace" on a log with a trace id. */
   onOpenTrace?: (traceId: string, timestamp: string) => void;
+  /** The page layout (presets, details placement, rows) and its setters. */
+  view: LogsViewSettings;
+  onViewChange: (patch: Partial<LogsViewSettings>) => void;
+  onViewReset: () => void;
+  /** The Newest/Oldest sort button, shown in the toolbar. */
+  sortControl?: React.ReactNode;
+  /** Live tail controls (Live, Pause/Resume, Clear), shown in the toolbar. */
+  liveControls?: React.ReactNode;
+  /** The Lines / Chart switch, first in the toolbar. */
+  viewSwitch?: React.ReactNode;
+  /** Set while the fields panel is hidden: shows a button that brings it back. */
+  onShowFields?: () => void;
+  /** Height of the page's scroll area, so the details panel fits on screen. */
+  detailMaxHeight?: number;
 }
 
 const downloadFile = (name: string, content: string, type: string) => {
@@ -207,7 +227,15 @@ export const QueryResultsComponent = ({
   projectId,
   onOpenContextAsSearch,
   onOpenTrace,
-}: Props): React.JSX.Element | null => {
+  view,
+  onViewChange,
+  onViewReset,
+  sortControl,
+  liveControls,
+  viewSwitch,
+  onShowFields,
+  detailMaxHeight,
+}: Props): React.JSX.Element => {
   const [messageLength, setMessageLength] = useState<number>(getStoredMessageLength());
   const [selectedLog, setSelectedLog] = useState<LogItem | null>(null);
   const [contextLog, setContextLog] = useState<LogItem | null>(null);
@@ -220,6 +248,8 @@ export const QueryResultsComponent = ({
     readStorage(WRAP_STORAGE_KEY, (raw) => raw === 'true', false),
   );
   const [columnSearch, setColumnSearch] = useState('');
+  // Kept here so it survives switching lines (and inline rows scrolling away).
+  const [detailViewMode, setDetailViewMode] = useState<DetailViewMode>('json');
   const resizingColumnKey = useRef<string | null>(null);
 
   const timeFormat = useMemo(() => getUserTimeFormatWithMs(), []);
@@ -292,15 +322,28 @@ export const QueryResultsComponent = ({
   const rowVirtualizer = useVirtualizer({
     count: queryResults.length,
     getScrollElement,
-    estimateSize: () => 26,
+    estimateSize: () => Math.round(view.textSize * 1.5) + (view.density === 'compact' ? 4 : 8),
     overscan: 10,
     scrollMargin,
   });
 
-  // Toggling wrap changes every row's height - drop cached measurements.
+  const isInlineDetail = view.detail === 'inline';
+  const hasSidePanel = !!selectedLog && view.detail === 'side';
+
+  // Wrap, columns, row size and the side panel change row heights - drop
+  // cached measurements.
   useEffect(() => {
     rowVirtualizer.measure();
-  }, [wrap, visibleColumns, rowVirtualizer]);
+  }, [
+    wrap,
+    visibleColumns,
+    view.density,
+    view.textSize,
+    view.detail,
+    view.detailWidth,
+    hasSidePanel,
+    rowVirtualizer,
+  ]);
 
   // Re-check after each load: parked at the bottom, the browser fires no
   // more scroll events, so loading would stall.
@@ -343,6 +386,18 @@ export const QueryResultsComponent = ({
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [hasExecuted]);
+
+  // Esc closes the details (the drawer they replace did too); the logs-around
+  // panel handles its own Esc while it's open.
+  useEffect(() => {
+    if (!selectedLog || contextLog) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || isTypingTarget(e.target)) return;
+      setSelectedLog(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [selectedLog, contextLog]);
 
   // Cursor for the histogram: hovered row wins, else the open row.
   const cursorTime = hoveredTimestamp ?? selectedLog?.timestamp ?? null;
@@ -409,9 +464,16 @@ export const QueryResultsComponent = ({
     [columnWidths],
   );
 
-  if (!hasExecuted) {
-    return null;
-  }
+  // Clicking the open line again closes its details.
+  const toggleSelected = (log: LogItem) =>
+    setSelectedLog((prev) => (prev?.id === log.id ? null : log));
+
+  const showContext = projectId
+    ? (log: LogItem) => {
+        setSelectedLog(null);
+        setContextLog(log);
+      }
+    : undefined;
 
   const widthOf = (id: ColumnId) => columnWidths[id] ?? DEFAULT_FIELD_COLUMN_WIDTH;
 
@@ -420,21 +482,13 @@ export const QueryResultsComponent = ({
       case 'timestamp':
         return (
           <Tooltip title={dayjs(log.timestamp).fromNow()}>
-            <span className="whitespace-nowrap text-gray-600 dark:text-gray-300">
+            <span className="whitespace-nowrap text-gray-500 dark:text-gray-400">
               {formatInTimezone(log.timestamp, timeFormat.format, timezone)}
             </span>
           </Tooltip>
         );
-      case 'level': {
-        const colorClass = LEVEL_BADGE_CLASSES[log.level.toUpperCase()] ?? LEVEL_BADGE_CLASSES.INFO;
-        return (
-          <span
-            className={`inline-block rounded border px-1 text-xs leading-4 font-medium ${colorClass}`}
-          >
-            {log.level}
-          </span>
-        );
-      }
+      case 'level':
+        return <LevelPillComponent level={log.level} />;
       case 'service':
         return <span className="text-gray-700 dark:text-gray-200">{serviceOf(log)}</span>;
       case 'message': {
@@ -445,7 +499,9 @@ export const QueryResultsComponent = ({
           <span className="text-gray-900 dark:text-gray-100">
             {text}
             {truncated && wrap && (
-              <span className="ml-1 text-emerald-600 hover:text-emerald-700">(view details)</span>
+              <span className="text-accent-600 hover:text-accent-700 dark:text-accent-400 ml-1">
+                (view details)
+              </span>
             )}
           </span>
         );
@@ -478,7 +534,7 @@ export const QueryResultsComponent = ({
 
   const columnPicker = (
     <div className="w-64">
-      <div className="mb-1 text-xs font-medium text-gray-500 uppercase dark:text-gray-300">
+      <div className="mb-1 text-xs font-semibold tracking-wide text-gray-500 uppercase dark:text-gray-400">
         Columns
       </div>
       <div className="flex flex-col gap-0.5">
@@ -497,7 +553,7 @@ export const QueryResultsComponent = ({
           </Checkbox>
         ))}
       </div>
-      <div className="mt-2 mb-1 text-xs font-medium text-gray-500 uppercase dark:text-gray-300">
+      <div className="mt-2 mb-1 border-t border-gray-100 pt-2 text-xs font-semibold tracking-wide text-gray-500 uppercase dark:border-gray-700 dark:text-gray-400">
         Fields
       </div>
       <Input
@@ -507,7 +563,7 @@ export const QueryResultsComponent = ({
         value={columnSearch}
         onChange={(e) => setColumnSearch(e.target.value)}
       />
-      <div className="mt-1 flex max-h-56 flex-col gap-0.5 overflow-y-auto">
+      <div className="mt-1 flex max-h-56 flex-col gap-0.5 overflow-auto">
         {pickerFieldKeys.length === 0 ? (
           <span className="py-1 text-xs text-gray-400">
             {availableFieldKeys.length === 0 ? 'No fields in these results' : 'No matching fields'}
@@ -529,8 +585,7 @@ export const QueryResultsComponent = ({
       </div>
       <Button
         size="small"
-        type="link"
-        className="mt-1 !px-0"
+        className="mt-2"
         onClick={() => {
           setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
           setColumnWidths(DEFAULT_COLUMN_WIDTHS);
@@ -569,116 +624,298 @@ export const QueryResultsComponent = ({
     downloadFile(`logs-${stamp}.csv`, toCSV([header, ...lines]), 'text/csv');
   };
 
-  const displaySettings = (
-    <div className="flex w-64 flex-col gap-3 text-xs">
-      <div>
-        <div className="mb-1 text-gray-500 dark:text-gray-300">Timezone</div>
-        <Select
-          size="small"
-          showSearch
-          value={timezone}
-          onChange={handleTimezoneChange}
-          options={timezoneOptions}
-          className="w-full"
-          popupMatchSelectWidth={false}
-          filterOption={(input, option) =>
-            (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-          }
-        />
-      </div>
-      <div>
-        <label htmlFor="messageLength" className="mb-1 block text-gray-500 dark:text-gray-300">
-          Message length (characters)
-        </label>
+  const preset = activePreset(view);
+  const presetLabel = LAYOUT_PRESETS.find((p) => p.id === preset)?.label;
+
+  const sectionLabel = (text: string, divided = false) => (
+    <span
+      className={`col-span-2 text-[11px] font-semibold tracking-wider text-gray-500 uppercase dark:text-gray-400 ${
+        divided ? 'mt-1 border-t border-gray-100 pt-2 dark:border-gray-700' : ''
+      }`}
+    >
+      {text}
+    </span>
+  );
+
+  const viewSettings = (
+    <div className="grid w-[340px] max-w-[calc(100vw-48px)] grid-cols-[104px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-[13px]">
+      {sectionLabel('Display')}
+      <span className="text-gray-500 dark:text-gray-400">Timezone</span>
+      <Select
+        size="small"
+        showSearch
+        value={timezone}
+        onChange={handleTimezoneChange}
+        options={timezoneOptions}
+        className="w-full min-w-0"
+        popupMatchSelectWidth={false}
+        aria-label="Timezone"
+        filterOption={(input, option) =>
+          (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+        }
+      />
+      <label htmlFor="messageLength" className="text-gray-500 dark:text-gray-400">
+        Message length
+      </label>
+      <span
+        className="flex items-center gap-2"
+        title="Characters shown per message while Wrap is off"
+      >
         <input
           id="messageLength"
           type="number"
           value={messageLength}
-          onChange={(e) => setMessageLength(Math.max(1, parseInt(e.target.value)))}
-          className="w-24 rounded border border-gray-300 px-1 py-0.5 text-xs focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 focus:outline-none dark:border-gray-600"
+          onChange={(e) => {
+            const parsed = parseInt(e.target.value, 10);
+            if (!isNaN(parsed)) setMessageLength(Math.min(1000, Math.max(1, parsed)));
+          }}
+          className="focus:border-accent-600 focus:ring-accent-600 w-20 rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs text-gray-900 focus:ring-1 focus:outline-none dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
           min="1"
           max="1000"
         />
-      </div>
+        <span className="text-[11px] text-gray-400">
+          {wrap ? 'ignored while Wrap is on' : 'characters'}
+        </span>
+      </span>
+
+      {sectionLabel('Layout', true)}
+      <span className="text-gray-500 dark:text-gray-400">Panels</span>
+      <span>
+        <ToggleGroupComponent<'fields' | 'chart'>
+          label="Panels"
+          size="small"
+          options={[
+            { value: 'fields', label: 'Fields', pressed: view.showFields },
+            { value: 'chart', label: 'Chart', pressed: view.showChart },
+          ]}
+          onToggle={(panel) =>
+            onViewChange(
+              panel === 'fields'
+                ? { showFields: !view.showFields }
+                : { showChart: !view.showChart },
+            )
+          }
+        />
+      </span>
+      <span className="text-gray-500 dark:text-gray-400">Details</span>
+      <span>
+        <ToggleGroupComponent<DetailPlacement>
+          label="Details"
+          size="small"
+          options={(
+            [
+              ['side', 'Side', 'Beside the lines'],
+              ['below', 'Below', 'Docked under the lines'],
+              ['inline', 'In row', 'Inside the clicked row'],
+            ] as const
+          ).map(([value, label, hint]) => ({
+            value,
+            label,
+            hint,
+            pressed: view.detail === value,
+          }))}
+          onToggle={(detail) => onViewChange({ detail })}
+        />
+      </span>
+      <span className="text-gray-500 dark:text-gray-400">Details width</span>
+      <span>
+        <ToggleGroupComponent<DetailWidth>
+          label="Details width"
+          size="small"
+          options={(['s', 'm', 'l'] as const).map((value) => ({
+            value,
+            label: value.toUpperCase(),
+            pressed: view.detailWidth === value,
+          }))}
+          // A width only applies beside the lines, so picking one moves them there.
+          onToggle={(detailWidth) => onViewChange({ detailWidth, detail: 'side' })}
+        />
+      </span>
+      <span className="text-gray-500 dark:text-gray-400">Rows</span>
+      <span>
+        <ToggleGroupComponent<RowDensity>
+          label="Rows"
+          size="small"
+          options={(
+            [
+              ['comfortable', 'Comfortable'],
+              ['compact', 'Compact'],
+            ] as const
+          ).map(([value, label]) => ({ value, label, pressed: view.density === value }))}
+          onToggle={(density) => onViewChange({ density })}
+        />
+      </span>
+      <span className="text-gray-500 dark:text-gray-400">Text size</span>
+      <span>
+        <ToggleGroupComponent<TextSize>
+          label="Text size"
+          size="small"
+          options={([12, 13, 14] as const).map((value) => ({
+            value,
+            label: String(value),
+            pressed: view.textSize === value,
+          }))}
+          onToggle={(textSize) => onViewChange({ textSize })}
+        />
+      </span>
+      <span className="col-span-2 mt-1 flex items-center justify-between gap-2 border-t border-gray-100 pt-2 dark:border-gray-700">
+        <span className="text-[11px] text-gray-400">Saved for you in this browser</span>
+        <Tooltip title="Back to the Split layout and the default message length">
+          <Button
+            size="small"
+            type="link"
+            className="!px-0"
+            onClick={() => {
+              onViewReset();
+              setMessageLength(1000);
+            }}
+          >
+            Reset
+          </Button>
+        </Tooltip>
+      </span>
     </div>
   );
 
-  return (
-    <div
+  const countText =
+    isExecuting && queryResults.length === 0
+      ? 'Searching…'
+      : `${queryResults.length.toLocaleString()}${totalResults > queryResults.length ? `+ of ${totalResults.toLocaleString()}` : totalResults < 0 && hasMoreResults ? '+' : ''} results${queryResults.length > 0 ? ' loaded' : ' found'}`;
+
+  const rowPadding =
+    view.density === 'compact' ? (wrap ? 'py-1' : 'py-0.5') : wrap ? 'py-1.5' : 'py-1';
+  const rowActionButton = '!h-5 !w-5 !min-w-0 !p-0 text-[11px]';
+
+  const detailPanel = (variant: 'side' | 'below' | 'inline', log: LogItem) => (
+    <LogDetailPanelComponent
+      log={log}
+      variant={variant}
+      viewMode={detailViewMode}
+      onViewModeChange={setDetailViewMode}
+      onClose={() => setSelectedLog(null)}
+      onAddFieldToQuery={onAddFieldToQuery}
+      onExcludeFieldFromQuery={onExcludeFieldFromQuery}
+      timezone={timezone}
+      onOpenTrace={onOpenTrace}
+      onShowContext={showContext}
+      onIncludePattern={onIncludePattern}
+    />
+  );
+
+  const resultsCard = (
+    <section
       ref={containerRef}
-      className="w-full rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800"
+      aria-label="Log lines"
+      className="w-full min-w-0 flex-1 rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
     >
-      <div className="border-b border-gray-200 px-3 py-1.5 dark:border-gray-700">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-normal text-gray-500 dark:text-gray-300">
-            {isExecuting && queryResults.length === 0 ? (
-              <Spin indicator={<LoadingOutlined spin />} size="small" />
-            ) : (
-              `${queryResults.length.toLocaleString()}${totalResults > queryResults.length ? `+ of ${totalResults.toLocaleString()}` : totalResults < 0 && hasMoreResults ? '+' : ''} results${queryResults.length > 0 ? ' loaded' : ' found'}`
-            )}
-          </span>
-          <div className="flex flex-wrap items-center gap-2">
-            <Tooltip title="Wrap long messages (W)">
-              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-gray-500 dark:text-gray-300">
-                Wrap
-                <kbd className="rounded border border-gray-300 px-1 font-mono text-[10px] leading-4 dark:border-gray-600">
-                  W
-                </kbd>
-                <Switch size="small" checked={wrap} onChange={setWrap} />
-              </label>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+        <div className="flex min-w-0 items-center gap-3">
+          {onShowFields && (
+            <Tooltip title="Show the fields panel">
+              <Button
+                size="small"
+                icon={<MenuUnfoldOutlined />}
+                onClick={onShowFields}
+                aria-label="Show fields panel"
+              >
+                Fields
+              </Button>
             </Tooltip>
-
-            <Popover content={columnPicker} trigger="click" placement="bottomRight">
-              <Tooltip title="Choose columns">
-                <Button size="small" icon={<TableOutlined />} aria-label="Choose columns" />
-              </Tooltip>
-            </Popover>
-
-            <Dropdown
-              trigger={['click']}
-              placement="bottomRight"
-              disabled={queryResults.length === 0}
-              menu={{
-                items: [
-                  {
-                    key: 'csv',
-                    label: `CSV - ${queryResults.length.toLocaleString()} loaded rows`,
-                  },
-                  {
-                    key: 'json',
-                    label: `JSON - ${queryResults.length.toLocaleString()} loaded rows`,
-                  },
-                ],
-                onClick: ({ key }) => exportRows(key as 'csv' | 'json'),
-              }}
-            >
-              <Tooltip title="Export loaded results">
-                <Button size="small" icon={<DownloadOutlined />} aria-label="Export results" />
-              </Tooltip>
-            </Dropdown>
-
-            <Popover content={displaySettings} trigger="click" placement="bottomRight">
-              <Tooltip title="Display settings (timezone, message length)">
-                <Button size="small" icon={<SettingOutlined />} aria-label="Display settings" />
-              </Tooltip>
-            </Popover>
+          )}
+          <div className="min-w-0">
+            <h2 className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-50">Lines</h2>
+            <p className="m-0 mt-0.5 flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+              {isExecuting && queryResults.length === 0 && (
+                <Spin indicator={<LoadingOutlined spin />} size="small" />
+              )}
+              <span>
+                {countText} · {presetLabel ? `${presetLabel} layout` : 'Custom layout'}
+                {!selectedLog && queryResults.length > 0 && ' · click a line for its details'}
+              </span>
+            </p>
           </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {viewSwitch}
+          {liveControls}
+          <ToggleGroupComponent
+            label="Layout"
+            options={LAYOUT_PRESETS.map((p) => ({
+              value: p.id,
+              label: p.label,
+              hint: p.hint,
+              pressed: preset === p.id,
+            }))}
+            onToggle={(id) => {
+              const next = LAYOUT_PRESETS.find((p) => p.id === id);
+              if (next) onViewChange(next.patch);
+            }}
+          />
+          {sortControl}
+          <Tooltip title="Wrap long messages (W)">
+            <label className="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-[10px] border border-gray-200 px-2.5 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-300">
+              Wrap
+              <kbd className="rounded border border-gray-300 px-1 font-mono text-[10px] leading-4 dark:border-gray-600">
+                W
+              </kbd>
+              <Switch size="small" checked={wrap} onChange={setWrap} />
+            </label>
+          </Tooltip>
+
+          <Popover content={columnPicker} trigger="click" placement="bottomRight" destroyOnHidden>
+            <Tooltip title="Choose columns">
+              <Button icon={<TableOutlined />} aria-label="Choose columns" />
+            </Tooltip>
+          </Popover>
+
+          <Dropdown
+            trigger={['click']}
+            placement="bottomRight"
+            disabled={queryResults.length === 0}
+            menu={{
+              items: [
+                {
+                  key: 'csv',
+                  label: `CSV - ${queryResults.length.toLocaleString()} loaded rows`,
+                },
+                {
+                  key: 'json',
+                  label: `JSON - ${queryResults.length.toLocaleString()} loaded rows`,
+                },
+              ],
+              onClick: ({ key }) => exportRows(key as 'csv' | 'json'),
+            }}
+          >
+            <Tooltip title="Export loaded results">
+              <Button icon={<DownloadOutlined />} aria-label="Export results" />
+            </Tooltip>
+          </Dropdown>
+
+          <Popover content={viewSettings} trigger="click" placement="bottomRight" destroyOnHidden>
+            <Tooltip title="View settings (timezone, message length, layout)">
+              <Button icon={<SettingOutlined />} aria-label="View settings" />
+            </Tooltip>
+          </Popover>
         </div>
       </div>
 
-      <div className="p-3">
-        {isExecuting && queryResults.length === 0 ? (
-          <div className="flex h-32 items-center justify-center">
+      <div className="px-2 pt-1 pb-2">
+        {!hasExecuted && !isExecuting ? (
+          <div className="flex h-20 items-center justify-center text-sm text-gray-500 dark:text-gray-400">
+            Run a search to see matching logs.
+          </div>
+        ) : isExecuting && queryResults.length === 0 ? (
+          <div className="flex h-32 items-center justify-center text-gray-600 dark:text-gray-300">
             <Spin indicator={<LoadingOutlined spin />} />
             <span className="ml-2 text-sm">Executing query...</span>
           </div>
         ) : queryResults.length === 0 ? (
-          <div className="flex h-20 items-center justify-center text-sm text-gray-500 dark:text-gray-300">
+          <div className="flex h-20 items-center justify-center text-sm text-gray-500 dark:text-gray-400">
             No logs found matching your query.
           </div>
         ) : (
           <div className="space-y-1">
-            <div className="sticky top-0 z-10 flex gap-3 border-b border-l-[3px] border-gray-200 border-l-transparent bg-white pt-1 pr-[88px] pb-1 pl-2 text-xs font-medium text-gray-700 dark:border-gray-700 dark:border-l-transparent dark:bg-gray-800 dark:text-gray-200">
+            <div className="sticky top-0 z-10 flex gap-3 border-b border-l-[3px] border-gray-200 border-l-transparent bg-white pt-2 pr-[96px] pb-1.5 pl-2 text-xs font-medium text-gray-500 dark:border-gray-700 dark:border-l-transparent dark:bg-gray-800 dark:text-gray-400">
               {shownColumns.map((id) => (
                 <div
                   key={id}
@@ -690,7 +927,7 @@ export const QueryResultsComponent = ({
                   {id !== 'message' && (
                     <div
                       onMouseDown={handleColumnResizeStart(id)}
-                      className="absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-emerald-400"
+                      className="hover:bg-accent-400 absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize"
                     />
                   )}
                 </div>
@@ -711,6 +948,8 @@ export const QueryResultsComponent = ({
                     key={log.id}
                     ref={rowVirtualizer.measureElement}
                     data-index={virtualRow.index}
+                    tabIndex={0}
+                    aria-current={isSelected ? 'true' : undefined}
                     style={{
                       position: 'absolute',
                       top: 0,
@@ -719,28 +958,43 @@ export const QueryResultsComponent = ({
                       // virtualRow.start includes scrollMargin; rows sit in the list.
                       transform: `translateY(${virtualRow.start - scrollMargin}px)`,
                       borderLeftColor: levelColor(log.level),
+                      fontSize: view.textSize,
                     }}
-                    className={`group flex cursor-pointer items-start gap-3 border-l-[3px] pr-[88px] pl-2 ${wrap ? 'py-1' : 'py-0.5'} !font-mono text-xs hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                    className={`group cursor-pointer rounded-r-md border-l-[3px] pr-[96px] pl-2 ${rowPadding} focus-visible:ring-accent-500 !font-mono outline-none hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-inset dark:hover:bg-gray-700/60 ${
                       isSelected
-                        ? 'bg-emerald-50 dark:bg-emerald-900/30'
+                        ? 'bg-accent-50 dark:bg-accent-900/30'
                         : virtualRow.index % 2 === 1
-                          ? 'bg-gray-50 dark:bg-gray-900/60'
-                          : 'dark:bg-gray-900'
+                          ? 'bg-gray-50/70 dark:bg-gray-900/40'
+                          : ''
                     }`}
-                    onClick={() => setSelectedLog(log)}
+                    onClick={() => toggleSelected(log)}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleSelected(log);
+                      }
+                    }}
                     onMouseEnter={() => setHoveredTimestamp(log.timestamp)}
                   >
-                    {shownColumns.map((id) => (
-                      <div key={id} className={cellClass(id)} style={cellStyle(id)}>
-                        {renderCell(id, log)}
-                      </div>
-                    ))}
-                    {/* In the reserved right gutter (pr-[88px]) so they never cover the message. */}
-                    <div className="absolute top-0 right-1 hidden items-center gap-0.5 pt-0.5 group-hover:flex">
+                    <div className="flex items-start gap-3">
+                      {shownColumns.map((id) => (
+                        <div key={id} className={cellClass(id)} style={cellStyle(id)}>
+                          {renderCell(id, log)}
+                        </div>
+                      ))}
+                    </div>
+                    {/* In the reserved right gutter (pr-[96px]) so they never cover the message;
+                        shown on hover, on keyboard focus and on the open line. */}
+                    <div
+                      className={`absolute top-0 right-1 items-center gap-0.5 pt-0.5 ${
+                        isSelected ? 'flex' : 'hidden group-focus-within:flex group-hover:flex'
+                      }`}
+                    >
                       <Tooltip title={copiedLogId === log.id ? 'Copied' : 'Copy message'}>
                         <Button
                           size="small"
-                          className="!h-[18px] !w-[18px] !min-w-0 !p-0 text-[10px]"
+                          className={rowActionButton}
                           icon={copiedLogId === log.id ? <CheckOutlined /> : <CopyOutlined />}
                           aria-label="Copy message"
                           onClick={async (e) => {
@@ -759,7 +1013,7 @@ export const QueryResultsComponent = ({
                         <Tooltip title="Show logs around this one (same source)">
                           <Button
                             size="small"
-                            className="!h-[18px] !w-[18px] !min-w-0 !p-0 text-[10px]"
+                            className={rowActionButton}
                             icon={<ColumnHeightOutlined />}
                             aria-label="Show logs around this one"
                             onClick={(e) => {
@@ -775,7 +1029,7 @@ export const QueryResultsComponent = ({
                             <Tooltip title="Show only logs like this (same message pattern)">
                               <Button
                                 size="small"
-                                className="!h-[18px] !w-[18px] !min-w-0 !p-0 text-[10px]"
+                                className={rowActionButton}
                                 icon={<PlusOutlined />}
                                 aria-label="Show only logs like this"
                                 onClick={(e) => {
@@ -789,7 +1043,7 @@ export const QueryResultsComponent = ({
                             <Tooltip title="Hide logs like this (same message pattern)">
                               <Button
                                 size="small"
-                                className="!h-[18px] !w-[18px] !min-w-0 !p-0 text-[10px]"
+                                className={rowActionButton}
                                 icon={<MinusOutlined />}
                                 aria-label="Hide logs like this"
                                 onClick={(e) => {
@@ -802,6 +1056,7 @@ export const QueryResultsComponent = ({
                         </>
                       )}
                     </div>
+                    {isSelected && isInlineDetail && detailPanel('inline', log)}
                   </div>
                 );
               })}
@@ -810,14 +1065,14 @@ export const QueryResultsComponent = ({
             {isExecuting && queryResults.length > 0 && (
               <div className="flex justify-center py-2">
                 <Spin indicator={<LoadingOutlined spin />} size="small" />
-                <span className="ml-2 text-xs text-gray-500 dark:text-gray-300">
+                <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
                   Loading more results...
                 </span>
               </div>
             )}
 
             {!hasMoreResults && queryResults.length > 0 && (
-              <div className="py-2 text-center text-xs text-gray-500 dark:text-gray-300">
+              <div className="py-2 text-center text-xs text-gray-500 dark:text-gray-400">
                 All {(totalResults < 0 ? queryResults.length : totalResults).toLocaleString()}{' '}
                 results loaded
               </div>
@@ -825,23 +1080,40 @@ export const QueryResultsComponent = ({
           </div>
         )}
       </div>
+    </section>
+  );
 
-      <LogDetailDrawerComponent
-        log={selectedLog}
-        onClose={() => setSelectedLog(null)}
-        onAddFieldToQuery={onAddFieldToQuery}
-        onExcludeFieldFromQuery={onExcludeFieldFromQuery}
-        timezone={timezone}
-        onOpenTrace={onOpenTrace}
-        onShowContext={
-          projectId
-            ? (log) => {
-                setSelectedLog(null);
-                setContextLog(log);
-              }
-            : undefined
-        }
-      />
+  return (
+    <>
+      <div className={view.detail === 'below' ? 'flex flex-col gap-4' : 'flex items-start gap-4'}>
+        {resultsCard}
+        {/* Beside the lines: stays in view while the page scrolls. */}
+        {selectedLog && view.detail === 'side' && (
+          <div
+            className="sticky top-0 shrink-0 self-start overflow-auto rounded-2xl"
+            style={{
+              width: `min(${DETAIL_WIDTHS[view.detailWidth]}px, ${DETAIL_MAX_SHARE})`,
+              maxHeight: detailMaxHeight,
+            }}
+          >
+            {detailPanel('side', selectedLog)}
+          </div>
+        )}
+        {/* Under the lines: docked to the bottom of the view, since the list
+            below it loads more as it scrolls and has no end to reach. */}
+        {selectedLog && view.detail === 'below' && (
+          <div
+            className="sticky bottom-0 z-20 overflow-auto rounded-2xl"
+            style={{
+              maxHeight: detailMaxHeight
+                ? Math.round(detailMaxHeight * DETAIL_BELOW_SHARE)
+                : '45vh',
+            }}
+          >
+            {detailPanel('below', selectedLog)}
+          </div>
+        )}
+      </div>
 
       {projectId && (
         <LogContextPanelComponent
@@ -860,6 +1132,6 @@ export const QueryResultsComponent = ({
           }
         />
       )}
-    </div>
+    </>
   );
 };

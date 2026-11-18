@@ -10,4 +10,5 @@ export type {
   StreamBacklog,
   UpgradeStatus,
 } from './model/UpgradeStatus';
+export type { LatestRelease, ReleaseCheckStatus } from './model/LatestRelease';
 export type { SystemUsage, UsageHour, UsageSignal, UsageStorage } from './model/SystemUsage';

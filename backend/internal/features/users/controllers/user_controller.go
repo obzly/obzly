@@ -11,6 +11,7 @@ import (
 	user_dto "obzly/internal/features/users/dto"
 	mfa_services "obzly/internal/features/users/mfa/services"
 	user_middleware "obzly/internal/features/users/middleware"
+	users_models "obzly/internal/features/users/models"
 	users_services "obzly/internal/features/users/services"
 	sso_dto "obzly/internal/features/users/sso/dto"
 	sso_services "obzly/internal/features/users/sso/services"
@@ -50,6 +51,7 @@ func (c *UserController) RegisterRoutes(router *gin.RouterGroup) {
 func (c *UserController) RegisterProtectedRoutes(router *gin.RouterGroup) {
 	router.GET("/users/me", c.GetCurrentUser)
 	router.PUT("/users/me", c.UpdateUserInfo)
+	router.PUT("/users/me/preferences", c.UpdateUIPreferences)
 	router.PUT("/users/change-password", c.ChangePassword)
 	router.POST("/users/invite", c.InviteUser)
 	router.POST("/users/logout", c.SignOut)
@@ -360,6 +362,47 @@ func (c *UserController) UpdateUserInfo(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "User info updated successfully"})
+}
+
+// UpdateUIPreferences
+// @Summary Save the current user's UI preferences
+// @Description Saves the caller's own theme choice (mode, light and dark theme, colour-blind charts) so it
+// follows them to any browser. Theme ids are validated: light ids only for light, dark ids only for dark.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body users_dto.UpdateUIPreferencesRequestDTO true "Preferences"
+// @Success 200 {object} users_models.UIPreferences
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /users/me/preferences [put]
+func (c *UserController) UpdateUIPreferences(ctx *gin.Context) {
+	user, ok := user_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	var request user_dto.UpdateUIPreferencesRequestDTO
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	prefs, err := c.userService.UpdateUIPreferences(user, &request)
+	if err != nil {
+		if errors.Is(err, users_models.ErrInvalidThemePreferences) {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		logger.GetLogger().Error("saving UI preferences failed", "error", err)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save preferences"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, prefs)
 }
 
 // GenerateOAuthState

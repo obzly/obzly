@@ -125,3 +125,31 @@ func Test_EffectiveRetentionDays_FallsBackToLogRetentionAndPlanCaps(t *testing.T
 	policy.RetentionDays = 7
 	assert.Equal(t, 7, project.EffectiveRetentionDays(policy))
 }
+
+// A log sampling rule made from a pattern keeps its pattern hash and text;
+// anything else in the pattern field is refused.
+func Test_SetRetentionPolicies_RuleWithPattern_KeepsPatternAndRefusesNonHash(t *testing.T) {
+	router := projects_testing.CreateTestRouter(GetProjectController(), GetMembershipController())
+	owner := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	project, _ := projects_testing.CreateTestProjectWithToken("Retention pattern rule", owner.Token, router)
+	url := "/api/v1/projects/" + project.ID.String() + "/retention-policies"
+	rule := projects_models.LogSampleRule{
+		Service: "web", Level: "info", Pattern: "0a1b2c3d4e5f6a7b", PatternText: "GET /static/* 200", Rate: 0.1,
+	}
+
+	test_utils.MakePutRequest(t, router, url, "Bearer "+owner.Token, []projects_models.RetentionPolicy{
+		{Signal: projects_models.SignalLogs, SampleRate: 1, SampleRules: projects_models.LogSampleRules{rule}},
+	}, http.StatusOK)
+	var policies []projects_models.RetentionPolicy
+	test_utils.MakeGetRequestAndUnmarshal(t, router, url, "Bearer "+owner.Token, http.StatusOK, &policies)
+	for _, policy := range policies {
+		if policy.Signal == projects_models.SignalLogs {
+			assert.Equal(t, projects_models.LogSampleRules{rule}, policy.SampleRules)
+		}
+	}
+
+	rule.Pattern = "' OR 1=1"
+	test_utils.MakePutRequest(t, router, url, "Bearer "+owner.Token, []projects_models.RetentionPolicy{
+		{Signal: projects_models.SignalLogs, SampleRate: 1, SampleRules: projects_models.LogSampleRules{rule}},
+	}, http.StatusBadRequest)
+}

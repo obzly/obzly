@@ -44,12 +44,20 @@ type options struct {
 	cacheDir    string
 	tail        segments.TailSource
 	memoryLimit string
+	threads     int
 }
 
 // WithQuerierMemoryLimit caps the querier's DuckDB (metrics_querier.WithMemoryLimit).
 func WithQuerierMemoryLimit(limit string) Option {
 	return func(o *options) {
 		o.memoryLimit = limit
+	}
+}
+
+// WithQuerierThreads caps the querier's DuckDB threads (metrics_querier.WithThreads).
+func WithQuerierThreads(threads int) Option {
+	return func(o *options) {
+		o.threads = threads
 	}
 }
 
@@ -92,6 +100,7 @@ func New(dataDir string, opts ...Option) (*MetricParquetStore, error) {
 	querierOpts := []metrics_querier.QuerierOption{
 		metrics_querier.WithQueryDir(filepath.Join(dataDir, "query", "metrics")),
 		metrics_querier.WithMemoryLimit(cfg.memoryLimit),
+		metrics_querier.WithThreads(cfg.threads),
 	}
 	if cfg.objectStore != nil {
 		querierOpts = append(querierOpts, metrics_querier.WithObjectStore(cfg.objectStore, cfg.cacheDir))
@@ -189,11 +198,12 @@ func (s *MetricParquetStore) GetSystemMetricStats() (*metrics_core.MetricsStatsD
 
 func toMetricsStatsDTO(stats segments.StreamStats) *metrics_core.MetricsStatsDTO {
 	return &metrics_core.MetricsStatsDTO{
-		TotalSamples:     stats.RowCount,
-		TotalSizeMB:      float64(stats.SizeBytes) / (1024 * 1024),
-		RawSizeMB:        float64(stats.RawSizeBytes) / (1024 * 1024),
-		OldestSampleTime: stats.OldestTime,
-		NewestSampleTime: stats.NewestTime,
+		TotalSamples:        stats.RowCount,
+		TotalSizeMB:         float64(stats.SizeBytes) / (1024 * 1024),
+		RawSizeMB:           float64(stats.RawSizeBytes) / (1024 * 1024),
+		ObjectStorageSizeMB: float64(stats.UploadedSizeBytes) / (1024 * 1024),
+		OldestSampleTime:    stats.OldestTime,
+		NewestSampleTime:    stats.NewestTime,
 	}
 }
 

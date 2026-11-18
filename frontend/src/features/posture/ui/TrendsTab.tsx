@@ -11,20 +11,26 @@ import {
   type TrendsResponse,
   postureApi,
 } from '../../../entity/posture';
+import { Card } from '../../../shared/ui/v2';
 import {
   type CostSite,
   GRANULARITY_LABEL,
+  IconLabel,
+  Loading,
+  ProviderMark,
   RANGE_LABEL,
   type RangePreset,
   SavedViewsBar,
   SiteErrors,
   type SiteOutcome,
+  StandardMark,
   allowedGranularities,
   fanOut,
   fitGranularity,
+  guessProvider,
   resolveRange,
 } from '../../cost';
-import { type ChartColors, EChart, Panel, baseOption } from '../../synthetics';
+import { type ChartColors, EChart, baseOption } from '../../synthetics';
 import { type TrendsState } from '../lib/format';
 import { SEVERITIES, SEVERITY_COLOR, SEVERITY_LABEL, mergeFacets, mergeTrends } from '../lib/merge';
 
@@ -35,8 +41,16 @@ interface Props {
   onChange: (state: TrendsState) => void;
 }
 
-const LINE_COLORS = ['#009966', '#2563eb', '#d97706', '#7c3aed', '#db2777'];
 const today = () => new Date().toISOString().slice(0, 10);
+
+const trendFacetIcon = (key: keyof PostureFilters, value: string, label: string) =>
+  key === 'provider' ? (
+    <ProviderMark provider={value} size={14} />
+  ) : key === 'account' ? (
+    <ProviderMark provider={guessProvider(value)} size={14} />
+  ) : key === 'standard' ? (
+    <StandardMark standard={value} name={label} size={14} />
+  ) : null;
 
 export const TrendsTab = ({ sites, refresh, state, onChange }: Props) => {
   const [data, setData] = useState<{ trends: TrendsResponse; outcomes: SiteOutcome<unknown>[] }>();
@@ -116,13 +130,13 @@ export const TrendsTab = ({ sites, refresh, state, onChange }: Props) => {
           name: 'New or reopened',
           type: 'line' as const,
           data: periods.map((period) => period.opened),
-          itemStyle: { color: '#dc2626' },
+          itemStyle: { color: colors.status.bad },
         },
         {
           name: 'Resolved',
           type: 'line' as const,
           data: periods.map((period) => period.resolved),
-          itemStyle: { color: '#009966' },
+          itemStyle: { color: colors.status.ok },
         },
       ],
     }),
@@ -156,7 +170,7 @@ export const TrendsTab = ({ sites, refresh, state, onChange }: Props) => {
         name: names[standard] ?? standard,
         type: 'line' as const,
         connectNulls: false,
-        itemStyle: { color: LINE_COLORS[index % LINE_COLORS.length] },
+        itemStyle: { color: colors.series[index % colors.series.length] },
         // A period before the standard was evaluated is a gap, not a zero.
         data: periods.map((period) => period.scores[standard] ?? null),
       })),
@@ -171,100 +185,108 @@ export const TrendsTab = ({ sites, refresh, state, onChange }: Props) => {
     }));
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          size="small"
-          className="w-40"
-          value={state.range}
-          onChange={(preset: RangePreset) => setRange(preset)}
-          options={(Object.keys(RANGE_LABEL) as RangePreset[]).map((preset) => ({
-            value: preset,
-            label: RANGE_LABEL[preset],
-          }))}
-        />
-        {state.range === 'custom' && (
-          <DatePicker.RangePicker
-            size="small"
-            allowClear={false}
-            value={[dayjs(range.from), dayjs(range.to)]}
-            disabledDate={(day) => day.isAfter(dayjs())}
-            onChange={(values) => {
-              if (values?.[0] && values[1]) {
-                setRange('custom', {
-                  from: values[0].format('YYYY-MM-DD'),
-                  to: values[1].format('YYYY-MM-DD'),
-                });
-              }
-            }}
-          />
-        )}
-        <Segmented
-          size="small"
-          value={state.granularity}
-          onChange={(next) => update({ granularity: next as Granularity })}
-          options={(['daily', 'monthly', 'quarterly', 'yearly'] as const).map((granularity) => ({
-            value: granularity,
-            label: GRANULARITY_LABEL[granularity],
-            disabled: !allowedGranularities(range).includes(granularity),
-          }))}
-        />
-        <div className="flex-1" />
-        <SavedViewsBar<TrendsState>
-          kind="posture"
-          state={state}
-          onOpen={(saved) => onChange({ ...state, ...saved })}
-        />
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-gray-500 dark:text-gray-400">Filters</span>
-        {(
-          [
-            ['severity', 'Severity', SEVERITY_LABEL],
-            ['standard', 'Standard', {}],
-            ['provider', 'Provider', { aws: 'AWS', azure: 'Azure' }],
-            ['source', 'Source', { native: 'Native', baseline: 'Obzly baseline' }],
-            ['account', 'Account', {}],
-          ] as const
-        ).map(([key, label, labels]) => (
+    <div className="flex flex-col gap-4">
+      <Card bodyClassName="flex flex-col gap-3">
+        <div role="group" aria-label="Trend controls" className="flex flex-wrap items-center gap-2">
           <Select
-            key={key}
             size="small"
-            mode="multiple"
-            allowClear
-            maxTagCount={1}
-            className="min-w-36"
-            placeholder={label}
-            value={(state.filters[key] as string[] | undefined) ?? []}
-            onChange={(values: string[]) => setFilter(key, values)}
-            options={facetOptions(key, labels as Record<string, string>)}
+            className="w-40"
+            aria-label="Range"
+            value={state.range}
+            onChange={(preset: RangePreset) => setRange(preset)}
+            options={(Object.keys(RANGE_LABEL) as RangePreset[]).map((preset) => ({
+              value: preset,
+              label: RANGE_LABEL[preset],
+            }))}
           />
-        ))}
-      </div>
+          {state.range === 'custom' && (
+            <DatePicker.RangePicker
+              size="small"
+              allowClear={false}
+              value={[dayjs(range.from), dayjs(range.to)]}
+              disabledDate={(day) => day.isAfter(dayjs())}
+              onChange={(values) => {
+                if (values?.[0] && values[1]) {
+                  setRange('custom', {
+                    from: values[0].format('YYYY-MM-DD'),
+                    to: values[1].format('YYYY-MM-DD'),
+                  });
+                }
+              }}
+            />
+          )}
+          <Segmented
+            size="small"
+            aria-label="Granularity"
+            value={state.granularity}
+            onChange={(next) => update({ granularity: next as Granularity })}
+            options={(['daily', 'monthly', 'quarterly', 'yearly'] as const).map((granularity) => ({
+              value: granularity,
+              label: GRANULARITY_LABEL[granularity],
+              disabled: !allowedGranularities(range).includes(granularity),
+            }))}
+          />
+          <div className="flex-1" />
+          <SavedViewsBar<TrendsState>
+            kind="posture"
+            state={state}
+            onOpen={(saved) => onChange({ ...state, ...saved })}
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-gray-500 dark:text-gray-400">Filters</span>
+          {(
+            [
+              ['severity', 'Severity', SEVERITY_LABEL],
+              ['standard', 'Standard', {}],
+              ['provider', 'Provider', { aws: 'AWS', azure: 'Azure' }],
+              ['source', 'Source', { native: 'Native', baseline: 'Obzly baseline' }],
+              ['account', 'Account', {}],
+            ] as const
+          ).map(([key, label, labels]) => (
+            <Select
+              key={key}
+              size="small"
+              mode="multiple"
+              allowClear
+              maxTagCount={1}
+              className="min-w-36"
+              placeholder={label}
+              value={(state.filters[key] as string[] | undefined) ?? []}
+              onChange={(values: string[]) => setFilter(key, values)}
+              options={facetOptions(key, labels as Record<string, string>)}
+              aria-label={label}
+              optionRender={(option) => (
+                <IconLabel icon={trendFacetIcon(key, String(option.value), String(option.label))}>
+                  {option.label}
+                </IconLabel>
+              )}
+            />
+          ))}
+        </div>
+      </Card>
       {data && <SiteErrors outcomes={data.outcomes} />}
       {!data ? (
-        <div className="flex justify-center py-16">
-          <Spin indicator={<LoadingOutlined spin />} />
-        </div>
+        <Loading />
       ) : (
         <Spin spinning={loading} indicator={<LoadingOutlined spin />}>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <Panel
+            <Card
               title="Open findings"
               subtitle="At the end of each period, by severity, suppressed ones included"
             >
               <EChart option={openChart} height={260} />
-            </Panel>
-            <Panel title="New and resolved" subtitle="Within each period">
+            </Card>
+            <Card title="New and resolved" subtitle="Within each period">
               <EChart option={flowChart} height={260} />
-            </Panel>
-            <Panel
+            </Card>
+            <Card
               title="Standard scores"
               subtitle="At the end of each period; gaps are periods before a standard was evaluated"
               className="xl:col-span-2"
             >
               <EChart option={scoreChart} height={260} />
-            </Panel>
+            </Card>
           </div>
         </Spin>
       )}

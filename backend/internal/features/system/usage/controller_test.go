@@ -74,4 +74,5 @@ func Test_GetUsage_CountsSegmentsByHourAndSignal_AdminOnly(t *testing.T) {
 	require.NotContains(t, signals, "logs_1m")
 	require.GreaterOrEqual(t, signals["logs"].Bytes, int64(1_000_000))
 	require.NotNil(t, signals["logs"].Oldest)
+	require.GreaterOrEqual(t, response.Projects, int64(1), "the project made above counts")
 }

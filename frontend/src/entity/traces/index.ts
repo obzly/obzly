@@ -7,6 +7,12 @@ export type {
   ListServicesResponse,
   ListTracesRequest,
   ListTracesResponse,
+  ServiceErrors,
+  ServiceErrorsRequest,
+  ServiceErrorsResponse,
   TraceSummary,
+  TraceSummaryRequest,
+  TraceSummaryResponse,
+  TraceSummaryTotals,
 } from './model/Trace';
 export type { SpansStats } from './model/SpansStats';

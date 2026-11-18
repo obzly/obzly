@@ -34,6 +34,7 @@ import {
 import { rangeCache } from './rangeCache';
 import {
   type MonitorState,
+  type MonitorStatus,
   byDestination,
   downThreshold,
   impactedBy,
@@ -70,8 +71,17 @@ export interface MonitorMaintenance {
   excludedMs: number;
 }
 
+/** How many monitors had each status one range before now, for change pills. */
+export interface PreviousCounts {
+  /** How long ago: the range's length. */
+  seconds: number;
+  counts: Partial<Record<MonitorStatus, number>>;
+}
+
 export interface MonitorDataResult {
   data: Map<string, MonitorData>;
+  /** Unknown when a destination's results couldn't be read. */
+  previous?: PreviousCounts;
   /** Destinations whose results couldn't be read ("site/project": reason). */
   errors: string[];
   loading: boolean;
@@ -119,6 +129,7 @@ export const useMonitorData = (
     stepSeconds: 0,
   }));
   const [cache] = useState(() => rangeCache<RangeValues>());
+  const [previousCache] = useState(() => rangeCache<PreviousStatus>());
   // What the shown result was loaded for: coming back to a view reloads
   // only when something changed.
   const loaded = useRef<{
@@ -146,11 +157,15 @@ export const useMonitorData = (
     }
     const seconds = RANGE_SECONDS[range];
     const { from, to, step } = stripWindow(seconds);
+    const previousAt = to - seconds * 1000;
     const uptimeStep = Math.max(60, Math.round(seconds / UPTIME_POINTS));
 
     const load = async () => {
       const data = new Map<string, MonitorData>();
       const errors: string[] = [];
+      // Each monitor's own status one range ago, judged like the current one.
+      const previousOwn = new Map<string, MonitorStatus>();
+      let previousKnown = true;
       const byMonitor = occurrencesByMonitor(maintenance);
       const intervals = new Map<string, Interval[]>();
       for (const check of checks) {
@@ -182,7 +197,7 @@ export const useMonitorData = (
               .join(','),
           ].join('|');
           try {
-            const [latest, strips, values] = await Promise.all([
+            const [latest, strips, values, before] = await Promise.all([
               latestStatus(group, query),
               queryInChunks(group, (ids) => {
                 const only = idsMatcher(ids, group.length);
@@ -206,11 +221,26 @@ export const useMonitorData = (
                   uptimeStep,
                 }),
               ),
+              // Barely moves in a few minutes: cached like the range values.
+              previousCache
+                .load(rangeKey, () => latestStatus(group, query, previousAt))
+                .catch(() => undefined),
             ]);
+            if (!before) previousKnown = false;
             const [failing, reporting, warned] = strips.map((item) =>
               indexBy(item.series, 'check_id'),
             );
             for (const check of group) {
+              if (before) {
+                previousOwn.set(
+                  check.id,
+                  monitorState(
+                    check,
+                    before.up.get(check.id) ?? NO_SERIES,
+                    before.warn.get(check.id) ?? NO_SERIES,
+                  ).status,
+                );
+              }
               const points = (index: Map<string, PromQLSeries[]>) =>
                 index.get(check.id)?.[0]?.points;
               data.set(check.id, {
@@ -240,6 +270,7 @@ export const useMonitorData = (
             }
           } catch (error) {
             if (controller.signal.aborted) return;
+            previousKnown = false;
             errors.push(`${key}: ${(error as Error).message}`);
             for (const check of group) {
               data.set(check.id, {
@@ -280,30 +311,52 @@ export const useMonitorData = (
           },
         });
       }
+      const previous = previousKnown
+        ? previousCounts(checks, previousOwn, byMonitor, previousAt, seconds)
+        : undefined;
       if (controller.signal.aborted) return;
       loaded.current = { checks, range, refresh, maintenance };
-      setResult((previous) =>
-        reuseUnchanged(previous, { data, errors, loading: false, from, to, stepSeconds: step }),
+      setResult((current) =>
+        reuseUnchanged(current, {
+          data,
+          errors,
+          loading: false,
+          from,
+          to,
+          stepSeconds: step,
+          previous,
+        }),
       );
     };
     void load();
     return () => controller.abort();
-  }, [checks, range, refresh, maintenance, enabled, cache]);
+  }, [checks, range, refresh, maintenance, enabled, cache, previousCache]);
 
   return result;
 };
 
+interface PreviousStatus {
+  up: Map<string, PromQLSeries[]>;
+  warn: Map<string, PromQLSeries[]>;
+}
+
 interface Query {
-  instant: (query: string) => Promise<PromQLResponse>;
+  /** Evaluated now, or at `at` (Unix ms). */
+  instant: (query: string, at?: number) => Promise<PromQLResponse>;
   ranged: (query: string, from: number, to: number, step: number) => Promise<PromQLResponse>;
 }
 
 const queriesFor = (siteId: string, projectId: string, signal: AbortSignal): Query => ({
-  instant: (query) =>
+  instant: (query, at) =>
     syntheticsApi.promql(
       siteId,
       projectId,
-      { query, instant: true, maxSeries: MAX_SERIES },
+      {
+        query,
+        instant: true,
+        maxSeries: MAX_SERIES,
+        ...(at === undefined ? {} : { end: new Date(at).toISOString() }),
+      },
       signal,
     ),
   ranged: (query, from, to, step) =>
@@ -324,12 +377,14 @@ const queriesFor = (siteId: string, projectId: string, signal: AbortSignal): Que
 /**
  * The latest run per monitor and location, each monitor over its own status
  * window, so a location that stopped reporting drops out instead of keeping
- * its last state for hours. One query pair per distinct window.
+ * its last state for hours. One query pair per distinct window. `at` (Unix ms)
+ * asks what it was then instead of now.
  */
 const latestStatus = async (
   group: CheckView[],
   query: Query,
-): Promise<{ up: Map<string, PromQLSeries[]>; warn: Map<string, PromQLSeries[]> }> => {
+  at?: number,
+): Promise<PreviousStatus> => {
   const up: PromQLSeries[] = [];
   const warn: PromQLSeries[] = [];
   await Promise.all(
@@ -340,9 +395,11 @@ const latestStatus = async (
           return Promise.all([
             query.instant(
               `min by (check_id, location) (last_over_time(${selector('synthetics_up', only)}[${window}s]))`,
+              at,
             ),
             query.instant(
               `max by (check_id, location) (last_over_time(${selector('synthetics_warn', only)}[${window}s]))`,
+              at,
             ),
           ]);
         });
@@ -423,6 +480,31 @@ const rangeValues = async (
     );
   }
   return values;
+};
+
+/**
+ * Monitors per status at `at`: their own results then, Impacted by parents down then, and
+ * Maintenance for an occurrence active then. A monitor disabled now counts as Off.
+ */
+const previousCounts = (
+  checks: CheckView[],
+  own: Map<string, MonitorStatus>,
+  byMonitor: Map<string, MaintenanceOccurrence[]>,
+  at: number,
+  seconds: number,
+): PreviousCounts => {
+  const statusOf = (check: CheckView): MonitorStatus =>
+    check.enabled ? (own.get(check.id) ?? 'none') : 'off';
+  const impacted = impactedBy(checks, statusOf);
+  const counts: Partial<Record<MonitorStatus, number>> = {};
+  for (const check of checks) {
+    const status = withMaintenance(
+      impacted.has(check.id) ? 'impacted' : statusOf(check),
+      !!activeFor(check.id, byMonitor.get(check.id) ?? NO_MAINTENANCE, at),
+    );
+    counts[status] = (counts[status] ?? 0) + 1;
+  }
+  return { seconds, counts };
 };
 
 const scaled = (value: number | undefined, factor: number) =>

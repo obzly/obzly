@@ -16,11 +16,13 @@ import {
   syntheticsApi,
 } from '../../../entity/synthetics';
 import { downloadText, useVisibleInterval } from '../../../shared/lib';
+import { PageHeader } from '../../../shared/ui/v2';
 import { occurrencesKey } from '../lib/maintenance';
 import { RANGE_SECONDS, type RangeKey, useMonitorData } from '../lib/useMonitorData';
 import { DependencyMapComponent } from './DependencyMapComponent';
 import { DestinationsComponent } from './DestinationsComponent';
 import { ImportDrawer } from './ImportDrawer';
+import { ActiveMaintenanceBanner } from './MaintenanceBanner';
 import { MaintenanceComponent } from './MaintenanceComponent';
 import { MonitorDetailDrawer } from './MonitorDetailDrawer';
 import { MonitorEditorComponent } from './MonitorEditorComponent';
@@ -247,7 +249,7 @@ export const SyntheticsComponent = ({ contentHeight, canManage }: Props) => {
   if (editing) {
     return (
       <div
-        className="w-full overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
+        className="w-full overflow-y-auto rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800"
         style={{ height: contentHeight }}
       >
         <MonitorEditorComponent
@@ -269,59 +271,66 @@ export const SyntheticsComponent = ({ contentHeight, canManage }: Props) => {
 
   return (
     <div
-      className="w-full overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
+      className="w-full overflow-y-auto rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800"
       style={{ height: contentHeight }}
     >
-      <div className="mb-2 flex flex-wrap items-center gap-3">
-        <h2 className="m-0 text-lg font-semibold">Synthetics</h2>
-        <span className="text-xs text-gray-500 dark:text-gray-400">
-          Checks run by probes, results stored on Sites
-        </span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {result.loading && checks && <Spin size="small" indicator={<LoadingOutlined spin />} />}
-          <Segmented<RangeKey>
-            value={range}
-            onChange={setRange}
-            options={Object.keys(RANGE_SECONDS) as RangeKey[]}
+      <PageHeader
+        title="Synthetics"
+        subtitle="Checks run by probes, results stored on Sites"
+        actions={
+          <>
+            {result.loading && checks && <Spin size="small" indicator={<LoadingOutlined spin />} />}
+            <Segmented<RangeKey>
+              value={range}
+              onChange={setRange}
+              options={Object.keys(RANGE_SECONDS) as RangeKey[]}
+            />
+            {canManage && view === 'monitors' && (
+              <>
+                <Button icon={<UploadOutlined />} onClick={() => setImporting(true)}>
+                  Import YAML
+                </Button>
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={exportYAML}
+                  loading={busy.has('export')}
+                >
+                  Export YAML
+                </Button>
+              </>
+            )}
+            {canManage && view !== 'maintenance' && (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => edit()}>
+                New monitor
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      <div className="mt-4 flex flex-col gap-3 empty:hidden">
+        {loadError && (
+          <Alert type="error" showIcon title="Couldn't load the monitors" description={loadError} />
+        )}
+        {result.errors.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Some results couldn't be read"
+            description={result.errors.join('; ')}
           />
-          {canManage && view === 'monitors' && (
-            <>
-              <Button icon={<UploadOutlined />} onClick={() => setImporting(true)}>
-                Import YAML
-              </Button>
-              <Button icon={<DownloadOutlined />} onClick={exportYAML} loading={busy.has('export')}>
-                Export YAML
-              </Button>
-            </>
-          )}
-          {canManage && view !== 'maintenance' && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => edit()}>
-              New monitor
-            </Button>
-          )}
-        </div>
+        )}
+        <ActiveMaintenanceBanner
+          occurrences={occurrences}
+          onOpen={(windowId) => {
+            setEditWindowId(windowId);
+            setView('maintenance');
+          }}
+        />
       </div>
 
-      {loadError && (
-        <Alert
-          type="error"
-          showIcon
-          className="mb-3"
-          title="Couldn't load the monitors"
-          description={loadError}
-        />
-      )}
-      {result.errors.length > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          className="mb-3"
-          title="Some results couldn't be read"
-          description={result.errors.join('; ')}
-        />
-      )}
-
       <Tabs
+        className="mt-2"
         activeKey={view}
         onChange={(key) => setView(key as View)}
         items={[

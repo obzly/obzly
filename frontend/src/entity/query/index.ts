@@ -38,3 +38,20 @@ export type {
   PatternChangesResponse,
 } from './model/PatternChanges';
 export type { ExecuteSQLQueryRequest, SQLQueryResponse } from './model/SQLQuery';
+export type {
+  ExplainField,
+  ExplainRequest,
+  ExplainResponse,
+  HealthGroup,
+  HealthMapGroupBy,
+  HealthMapRequest,
+  HealthMapResponse,
+  HealthTile,
+  NoisyPattern,
+  PatternTrend,
+  PatternTrendChange,
+  PatternTrendsRequest,
+  PatternTrendsResponse,
+  VolumeResponse,
+  VolumeSeries,
+} from './model/LogInsights';

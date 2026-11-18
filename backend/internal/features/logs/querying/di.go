@@ -20,6 +20,7 @@ var logQueryService = &LogQueryService{
 	concurrentQueryLimiter,
 	queryValidator,
 	logger.GetLogger(),
+	cache.GetCache(),
 }
 
 var logQueryController = &LogQueryController{

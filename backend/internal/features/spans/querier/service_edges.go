@@ -25,7 +25,7 @@ func (q *SpanQuerier) ServiceCallEdges(
 	}
 
 	// A parent and its child can be in different segments, so the join
-	// can't be split by segment: it runs as one in-process query.
+	// can't be split by segment: it runs as one fragment (query.Request.SingleFragment).
 	const durationMsExpr = "(epoch_ns(child.end_time) - epoch_ns(child.start_time)) / 1000000.0"
 	sqlText := "WITH segs AS (SELECT * FROM " + query.SourcePlaceholder + ") " +
 		"SELECT parent.service_name AS src, child.service_name AS dst, " +

@@ -1,11 +1,11 @@
-import { App, Checkbox, Input, InputNumber, Modal, Select, Tag } from 'antd';
+import { Alert, App, Checkbox, Input, InputNumber, Modal, Segmented, Select, Tag } from 'antd';
 import React, { useEffect, useState } from 'react';
 
 import {
   type Panel,
+  type PanelHigherIs,
   type PanelSource,
   type PanelType,
-  type SpanGroupField,
   type SpanMetric,
   effectivePanelSource,
 } from '../../../entity/dashboards';
@@ -13,43 +13,31 @@ import { metricApi } from '../../../entity/metrics';
 import { type QueryNode, type QueryableField, queryApi } from '../../../entity/query';
 import { traceApi } from '../../../entity/traces';
 import { QueryBuilderComponent } from '../../query';
+import {
+  PANEL_TYPE_OPTIONS,
+  SOURCE_OPTIONS,
+  SPAN_GROUP_FIELD_OPTIONS,
+  SPAN_METRIC_OPTIONS,
+} from '../lib/panelDescription';
+import {
+  groupsIntoDiscreteValues as groupsIntoDiscreteValuesFor,
+  isTimeBucketedType,
+  kindUnavailableReason,
+  settingsForType,
+  usesHigherIs,
+  usesRange,
+  usesThresholds,
+  validateSettings,
+} from '../lib/panelKinds';
 
 interface Props {
   projectId: string;
   panel: Panel | null; // null = creating a new panel
+  // Chart type preselected for a new panel (the "Add a widget" picker).
+  initialType?: PanelType;
   onSave: (panel: Panel) => void;
   onCancel: () => void;
 }
-
-const PANEL_TYPE_OPTIONS: { value: PanelType; label: string }[] = [
-  { value: 'line', label: 'Line chart' },
-  { value: 'bar', label: 'Bar chart' },
-  { value: 'pie', label: 'Pie chart' },
-  { value: 'stat', label: 'Single number' },
-  { value: 'table', label: 'Table (top values)' },
-];
-
-const SOURCE_OPTIONS: { value: PanelSource; label: string }[] = [
-  { value: 'logs', label: 'Logs' },
-  { value: 'spans', label: 'Traces' },
-  { value: 'metrics', label: 'Metrics' },
-];
-
-const SPAN_METRIC_OPTIONS: { value: SpanMetric; label: string }[] = [
-  { value: 'count', label: 'Count' },
-  { value: 'error_count', label: 'Error count' },
-  { value: 'avg_duration_ms', label: 'Avg duration (ms)' },
-  { value: 'p50_duration_ms', label: 'p50 duration (ms)' },
-  { value: 'p95_duration_ms', label: 'p95 duration (ms)' },
-  { value: 'p99_duration_ms', label: 'p99 duration (ms)' },
-];
-
-const SPAN_GROUP_FIELD_OPTIONS: { value: SpanGroupField; label: string }[] = [
-  { value: 'service_name', label: 'Service' },
-  { value: 'name', label: 'Operation' },
-  { value: 'status_code', label: 'Status' },
-  { value: 'kind', label: 'Kind' },
-];
 
 const BUCKET_OPTIONS = [
   { value: 0, label: 'Auto' },
@@ -60,9 +48,24 @@ const BUCKET_OPTIONS = [
   { value: 24 * 60 * 60_000, label: '1 day' },
 ];
 
+const UNIT_OPTIONS: { value: '' | 'bytes' | 'percent'; label: string }[] = [
+  { value: '', label: 'None' },
+  { value: 'bytes', label: 'Bytes' },
+  { value: 'percent', label: 'Percent (0-1 fraction)' },
+];
+
+const HIGHER_IS_OPTIONS: { value: '' | PanelHigherIs; label: string }[] = [
+  { value: '', label: 'Not set' },
+  { value: 'good', label: 'Higher is good' },
+  { value: 'bad', label: 'Higher is bad' },
+];
+
+const fieldLabel = 'mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200';
+
 export const PanelEditModalComponent = ({
   projectId,
   panel,
+  initialType,
   onSave,
   onCancel,
 }: Props): React.JSX.Element => {
@@ -74,7 +77,7 @@ export const PanelEditModalComponent = ({
   const [metricNames, setMetricNames] = useState<string[]>([]);
 
   const [title, setTitle] = useState(panel?.title ?? '');
-  const [type, setType] = useState<PanelType>(panel?.type ?? 'line');
+  const [type, setType] = useState<PanelType>(panel?.type ?? initialType ?? 'line');
   const [source, setSource] = useState<PanelSource>(panel ? effectivePanelSource(panel) : 'logs');
 
   const [query, setQuery] = useState<QueryNode | null>(panel?.query ?? null);
@@ -89,6 +92,13 @@ export const PanelEditModalComponent = ({
   const [groupField, setGroupField] = useState<string | undefined>(panel?.groupField);
   const [bucketMs, setBucketMs] = useState<number>(panel?.bucketMs ?? 0);
   const [limit, setLimit] = useState<number | undefined>(panel?.limit);
+
+  const [unit, setUnit] = useState<'' | 'bytes' | 'percent'>(panel?.unit ?? '');
+  const [min, setMin] = useState<number | undefined>(panel?.min);
+  const [max, setMax] = useState<number | undefined>(panel?.max);
+  const [warn, setWarn] = useState<number | undefined>(panel?.thresholds?.warn);
+  const [critical, setCritical] = useState<number | undefined>(panel?.thresholds?.critical);
+  const [higherIs, setHigherIs] = useState<'' | PanelHigherIs>(panel?.higherIs ?? '');
 
   useEffect(() => {
     queryApi
@@ -122,8 +132,16 @@ export const PanelEditModalComponent = ({
 
   const isSpans = source === 'spans';
   const isMetrics = source === 'metrics';
-  const isTimeSeries = type === 'line' || type === 'bar';
-  const groupsIntoDiscreteValues = type === 'pie' || type === 'table';
+  const isTimeSeries = isTimeBucketedType(type);
+  const groupsIntoDiscreteValues = groupsIntoDiscreteValuesFor(type);
+  const typeUnavailable = kindUnavailableReason(type, source, isSpans ? metric : undefined);
+  const settings = settingsForType(type, {
+    min,
+    max,
+    thresholds: { warn, critical },
+    higherIs: higherIs || undefined,
+  });
+  const typeLabel = PANEL_TYPE_OPTIONS.find((o) => o.value === type)?.label ?? type;
 
   const handleSave = () => {
     if (!title.trim()) {
@@ -135,7 +153,20 @@ export const PanelEditModalComponent = ({
       return;
     }
     if (!isSpans && !isMetrics && groupsIntoDiscreteValues && !groupField) {
-      message.error('Pie and table panels need a "group by" field to break down by');
+      message.error(
+        type === 'pie' || type === 'table'
+          ? 'Pie and table panels need a "group by" field to break down by'
+          : `${typeLabel} panels need a "group by" field to break down by`,
+      );
+      return;
+    }
+    if (typeUnavailable) {
+      message.error(`${typeLabel} can't show this: ${typeUnavailable}`);
+      return;
+    }
+    const settingsError = validateSettings(type, settings, unit || undefined);
+    if (settingsError) {
+      message.error(settingsError);
       return;
     }
 
@@ -147,7 +178,9 @@ export const PanelEditModalComponent = ({
       groupField: groupField || undefined,
       bucketMs: isTimeSeries && bucketMs > 0 ? bucketMs : undefined,
       limit,
+      unit: unit || undefined,
       gridPos: panel?.gridPos ?? { x: 0, y: 0, w: 6, h: 8 },
+      ...settings,
     };
 
     if (isMetrics) {
@@ -164,7 +197,14 @@ export const PanelEditModalComponent = ({
             rootSpansOnly,
             metric,
           }
-        : { ...basePanel, query },
+        : {
+            ...basePanel,
+            query,
+            // Set by Logs › Chart › Save to dashboard; this editor has no controls for them.
+            measure: panel?.measure,
+            measureField: panel?.measureField,
+            topGroups: panel?.topGroups,
+          },
     );
   };
 
@@ -190,19 +230,44 @@ export const PanelEditModalComponent = ({
           />
         </div>
 
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
               Data source
             </label>
-            <Select value={source} onChange={setSource} options={SOURCE_OPTIONS} className="w-40" />
+            <Segmented<PanelSource>
+              value={source}
+              onChange={setSource}
+              options={SOURCE_OPTIONS}
+              aria-label="Data source"
+            />
           </div>
 
           <div>
             <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
               Chart type
             </label>
-            <Select value={type} onChange={setType} options={PANEL_TYPE_OPTIONS} className="w-52" />
+            <Select
+              value={type}
+              onChange={setType}
+              options={PANEL_TYPE_OPTIONS.map(({ value, label }) => {
+                const reason = kindUnavailableReason(value, source, isSpans ? metric : undefined);
+                return {
+                  value,
+                  disabled: reason !== null && value !== type,
+                  label: reason ? (
+                    <span title={reason}>
+                      {label}{' '}
+                      <span className="text-xs text-gray-500 dark:text-gray-400">· {reason}</span>
+                    </span>
+                  ) : (
+                    label
+                  ),
+                };
+              })}
+              className="w-52"
+              popupMatchSelectWidth={false}
+            />
           </div>
 
           {isTimeSeries && (
@@ -219,6 +284,92 @@ export const PanelEditModalComponent = ({
             </div>
           )}
         </div>
+
+        {typeUnavailable && (
+          <Alert
+            type="warning"
+            showIcon
+            title={`${typeLabel} can't show this source: ${typeUnavailable}. Pick another chart type or metric.`}
+          />
+        )}
+
+        <div className="flex flex-wrap gap-4">
+          <div>
+            <label className={fieldLabel}>Unit</label>
+            <Select value={unit} onChange={setUnit} options={UNIT_OPTIONS} className="w-52" />
+          </div>
+
+          {usesRange(type) && (
+            <>
+              <div>
+                <label className={fieldLabel}>Gauge min</label>
+                <InputNumber
+                  value={min}
+                  onChange={(value) => setMin(value ?? undefined)}
+                  placeholder="0"
+                  className="w-32"
+                  aria-label="Gauge min"
+                />
+              </div>
+              <div>
+                <label className={fieldLabel}>Gauge max</label>
+                <InputNumber
+                  value={max}
+                  onChange={(value) => setMax(value ?? undefined)}
+                  placeholder={unit === 'percent' ? '1' : 'required'}
+                  className="w-32"
+                  aria-label="Gauge max"
+                />
+              </div>
+            </>
+          )}
+
+          {usesThresholds(type) && (
+            <>
+              <div>
+                <label className={fieldLabel}>Warn at</label>
+                <InputNumber
+                  value={warn}
+                  onChange={(value) => setWarn(value ?? undefined)}
+                  placeholder="optional"
+                  className="w-32"
+                  aria-label="Warn threshold"
+                />
+              </div>
+              <div>
+                <label className={fieldLabel}>Critical at</label>
+                <InputNumber
+                  value={critical}
+                  onChange={(value) => setCritical(value ?? undefined)}
+                  placeholder="optional"
+                  className="w-32"
+                  aria-label="Critical threshold"
+                />
+              </div>
+            </>
+          )}
+
+          {usesHigherIs(type) && (
+            <div>
+              <label className={fieldLabel}>Direction</label>
+              <Select
+                value={higherIs}
+                onChange={setHigherIs}
+                options={HIGHER_IS_OPTIONS}
+                className="w-40"
+                aria-label="Direction"
+              />
+            </div>
+          )}
+        </div>
+
+        {(usesThresholds(type) || usesHigherIs(type)) && (
+          <div className="-mt-2 text-xs text-gray-500 dark:text-gray-300">
+            {type === 'statTrend'
+              ? 'Direction colours the change pill: green when the value moves the good way, red when it moves the bad way, grey when not set.'
+              : 'Thresholds are raw values (a percent is a 0-1 fraction). A value at or past a threshold is breached: above it by default, below it when higher is good.'}
+          </div>
+        )}
 
         {isMetrics ? (
           <>

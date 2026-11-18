@@ -38,8 +38,17 @@ export const oauthApi = {
     };
   },
 
-  async decide(params: Record<string, string>, approve: boolean): Promise<string> {
-    const { ok, json } = await postConsent('/authorize/decision', { ...params, approve });
+  /** allowWrite is the consent page's write toggle; it only matters when the client asked for write. */
+  async decide(
+    params: Record<string, string>,
+    approve: boolean,
+    allowWrite = false,
+  ): Promise<string> {
+    const { ok, json } = await postConsent('/authorize/decision', {
+      ...params,
+      approve,
+      allowWrite,
+    });
     if (!ok || typeof json.redirectTo !== 'string') {
       throw new Error(String(json.error ?? 'Authorization failed'));
     }

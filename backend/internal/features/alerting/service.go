@@ -29,6 +29,8 @@ var (
 	ErrManagedSilence = errors.New(
 		"this silence comes from a Synthetics maintenance window: change the window on the control plane",
 	)
+	// ErrSilenceEnded: expiring a silence that is already over (409).
+	ErrSilenceEnded = errors.New("this silence has already ended")
 	// ErrManagedByBudget answers like ErrManaged (409).
 	ErrManagedByBudget = errors.New(
 		"this rule is kept by an AI budget: change the budget in AI Observability, Budgets")
@@ -41,6 +43,9 @@ func managedError(rule *AlertRule) error {
 	}
 	return ErrManaged
 }
+
+// maxMCPClientChars bounds the MCP app name a silence records.
+const maxMCPClientChars = 120
 
 var (
 	comparisons  = []string{">", ">=", "<", "<=", "==", "!="}
@@ -80,14 +85,21 @@ type RuleRequest struct {
 	Labels          Labels      `json:"labels"`
 	Summary         string      `json:"summary"`
 	ChannelIDs      []uuid.UUID `json:"channelIds"`
+	// Severity is critical, high, medium or low; empty takes it from the
+	// severity label, else medium.
+	Severity string `json:"severity"`
+	// Description is the rule's runbook text (.Rule.Description in templates).
+	Description string `json:"description"`
 }
 
-// SilenceRequest creates a silence; StartsAt defaults to now.
+// SilenceRequest creates a silence; StartsAt defaults to now. MCPClient is
+// set by the MCP create_silence tool (see Silence.MCPClient).
 type SilenceRequest struct {
-	Matchers Matchers   `json:"matchers"`
-	StartsAt *time.Time `json:"startsAt"`
-	EndsAt   time.Time  `json:"endsAt"`
-	Comment  string     `json:"comment"`
+	Matchers  Matchers   `json:"matchers"`
+	StartsAt  *time.Time `json:"startsAt"`
+	EndsAt    time.Time  `json:"endsAt"`
+	Comment   string     `json:"comment"`
+	MCPClient string     `json:"mcpClient,omitempty"`
 }
 
 // PreviewSeries is one series of a rule's query right now.
@@ -241,11 +253,25 @@ func (s *Service) TestChannel(ctx context.Context, projectID, channelID uuid.UUI
 	if err != nil {
 		return err
 	}
-	return s.sender.send(ctx, channel.Kind, cfg, Notification{
-		Status: StatusTest, ProjectID: projectID, RuleName: "Test notification from Obzly",
-		Summary: "If you can read this, the channel " + channel.Name + " works.",
-		Labels:  Labels{"channel": channel.Name}, StartsAt: time.Now().UTC(),
-	})
+	tpl, origin, err := effectiveTemplate(channel.Kind, channel.TemplateOverride, channel.TemplateSubject,
+		channel.TemplateBody)
+	if err != nil {
+		return err
+	}
+	n := testNotification(projectID, channel.Name)
+	templateErr, sendErr := s.sender.deliver(ctx, channel.Kind, cfg, tpl, n, newRenderContext(n, channel.UseEmoji))
+	markTemplateResult(channel, origin, templateErr)
+	return sendErr
+}
+
+// testNotification is what "Send test" sends through a channel.
+func testNotification(projectID uuid.UUID, channelName string) Notification {
+	return Notification{
+		Kind: KindAlert, Status: StatusTest, Severity: SeverityMedium, ProjectID: projectID,
+		RuleName: "Test notification from Obzly",
+		Summary:  "If you can read this, the channel " + channelName + " works.",
+		Labels:   Labels{"channel": channelName}, StartsAt: time.Now().UTC(),
+	}
 }
 
 func (s *Service) ListSilences(projectID uuid.UUID, user *users_models.User) ([]*Silence, error) {
@@ -281,11 +307,45 @@ func (s *Service) CreateSilence(
 	silence := &Silence{
 		ID: uuid.New(), ProjectID: projectID, Matchers: request.Matchers, StartsAt: startsAt,
 		EndsAt: request.EndsAt.UTC(), Comment: truncate(request.Comment, 1000), CreatedBy: &user.ID, CreatedAt: now,
+		MCPClient: truncate(strings.TrimSpace(request.MCPClient), maxMCPClientChars),
 	}
 	if err := s.repo.saveSilence(silence); err != nil {
 		return nil, err
 	}
-	s.audit.WriteAuditLog("Silence created until "+silence.EndsAt.Format(time.RFC3339), &user.ID, &projectID)
+	message := "Silence created until " + silence.EndsAt.Format(time.RFC3339)
+	if silence.MCPClient != "" {
+		message += " (via MCP: " + silence.MCPClient + ")"
+	}
+	s.audit.WriteAuditLog(message, &user.ID, &projectID)
+	return silence, nil
+}
+
+// ExpireSilence ends a current or upcoming silence now and returns it as it
+// is after the change; the row stays (unlike DeleteSilence) so what was
+// muted remains on record.
+func (s *Service) ExpireSilence(projectID, silenceID uuid.UUID, user *users_models.User) (*Silence, error) {
+	silence, err := s.repo.silence(projectID, silenceID)
+	if err != nil {
+		return nil, err
+	}
+	if silence == nil {
+		return nil, ErrNotFound
+	}
+	if silence.ManagedBy != "" {
+		return nil, ErrManagedSilence
+	}
+	now := time.Now().UTC()
+	if !silence.EndsAt.After(now) {
+		return nil, ErrSilenceEnded
+	}
+	if silence.StartsAt.After(now) {
+		silence.StartsAt = now
+	}
+	silence.EndsAt = now
+	if err := s.repo.expireSilence(silence); err != nil {
+		return nil, err
+	}
+	s.audit.WriteAuditLog("Silence expired: "+silenceID.String(), &user.ID, &projectID)
 	return silence, nil
 }
 
@@ -327,6 +387,10 @@ func (s *Service) applyRule(rule *AlertRule, request RuleRequest) error {
 		return errors.New("repeat must be between 0 and 7 days")
 	case len(request.Labels) > 20 || len(request.ChannelIDs) > 20:
 		return errors.New("at most 20 labels and 20 channels")
+	case request.Severity != "" && !ValidSeverity(strings.ToLower(strings.TrimSpace(request.Severity))):
+		return errors.New("severity must be critical, high, medium or low")
+	case len(request.Description) > 4000:
+		return errors.New("the description can be at most 4000 characters")
 	}
 	for name := range request.Labels {
 		if !labelName.MatchString(name) || name == "alertname" {
@@ -398,6 +462,8 @@ func (s *Service) applyRule(rule *AlertRule, request RuleRequest) error {
 	if rule.Labels == nil {
 		rule.Labels = Labels{}
 	}
+	rule.Severity = ruleSeverity(request.Severity, rule.Labels)
+	rule.Description = strings.TrimSpace(request.Description)
 	rule.ChannelIDs = uniqueIDs(request.ChannelIDs)
 	return nil
 }

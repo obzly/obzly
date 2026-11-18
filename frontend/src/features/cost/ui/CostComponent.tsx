@@ -1,10 +1,12 @@
 // Cost lives on each Site; a control plane reads every Site it can reach and adds the answers up
 // per currency.
-import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Spin, Tabs } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { useVisibleInterval } from '../../../shared/lib';
+import { PageHeader } from '../../../shared/ui/v2';
+import type { PostureView } from '../../posture/ui/PostureComponent';
 import { DEFAULT_EXPLORER, type ExplorerState, setFilterValues } from '../lib/explorer';
 import type { CostSite } from '../lib/merge';
 import { fitGranularity, resolveRange } from '../lib/ranges';
@@ -13,20 +15,24 @@ import { BudgetsTab } from './BudgetsTab';
 import { ExplorerTab } from './ExplorerTab';
 import { OverviewTab } from './OverviewTab';
 import { RecommendationsTab } from './RecommendationsTab';
+import { SummaryTab } from './SummaryTab';
+import { Loading, ViewTabs } from './parts';
 
 interface Props {
   contentHeight: number;
   /** Admins turn Cost on for a cloud connection in settings. */
   onManageCloud?: () => void;
+  /** Opens the Posture page on a view, from the Summary's posture panels. */
+  onOpenPosture?: (view: PostureView) => void;
 }
 
-type View = 'overview' | 'explorer' | 'recommendations' | 'budgets';
+type View = 'summary' | 'overview' | 'explorer' | 'recommendations' | 'budgets';
 
 // Cost changes a few times a day; this only picks up a delivery while the tab stays open.
 const REFRESH_MS = 15 * 60_000;
 
-export const CostComponent = ({ contentHeight, onManageCloud }: Props) => {
-  const [view, setView] = useState<View>('overview');
+export const CostComponent = ({ contentHeight, onManageCloud, onOpenPosture }: Props) => {
+  const [view, setView] = useState<View>('summary');
   const [sites, setSites] = useState<CostSite[]>();
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
@@ -44,28 +50,29 @@ export const CostComponent = ({ contentHeight, onManageCloud }: Props) => {
 
   return (
     <div
-      className="w-full overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
+      className="flex w-full flex-col gap-4 overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
       style={{ height: contentHeight }}
     >
-      <div className="mb-1 flex flex-wrap items-center gap-3">
-        <h1 className="m-0 text-xl font-semibold text-gray-900 dark:text-gray-100">Cost</h1>
-        <span className="text-sm text-gray-500 dark:text-gray-400">
-          {(sites?.length ?? 0) > 1
-            ? 'All Sites you can reach'
-            : 'Cloud spend from your connections'}
-        </span>
-        <div className="flex-1" />
-        <Button icon={<ReloadOutlined />} onClick={() => setRefresh((value) => value + 1)}>
-          Refresh
-        </Button>
-      </div>
+      <PageHeader
+        title="Cost"
+        subtitle={
+          (sites?.length ?? 0) > 1 ? 'All Sites you can reach' : 'Cloud spend from your connections'
+        }
+        actions={
+          <Button icon={<ReloadOutlined />} onClick={() => setRefresh((value) => value + 1)}>
+            Refresh
+          </Button>
+        }
+      />
 
-      {error && <Alert className="my-3" type="error" showIcon title={error} />}
+      {error && <Alert type="error" showIcon title={error} />}
 
-      <Tabs
-        activeKey={view}
-        onChange={(key) => setView(key as View)}
+      <ViewTabs<View>
+        label="Cost views"
+        value={view}
+        onChange={setView}
         items={[
+          { key: 'summary', label: 'Summary' },
           { key: 'overview', label: 'Overview' },
           { key: 'explorer', label: 'Explorer' },
           { key: 'recommendations', label: 'Recommendations' },
@@ -74,18 +81,36 @@ export const CostComponent = ({ contentHeight, onManageCloud }: Props) => {
       />
 
       {!sites ? (
-        !error && (
-          <div className="flex justify-center py-16">
-            <Spin indicator={<LoadingOutlined spin />} />
-          </div>
-        )
+        !error && <Loading />
       ) : (
         <>
+          {view === 'summary' && (
+            <SummaryTab
+              sites={sites}
+              refresh={refresh}
+              onManageCloud={onManageCloud}
+              onOpenPosture={onOpenPosture}
+              onView={setView}
+              onExploreServices={() => {
+                const range = resolveRange('mtd', new Date().toISOString().slice(0, 10));
+                setExplorer({
+                  ...DEFAULT_EXPLORER,
+                  range: 'mtd',
+                  granularity: fitGranularity(range),
+                  groupBy: 'service',
+                  filters: {},
+                });
+                setExplorerSet(true);
+                setView('explorer');
+              }}
+            />
+          )}
           {view === 'overview' && (
             <OverviewTab
               sites={sites}
               refresh={refresh}
               onManageCloud={onManageCloud}
+              onAnomalies={() => setView('budgets')}
               onExplore={(groupBy, filter) => {
                 const range = resolveRange('mtd', new Date().toISOString().slice(0, 10));
                 setExplorer({

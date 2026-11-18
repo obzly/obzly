@@ -205,7 +205,7 @@ export function SignUpComponent({
           <button
             type="button"
             onClick={onSwitchToSignIn}
-            className="cursor-pointer font-medium text-emerald-600 hover:text-emerald-700"
+            className="text-accent-600 hover:text-accent-700 cursor-pointer font-medium"
           >
             Sign in
           </button>

@@ -72,8 +72,8 @@ export function InviteUserModalComponent({ onClose, onInvited }: Props) {
       }
     >
       {!inviteToken ? (
-        <div className="space-y-2">
-          <div className="text-sm text-gray-500 dark:text-gray-300">
+        <div className="flex flex-col gap-3 pt-1">
+          <div className="text-sm text-gray-500 dark:text-gray-400">
             Creates an account that the invitee completes with the link shown next - or activate it
             yourself right away with &quot;Set password&quot; on their row.
           </div>
@@ -86,16 +86,20 @@ export function InviteUserModalComponent({ onClose, onInvited }: Props) {
           />
         </div>
       ) : (
-        <div className="space-y-2">
-          <div className="text-sm">
+        <div className="flex flex-col gap-3 pt-1">
+          <div className="text-sm text-gray-800 dark:text-gray-100">
             Invite for <b>{invitedEmail}</b> is ready. Send them this link (shown once - it is not
             stored):
           </div>
           <div className="flex items-center gap-2">
-            <Input readOnly value={buildInviteLink(invitedEmail, inviteToken)} />
+            <Input
+              readOnly
+              value={buildInviteLink(invitedEmail, inviteToken)}
+              className="!font-mono !text-xs"
+            />
             <Button icon={<CopyOutlined />} onClick={handleCopy} />
           </div>
-          <div className="text-xs text-gray-500 dark:text-gray-300">
+          <div className="rounded-xl bg-gray-50 px-3.5 py-3 text-[13.5px] text-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
             The link expires in 14 days. Alternatively, use &quot;Set password&quot; on the new row
             to activate the account now and hand over the credentials directly.
           </div>

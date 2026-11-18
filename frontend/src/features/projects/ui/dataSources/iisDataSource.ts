@@ -3,11 +3,13 @@ import {
   MEMORY_LIMITER_PROCESSOR_YAML,
   OTLP_REMOTE_FIELD,
   RESOURCEDETECTION_PROCESSOR_YAML,
+  SOURCE_NAME_FIELD,
   WINDOWS_FILE_STORAGE_DIR,
   extensionsYaml,
   otlpHttpExporterYaml,
   otlpReceiverYaml,
   serviceExtensionsYaml,
+  sourceNameAttributeYaml,
 } from './otelCollectorCommon';
 import type { DataSourceDefinition } from './types';
 
@@ -22,6 +24,7 @@ export const iisDataSource: DataSourceDefinition = {
       label: 'W3C access log path',
       defaultValue: 'C:\\inetpub\\logs\\LogFiles\\W3SVC1\\*.log',
     },
+    SOURCE_NAME_FIELD,
     OTLP_REMOTE_FIELD,
   ],
   build: ({ baseUrl, apiKey, fieldValues }) => {
@@ -74,7 +77,7 @@ ${RESOURCEDETECTION_PROCESSOR_YAML}
     attributes:
       - key: service.name
         value: iis
-        action: upsert
+        action: upsert${sourceNameAttributeYaml(fieldValues)}
 
 ${extensionsYaml({ fileStorageDir: WINDOWS_FILE_STORAGE_DIR })}
 

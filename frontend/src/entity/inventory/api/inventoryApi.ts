@@ -14,8 +14,12 @@ const base = (siteId: string) =>
 const withSignal = (signal?: AbortSignal) => new RequestOptions().setSignal(signal);
 
 export const inventoryApi = {
-  summary: (siteId: string, signal?: AbortSignal): Promise<InventorySummary> =>
-    apiHelper.fetchGetJson(`${base(siteId)}/inventory/summary`, withSignal(signal)),
+  /** history adds the last 7 days' hourly counts by kind and those of 24 h ago. */
+  summary: (siteId: string, signal?: AbortSignal, history = false): Promise<InventorySummary> =>
+    apiHelper.fetchGetJson(
+      `${base(siteId)}/inventory/summary${history ? '?history=true' : ''}`,
+      withSignal(signal),
+    ),
 
   /** Up to 5000 assets, worst health first. */
   assets: (siteId: string, signal?: AbortSignal): Promise<AssetList> =>

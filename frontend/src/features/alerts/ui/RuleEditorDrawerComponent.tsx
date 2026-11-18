@@ -1,4 +1,15 @@
-import { App, Button, Checkbox, Drawer, Input, InputNumber, Select, Table, Tag } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Checkbox,
+  Drawer,
+  Input,
+  InputNumber,
+  Segmented,
+  Select,
+  Table,
+} from 'antd';
 import { useEffect, useState } from 'react';
 
 import {
@@ -12,12 +23,16 @@ import {
 } from '../../../entity/alerting';
 import { type QueryNode, type QueryableField, queryApi } from '../../../entity/query';
 import { QueryBuilderComponent } from '../../query';
+import { SEVERITIES } from '../lib/messageTemplates';
+import { Pill } from './bits';
 import { LabelTags } from './labels';
-import { errorMessage } from './lib';
+import { BUDGET_TIP, SYNTHETICS_TIP, errorMessage } from './lib';
 
 interface Props {
   projectId: string;
   rule: AlertRule | null;
+  /** A new rule's starting values (e.g. from Logs › Chart › Create alert). */
+  draft?: Partial<RuleRequest> | null;
   channels: NotificationChannel[];
   canEdit: boolean;
   onClose: () => void;
@@ -49,14 +64,33 @@ const emptyRule: RuleRequest = {
   labels: {},
   summary: '',
   channelIds: [],
+  severity: 'medium',
+  description: '',
 };
 
 const fieldLabel = (text: string, help?: string) => (
   <div className="mb-1">
-    <span className="font-medium text-gray-900 dark:text-gray-100">{text}</span>
-    {help && <div className="text-xs text-gray-500 dark:text-gray-300">{help}</div>}
+    <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200">{text}</span>
+    {help && <div className="text-xs text-gray-500 dark:text-gray-400">{help}</div>}
   </div>
 );
+
+const SOURCES: { value: RuleSource; label: string }[] = [
+  { value: 'metrics', label: 'Metrics (PromQL)' },
+  { value: 'logs', label: 'Logs (count)' },
+  { value: 'log_patterns', label: 'Log patterns (new or spiking)' },
+  { value: 'traces', label: 'Traces' },
+];
+
+const BASELINES = [
+  { value: 3600, label: 'hour before' },
+  { value: 6 * 3600, label: '6 hours before' },
+  { value: 86400, label: 'day before' },
+  { value: 7 * 86400, label: 'week before' },
+];
+
+// Groups of fields are split by a hairline, like the v2 drawer.
+const DIVIDER = 'border-t border-gray-200 pt-4 dark:border-gray-700';
 
 // A new log patterns rule watches error logs.
 const ERROR_LOGS: QueryNode = {
@@ -67,6 +101,7 @@ const ERROR_LOGS: QueryNode = {
 export const RuleEditorDrawerComponent = ({
   projectId,
   rule,
+  draft: initialDraft,
   channels,
   canEdit,
   onClose,
@@ -79,7 +114,7 @@ export const RuleEditorDrawerComponent = ({
           ...emptyRule,
           ...rule,
         }
-      : emptyRule,
+      : { ...emptyRule, ...initialDraft },
   );
   const [fields, setFields] = useState<QueryableField[]>([]);
   const [preview, setPreview] = useState<PreviewSeries[] | null>(null);
@@ -175,30 +210,37 @@ export const RuleEditorDrawerComponent = ({
             onClick={save}
             loading={isSaving}
             disabled={!draft.name.trim()}
-            className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+            className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
           >
             Save
           </Button>
         )
       }
     >
-      <fieldset disabled={!canEdit} className="space-y-4">
+      <fieldset disabled={!canEdit} className="flex min-w-0 flex-col gap-4">
+        {rule?.managedBy && (
+          <Alert
+            type="info"
+            showIcon
+            title={rule.managedBy.startsWith('ai-budget:') ? BUDGET_TIP : SYNTHETICS_TIP}
+          />
+        )}
         <div>
           {fieldLabel('Name')}
-          <Input value={draft.name} onChange={(e) => set({ name: e.target.value })} />
+          <Input
+            value={draft.name}
+            placeholder="e.g. Checkout error rate"
+            onChange={(e) => set({ name: e.target.value })}
+          />
         </div>
         <div>
           {fieldLabel('Data')}
-          <Select
+          <Segmented
+            className="max-w-full flex-wrap"
             value={draft.source}
-            onChange={changeSource}
-            style={{ width: 200 }}
-            options={[
-              { value: 'metrics', label: 'Metrics (PromQL)' },
-              { value: 'logs', label: 'Logs (count)' },
-              { value: 'log_patterns', label: 'Log patterns (new or spiking)' },
-              { value: 'traces', label: 'Traces' },
-            ]}
+            disabled={!canEdit}
+            onChange={(value) => changeSource(value as RuleSource)}
+            options={SOURCES}
           />
         </div>
 
@@ -210,7 +252,7 @@ export const RuleEditorDrawerComponent = ({
             )}
             <Input.TextArea
               rows={3}
-              className="font-mono"
+              className="font-mono !text-[12.5px]"
               value={draft.query.promql}
               onChange={(e) => setQuery({ promql: e.target.value })}
             />
@@ -256,16 +298,12 @@ export const RuleEditorDrawerComponent = ({
             <div className="flex flex-wrap gap-3">
               <div>
                 {fieldLabel('Compared with the', 'The time just before the window')}
-                <Select
+                <Segmented
+                  className="max-w-full flex-wrap"
                   value={draft.query.baselineSeconds ?? 86400}
+                  disabled={!canEdit}
                   onChange={(baselineSeconds) => setQuery({ baselineSeconds })}
-                  style={{ width: 160 }}
-                  options={[
-                    { value: 3600, label: 'hour before' },
-                    { value: 6 * 3600, label: '6 hours before' },
-                    { value: 86400, label: 'day before' },
-                    { value: 7 * 86400, label: 'week before' },
-                  ]}
+                  options={BASELINES}
                 />
               </div>
               <div>
@@ -323,13 +361,14 @@ export const RuleEditorDrawerComponent = ({
           </div>
         )}
 
-        <div className="flex flex-wrap items-end gap-3">
+        <div className={`flex flex-wrap items-end gap-3 ${DIVIDER}`}>
           <div>
             {fieldLabel('Fire when value')}
-            <Select
+            <Segmented
+              className="font-mono"
               value={draft.comparison}
+              disabled={!canEdit}
               onChange={(comparison) => set({ comparison })}
-              style={{ width: 80 }}
               options={COMPARISONS.map((c) => ({ value: c, label: c }))}
             />
           </div>
@@ -370,19 +409,21 @@ export const RuleEditorDrawerComponent = ({
               {
                 title: 'Value',
                 width: 120,
-                render: (_, series) => Number(series.value.toPrecision(6)),
+                render: (_, series) => (
+                  <span className="font-mono">{Number(series.value.toPrecision(6))}</span>
+                ),
               },
               {
                 title: '',
                 width: 90,
                 render: (_, series) =>
-                  series.firing ? <Tag color="red">would fire</Tag> : <Tag>ok</Tag>,
+                  series.firing ? <Pill tone="bad">would fire</Pill> : <Pill tone="ok">ok</Pill>,
               },
             ]}
           />
         )}
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className={`grid grid-cols-1 gap-3 sm:grid-cols-3 ${DIVIDER}`}>
           <div>
             {fieldLabel('Check every (s)')}
             <InputNumber
@@ -412,28 +453,56 @@ export const RuleEditorDrawerComponent = ({
           </div>
         </div>
 
-        <div>
-          {fieldLabel('Notify')}
-          <Select
-            mode="multiple"
-            value={draft.channelIds}
-            onChange={(channelIds) => set({ channelIds })}
-            style={{ width: '100%' }}
-            placeholder={channels.length === 0 ? 'Add a channel in the Channels tab' : 'Channels'}
-            options={channels.map((c) => ({ value: c.id, label: `${c.name} (${c.kind})` }))}
-          />
-        </div>
-        <div>
-          {fieldLabel('Summary', 'Included in every notification')}
-          <Input.TextArea
-            rows={2}
-            value={draft.summary}
-            onChange={(e) => set({ summary: e.target.value })}
-          />
-        </div>
-        <div>
-          {fieldLabel('Labels', 'Added to every alert, e.g. severity=page, team=core')}
-          <Input value={labelsText} onChange={(e) => setLabelsText(e.target.value)} />
+        <div className={`flex flex-col gap-4 ${DIVIDER}`}>
+          <div>
+            {fieldLabel('Severity', 'Sets the emoji, Slack colour and PagerDuty severity')}
+            <Select
+              value={draft.severity}
+              onChange={(severity) => set({ severity })}
+              style={{ width: 180 }}
+              aria-label="Severity"
+              options={SEVERITIES}
+            />
+          </div>
+          <div>
+            {fieldLabel('Notify')}
+            <Select
+              mode="multiple"
+              value={draft.channelIds}
+              onChange={(channelIds) => set({ channelIds })}
+              style={{ width: '100%' }}
+              placeholder={channels.length === 0 ? 'Add a channel in the Channels tab' : 'Channels'}
+              options={channels.map((c) => ({ value: c.id, label: `${c.name} (${c.kind})` }))}
+            />
+          </div>
+          <div>
+            {fieldLabel('Summary', 'Included in every notification')}
+            <Input.TextArea
+              rows={2}
+              value={draft.summary}
+              onChange={(e) => set({ summary: e.target.value })}
+            />
+          </div>
+          <div>
+            {fieldLabel(
+              'Description / runbook',
+              'What to check or do; in message templates as {{.Rule.Description}}',
+            )}
+            <Input.TextArea
+              rows={3}
+              maxLength={4000}
+              value={draft.description}
+              onChange={(e) => set({ description: e.target.value })}
+            />
+          </div>
+          <div>
+            {fieldLabel('Labels', 'Added to every alert, e.g. severity=page, team=core')}
+            <Input
+              className="font-mono"
+              value={labelsText}
+              onChange={(e) => setLabelsText(e.target.value)}
+            />
+          </div>
         </div>
       </fieldset>
     </Drawer>

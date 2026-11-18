@@ -1,5 +1,5 @@
 import { LoadingOutlined } from '@ant-design/icons';
-import { Alert, Button, Spin } from 'antd';
+import { Alert, Button, Checkbox, Spin } from 'antd';
 import { type JSX, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
@@ -29,6 +29,8 @@ export const OAuthConsentPage = ({ isAuthorized }: Props): JSX.Element => {
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setSubmitting] = useState(false);
+  // Write access is opt-in: off until the user ticks it, even when the app asks.
+  const [allowWrite, setAllowWrite] = useState(false);
 
   const params = useMemo(() => {
     const collected: Record<string, string> = {};
@@ -42,7 +44,7 @@ export const OAuthConsentPage = ({ isAuthorized }: Props): JSX.Element => {
   const decide = async (approve: boolean) => {
     setSubmitting(true);
     try {
-      window.location.assign(await oauthApi.decide(params, approve));
+      window.location.assign(await oauthApi.decide(params, approve, approve && allowWrite));
     } catch (e) {
       setError((e as Error).message);
       setSubmitting(false);
@@ -101,9 +103,43 @@ export const OAuthConsentPage = ({ isAuthorized }: Props): JSX.Element => {
             )}
 
             <div className="mb-4 text-sm text-gray-700 dark:text-gray-200">
-              {info.clientName} will get <b>read-only</b> access to the logs, traces, metrics and
-              dashboards your account can see, through MCP. It can&apos;t change anything.
+              {info.clientName} will get <b>{allowWrite ? 'read' : 'read-only'}</b> access, through
+              MCP, to what your account can see: logs, traces, metrics, dashboards, alerts,
+              incidents, synthetics, infrastructure, cost &amp; posture, AI usage and web analytics.{' '}
+              {allowWrite
+                ? 'It can also make the changes you allow below.'
+                : "It can't change anything."}
             </div>
+
+            {info.writeRequested && (
+              <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-500/40 dark:bg-amber-500/10">
+                <div className="mb-2 text-gray-800 dark:text-gray-100">
+                  {info.clientName} also asks for permission to <b>make changes</b>.
+                </div>
+                <Checkbox
+                  checked={allowWrite}
+                  disabled={info.writeNeedsMfa}
+                  onChange={(e) => setAllowWrite(e.target.checked)}
+                >
+                  <span className="text-gray-800 dark:text-gray-100">
+                    Also allow it to create and end alert silences (up to 4 hours), create
+                    dashboards and add panels to them
+                  </span>
+                </Checkbox>
+                <div className="mt-2 text-xs text-gray-600 dark:text-gray-300">
+                  It can&apos;t delete anything. You confirm each change in your assistant, and
+                  every change is recorded in the audit log. Leave this off to keep it read-only.
+                </div>
+                {info.writeNeedsMfa && (
+                  <Alert
+                    className="mt-2"
+                    type="info"
+                    showIcon
+                    message="Changes need two-factor authentication. Turn it on under Profile, then connect the app again."
+                  />
+                )}
+              </div>
+            )}
 
             {!info.verifiedIdentity && (
               <Alert

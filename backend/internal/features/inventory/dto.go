@@ -1,6 +1,10 @@
 package inventory
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // AssetDTO is an asset with its project's name.
 type AssetDTO struct {
@@ -51,4 +55,18 @@ type SummaryDTO struct {
 	Health   map[string]int64            `json:"health"`
 	States   map[string]int64            `json:"states"`
 	Projects []ProjectCountDTO           `json:"projects"`
+	// History: only with history=true.
+	History *HistoryDTO `json:"history,omitempty"`
+}
+
+// HistoryDTO is the inventory's hourly counts, as the builder left them at the end of each hour.
+type HistoryDTO struct {
+	// Hours with counts over the last 7 days, oldest first.
+	Hours []time.Time `json:"hours"`
+	// Kinds: each kind's assets (every health) at each of Hours.
+	Kinds map[string][]int64 `json:"kinds"`
+	// PreviousAt is the newest hour at least 24 h old (absent when none is from the 2 hours
+	// before that); Previous counts its assets by kind, then health.
+	PreviousAt *time.Time                  `json:"previousAt,omitempty"`
+	Previous   map[string]map[string]int64 `json:"previous,omitempty"`
 }

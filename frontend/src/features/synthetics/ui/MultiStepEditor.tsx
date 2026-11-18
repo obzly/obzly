@@ -156,7 +156,7 @@ const StepCard = ({
 
   return (
     <div
-      className={`rounded-lg border bg-white dark:bg-gray-800 ${open ? 'border-emerald-600' : 'border-gray-200 dark:border-gray-700'}`}
+      className={`rounded-2xl border bg-white dark:bg-gray-800 ${open ? 'border-accent-600' : 'border-gray-200 dark:border-gray-700'}`}
     >
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-700 dark:bg-gray-700 dark:text-gray-200">
@@ -477,7 +477,7 @@ export const VariablesPanel = ({ definition, onChange }: Props) => {
               key={`${row.step}-${row.name}`}
               className="flex items-start gap-2 border-t border-gray-100 pt-2 dark:border-gray-700"
             >
-              <code className="w-24 shrink-0 truncate font-mono text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              <code className="text-accent-700 dark:text-accent-400 w-24 shrink-0 truncate font-mono text-xs font-medium">
                 {row.name}
               </code>
               <span className="flex min-w-0 flex-col text-xs text-gray-500 dark:text-gray-400">

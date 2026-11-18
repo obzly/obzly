@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 
 import { type FindingDetail, postureApi } from '../../../entity/posture';
 import { copyToClipboard } from '../../../shared/lib';
+import { ProviderMark, ServiceIcon, StandardMark } from '../../cost';
 import { regionLabel } from '../lib/format';
 import { fillRemediation } from '../lib/merge';
 import { SeverityTag, SourceTag } from './parts';
@@ -118,20 +119,35 @@ export const FindingDrawer = ({ siteId, findingId, onClose, onChanged }: Props) 
               {
                 key: 'standards',
                 label: 'Standards',
-                children: detail.standards.length
-                  ? detail.standards
-                      .map(
-                        (ref) =>
-                          `${detail.standardNames[ref.standard] || ref.standard} ${ref.control}`,
-                      )
-                      .join(' · ')
-                  : '—',
+                children: detail.standards.length ? (
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {detail.standards.map((ref) => (
+                      <span
+                        key={`${ref.standard}/${ref.control}`}
+                        className="inline-flex items-center gap-1.5"
+                      >
+                        <StandardMark
+                          standard={ref.standard}
+                          name={detail.standardNames[ref.standard]}
+                          size={14}
+                        />
+                        {`${detail.standardNames[ref.standard] || ref.standard} ${ref.control}`}
+                      </span>
+                    ))}
+                  </span>
+                ) : (
+                  '—'
+                ),
               },
               {
                 key: 'resource',
                 label: 'Resource',
                 children: (
                   <span className="flex items-start gap-2">
+                    <ServiceIcon
+                      text={detail.resourceType || detail.resourceKey}
+                      provider={detail.provider}
+                    />
                     <span className="font-mono text-xs break-all">{detail.resourceKey}</span>
                     <Button
                       size="small"
@@ -146,7 +162,12 @@ export const FindingDrawer = ({ siteId, findingId, onClose, onChanged }: Props) 
               {
                 key: 'where',
                 label: 'Where',
-                children: `${detail.connectionName} · ${detail.account} · ${regionLabel(detail.region)}`,
+                children: (
+                  <span className="flex items-center gap-2">
+                    <ProviderMark provider={detail.provider} />
+                    {`${detail.connectionName} · ${detail.account} · ${regionLabel(detail.region)}`}
+                  </span>
+                ),
               },
               {
                 key: 'seen',
@@ -192,7 +213,7 @@ export const FindingDrawer = ({ siteId, findingId, onClose, onChanged }: Props) 
                   label: tab.label,
                   children: (
                     <div className="relative">
-                      <pre className="m-0 overflow-auto rounded bg-gray-50 p-3 pr-10 font-mono text-xs whitespace-pre-wrap dark:bg-gray-900">
+                      <pre className="m-0 overflow-auto rounded-xl border border-gray-200 bg-gray-50 p-3 pr-10 font-mono text-xs whitespace-pre-wrap dark:border-gray-700 dark:bg-gray-900">
                         {fillRemediation(tab.text, detail)}
                       </pre>
                       <Button
@@ -219,7 +240,7 @@ export const FindingDrawer = ({ siteId, findingId, onClose, onChanged }: Props) 
           </div>
 
           {detail.status === 'open' && (
-            <div className="flex flex-col gap-2 rounded-md border border-gray-200 p-3 dark:border-gray-700">
+            <div className="flex flex-col gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40">
               {detail.suppressed ? (
                 <>
                   <span className="text-sm">

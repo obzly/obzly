@@ -17,7 +17,6 @@ import {
   Select,
   Spin,
   Table,
-  Tag,
   Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -41,14 +40,29 @@ import { ProjectRole } from '../../../entity/users/model/ProjectRole';
 import { UserRole } from '../../../entity/users/model/UserRole';
 import { StringUtils, copyToClipboard } from '../../../shared/lib';
 import { getUserShortTimeFormat } from '../../../shared/time';
+import { Card } from '../../../shared/ui/v2';
+import {
+  Avatar,
+  BANNER_NOTE,
+  BANNER_WARN,
+  Pill,
+  type PillTone,
+  ProjectPageShell,
+} from './ProjectPageShell';
 
 interface Props {
   contentHeight: number;
   projectResponse: ProjectResponse;
   user: UserProfile;
+  embedded?: boolean;
 }
 
-export function ProjectMembershipComponent({ contentHeight, projectResponse, user }: Props) {
+export function ProjectMembershipComponent({
+  contentHeight,
+  projectResponse,
+  user,
+  embedded,
+}: Props) {
   const { message } = App.useApp();
 
   const [members, setMembers] = useState<ProjectMemberResponse[]>([]);
@@ -286,18 +300,16 @@ export function ProjectMembershipComponent({ contentHeight, projectResponse, use
     }
   };
 
-  const getRoleColor = (role: ProjectRole): string => {
+  const getRoleTone = (role: ProjectRole): PillTone => {
     switch (role) {
       case ProjectRole.OWNER:
-        return 'red';
+        return 'bad';
       case ProjectRole.ADMIN:
-        return 'orange';
+        return 'warn';
       case ProjectRole.MEMBER:
-        return 'blue';
-      case ProjectRole.VIEWER:
-        return 'default';
+        return 'info';
       default:
-        return 'default';
+        return 'neutral';
     }
   };
 
@@ -326,11 +338,11 @@ export function ProjectMembershipComponent({ contentHeight, projectResponse, use
       key: 'member',
       width: 300,
       render: (_, record: ProjectMemberResponse) => (
-        <div className="flex items-center">
-          <UserOutlined className="mr-2 text-gray-400 dark:text-gray-400" />
-          <div>
-            <div className="font-medium">{record.name}</div>
-            <div className="text-xs text-gray-500 dark:text-gray-300">{record.email}</div>
+        <div className="flex items-center gap-2.5">
+          <Avatar name={record.name} email={record.email} />
+          <div className="min-w-0">
+            <div className="truncate font-medium">{record.name}</div>
+            <div className="truncate text-xs text-gray-500 dark:text-gray-400">{record.email}</div>
           </div>
         </div>
       ),
@@ -360,7 +372,7 @@ export function ProjectMembershipComponent({ contentHeight, projectResponse, use
             />
           );
         }
-        return <Tag color={getRoleColor(role)}>{getRoleDisplayText(role)}</Tag>;
+        return <Pill tone={getRoleTone(role)}>{getRoleDisplayText(role)}</Pill>;
       },
     },
     {
@@ -402,6 +414,7 @@ export function ProjectMembershipComponent({ contentHeight, projectResponse, use
                 <Button
                   type="text"
                   size="small"
+                  aria-label="Remove member"
                   icon={<DeleteOutlined />}
                   danger
                   loading={removingMembers.has(record.userId)}
@@ -416,284 +429,280 @@ export function ProjectMembershipComponent({ contentHeight, projectResponse, use
   ];
 
   return (
-    <div className="flex grow pl-3">
-      <div className="w-full">
-        <div
-          className="grow overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
-          style={{ height: contentHeight }}
-        >
-          <div className="max-w-[850px]">
-            <div className="mb-6 flex items-center justify-between">
-              <h1 className="text-2xl font-bold">Project members</h1>
-              <div className="flex space-x-2">
-                {canTransferOwnership && (
-                  <Button
-                    icon={<SwapOutlined />}
-                    onClick={() => setIsTransferOwnershipModalOpen(true)}
-                    disabled={isLoadingMembers || eligibleMembers.length === 0}
-                  >
-                    Transfer ownership
-                  </Button>
-                )}
-                {canManageMembers && (
-                  <Button
-                    type="primary"
-                    icon={<PlusOutlined />}
-                    onClick={() => setIsAddMemberModalOpen(true)}
-                    disabled={isLoadingMembers}
-                    className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                  >
-                    Add member
-                  </Button>
-                )}
-              </div>
-            </div>
+    <ProjectPageShell
+      embedded={embedded}
+      contentHeight={contentHeight}
+      title="Settings"
+      subtitle={projectResponse.name}
+    >
+      {!canManageMembers && (
+        <div className={BANNER_WARN}>
+          You don&apos;t have permission to manage project members. Only project owners, project
+          admins and system administrators can add, edit or remove members.
+        </div>
+      )}
 
-            {isLoadingMembers ? (
-              <div className="flex h-64 items-center justify-center">
-                <Spin indicator={<LoadingOutlined spin />} size="large" />
-              </div>
-            ) : (
-              <div>
-                <div className="mb-4 text-sm text-gray-500 dark:text-gray-300">
-                  {members.length === 0
-                    ? 'No members found'
-                    : `${members.length} member${members.length !== 1 ? 's' : ''}`}
-                </div>
-
-                <Table
-                  columns={columns}
-                  dataSource={members}
-                  pagination={false}
-                  rowKey="id"
-                  size="small"
-                  locale={{
-                    emptyText: (
-                      <div className="py-8 text-center text-gray-500 dark:text-gray-300">
-                        <div className="mb-2">No members found</div>
-                        {canManageMembers && (
-                          <div className="text-sm">Click &quot;Add member&quot; to get started</div>
-                        )}
-                      </div>
-                    ),
-                  }}
-                />
-              </div>
+      <Card
+        title="Project members"
+        subtitle={
+          isLoadingMembers
+            ? undefined
+            : members.length === 0
+              ? 'No members found'
+              : `${members.length} member${members.length !== 1 ? 's' : ''}`
+        }
+        extra={
+          <>
+            {canTransferOwnership && (
+              <Button
+                icon={<SwapOutlined />}
+                onClick={() => setIsTransferOwnershipModalOpen(true)}
+                disabled={isLoadingMembers || eligibleMembers.length === 0}
+              >
+                Transfer ownership
+              </Button>
             )}
-
-            {!canManageMembers && (
-              <div className="mt-6 rounded-md bg-yellow-50 p-3">
-                <div className="text-sm text-yellow-800">
-                  You don&apos;t have permission to manage project members. Only project owners,
-                  project admins and system administrators can add, edit or remove members.
-                </div>
-              </div>
+            {canManageMembers && (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setIsAddMemberModalOpen(true)}
+                disabled={isLoadingMembers}
+              >
+                Add member
+              </Button>
             )}
-
-            <Modal
-              title="Add member"
-              open={isAddMemberModalOpen}
-              onOk={handleAddMember}
-              onCancel={() => {
-                setIsAddMemberModalOpen(false);
-                setAddMemberForm({ email: '', role: ProjectRole.MEMBER });
-                setAddMemberEmailError(false);
-                setSearchInputValue('');
-                setUserSearchResults([]);
-              }}
-              confirmLoading={isAddingMember}
-              okText="Add member"
-              cancelText="Cancel"
-              okButtonProps={{
-                className:
-                  'border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700',
-              }}
-            >
-              <div className="py-4">
-                <div className="mb-4">
-                  <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">
-                    Email address
-                  </div>
-                  {user.role === UserRole.ADMIN ? (
-                    <AutoComplete
-                      value={addMemberForm.email}
-                      onChange={(value) => {
-                        setAddMemberEmailError(false);
-                        setAddMemberForm({
-                          ...addMemberForm,
-                          email: value.toLowerCase().trim(),
-                        });
-                        setSearchInputValue(value);
-                      }}
-                      onSelect={(value) => {
-                        setAddMemberForm({
-                          ...addMemberForm,
-                          email: value.toLowerCase().trim(),
-                        });
-                      }}
-                      onFocus={() => {
-                        searchUsers('');
-                      }}
-                      placeholder="Enter email address"
-                      status={addMemberEmailError ? 'error' : undefined}
-                      options={userSearchResults.map((user) => ({
-                        value: user.email,
-                        label: `${user.name} (${user.email})`,
-                      }))}
-                      notFoundContent={
-                        isSearchingUsers ? (
-                          <div className="flex justify-center py-2">
-                            <Spin indicator={<LoadingOutlined spin />} size="small" />
-                          </div>
-                        ) : null
-                      }
-                      style={{ width: '100%' }}
-                    />
-                  ) : (
-                    <Input
-                      value={addMemberForm.email}
-                      onChange={(e) => {
-                        setAddMemberEmailError(false);
-                        setAddMemberForm({
-                          ...addMemberForm,
-                          email: e.target.value.toLowerCase().trim(),
-                        });
-                      }}
-                      placeholder="Enter email address"
-                      status={addMemberEmailError ? 'error' : undefined}
-                    />
+          </>
+        }
+      >
+        {isLoadingMembers ? (
+          <div className="flex h-64 items-center justify-center">
+            <Spin indicator={<LoadingOutlined spin />} size="large" />
+          </div>
+        ) : (
+          <Table
+            columns={columns}
+            dataSource={members}
+            pagination={false}
+            rowKey="id"
+            size="small"
+            scroll={{ x: 640 }}
+            locale={{
+              emptyText: (
+                <div className="py-8 text-center text-gray-500 dark:text-gray-300">
+                  <div className="mb-2">No members found</div>
+                  {canManageMembers && (
+                    <div className="text-sm">Click &quot;Add member&quot; to get started</div>
                   )}
-                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-                    If the user exists, they will be added directly. Otherwise, an invitation will
-                    be sent.
-                  </div>
                 </div>
+              ),
+            }}
+          />
+        )}
+      </Card>
 
-                <div className="mb-4">
-                  <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">Role</div>
-                  <Select
-                    value={addMemberForm.role}
-                    onChange={(role) => setAddMemberForm({ ...addMemberForm, role })}
-                    style={{ width: '100%' }}
-                    options={[
-                      { label: 'Member', value: ProjectRole.MEMBER },
-                      { label: 'Admin', value: ProjectRole.ADMIN },
-                      { label: 'Viewer', value: ProjectRole.VIEWER },
-                    ]}
-                  />
-                </div>
-              </div>
-            </Modal>
+      <Modal
+        title="Add member"
+        open={isAddMemberModalOpen}
+        onOk={handleAddMember}
+        onCancel={() => {
+          setIsAddMemberModalOpen(false);
+          setAddMemberForm({ email: '', role: ProjectRole.MEMBER });
+          setAddMemberEmailError(false);
+          setSearchInputValue('');
+          setUserSearchResults([]);
+        }}
+        confirmLoading={isAddingMember}
+        okText="Add member"
+        cancelText="Cancel"
+        okButtonProps={{
+          className: 'border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700',
+        }}
+      >
+        <div className="py-4">
+          <div className="mb-4">
+            <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">Email address</div>
+            {user.role === UserRole.ADMIN ? (
+              <AutoComplete
+                value={addMemberForm.email}
+                onChange={(value) => {
+                  setAddMemberEmailError(false);
+                  setAddMemberForm({
+                    ...addMemberForm,
+                    email: value.toLowerCase().trim(),
+                  });
+                  setSearchInputValue(value);
+                }}
+                onSelect={(value) => {
+                  setAddMemberForm({
+                    ...addMemberForm,
+                    email: value.toLowerCase().trim(),
+                  });
+                }}
+                onFocus={() => {
+                  searchUsers('');
+                }}
+                placeholder="Enter email address"
+                status={addMemberEmailError ? 'error' : undefined}
+                options={userSearchResults.map((user) => ({
+                  value: user.email,
+                  label: `${user.name} (${user.email})`,
+                }))}
+                notFoundContent={
+                  isSearchingUsers ? (
+                    <div className="flex justify-center py-2">
+                      <Spin indicator={<LoadingOutlined spin />} size="small" />
+                    </div>
+                  ) : null
+                }
+                style={{ width: '100%' }}
+              />
+            ) : (
+              <Input
+                value={addMemberForm.email}
+                onChange={(e) => {
+                  setAddMemberEmailError(false);
+                  setAddMemberForm({
+                    ...addMemberForm,
+                    email: e.target.value.toLowerCase().trim(),
+                  });
+                }}
+                placeholder="Enter email address"
+                status={addMemberEmailError ? 'error' : undefined}
+              />
+            )}
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+              If the user exists, they will be added directly. Otherwise, an invitation will be
+              sent.
+            </div>
+          </div>
 
-            <Modal
-              title="User invited"
-              open={isInviteDialogOpen}
-              onOk={() => setIsInviteDialogOpen(false)}
-              onCancel={() => setIsInviteDialogOpen(false)}
-              okText="OK"
-              cancelButtonProps={{ style: { display: 'none' } }}
-              okButtonProps={{
-                className:
-                  'border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700',
-              }}
-            >
-              <div className="py-4">
-                <div className="flex items-start">
-                  <UserAddOutlined className="mt-1 mr-3 text-2xl text-emerald-600" />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-gray-900 dark:text-gray-100">
-                      {invitedEmail} was invited
-                    </div>
-                    <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                      There&apos;s no email system to deliver this automatically - copy the link
-                      below and send it to them yourself. Once they use it to sign up, they&apos;ll
-                      automatically become a member of the project.
-                    </div>
-                    {invitedToken && (
-                      <div className="mt-3 flex items-center gap-2">
-                        <Input readOnly value={buildInviteLink(invitedEmail, invitedToken)} />
-                        <Button
-                          icon={<CopyOutlined />}
-                          onClick={() => handleCopyInviteLink(invitedEmail, invitedToken)}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </Modal>
-
-            <Modal
-              title="Transfer project ownership"
-              open={isTransferOwnershipModalOpen}
-              onOk={handleTransferOwnership}
-              onCancel={() => {
-                setIsTransferOwnershipModalOpen(false);
-                setTransferForm({ selectedMemberId: '' });
-                setTransferMemberError(false);
-              }}
-              confirmLoading={isTransferringOwnership}
-              okText="Transfer ownership"
-              cancelText="Cancel"
-              okButtonProps={{
-                danger: true,
-                disabled: eligibleMembers.length === 0,
-              }}
-            >
-              <div className="py-4">
-                <div className="mb-4 rounded-md bg-yellow-50 p-3">
-                  <div className="text-sm text-yellow-800">
-                    <strong>Warning:</strong> This action cannot be undone. You will lose ownership
-                    of this project and the new owner will have full control.
-                  </div>
-                </div>
-
-                {eligibleMembers.length === 0 ? (
-                  <div className="rounded-md bg-gray-50 p-4 text-center dark:bg-gray-900">
-                    <div className="text-sm text-gray-600 dark:text-gray-300">
-                      No members available to transfer ownership to. You need to have at least one
-                      other member in the project to transfer ownership.
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mb-4">
-                    <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">
-                      Select new owner
-                    </div>
-                    <Select
-                      value={transferForm.selectedMemberId || undefined}
-                      onChange={(memberId) => {
-                        setTransferMemberError(false);
-                        setTransferForm({ selectedMemberId: memberId });
-                      }}
-                      placeholder="Select a member to transfer ownership to"
-                      style={{ width: '100%' }}
-                      status={transferMemberError ? 'error' : undefined}
-                      options={eligibleMembers.map((member) => ({
-                        label: (
-                          <div className="flex items-center">
-                            <UserOutlined className="mr-2 text-gray-400 dark:text-gray-400" />
-                            <div>
-                              <div className="font-medium">{member.name}</div>
-                              <div className="text-xs text-gray-500 dark:text-gray-300">
-                                {member.email}
-                              </div>
-                            </div>
-                          </div>
-                        ),
-                        value: member.userId,
-                      }))}
-                    />
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-                      The selected member will become the project owner
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Modal>
+          <div className="mb-4">
+            <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">Role</div>
+            <Select
+              value={addMemberForm.role}
+              onChange={(role) => setAddMemberForm({ ...addMemberForm, role })}
+              style={{ width: '100%' }}
+              options={[
+                { label: 'Member', value: ProjectRole.MEMBER },
+                { label: 'Admin', value: ProjectRole.ADMIN },
+                { label: 'Viewer', value: ProjectRole.VIEWER },
+              ]}
+            />
           </div>
         </div>
-      </div>
-    </div>
+      </Modal>
+
+      <Modal
+        title="User invited"
+        open={isInviteDialogOpen}
+        onOk={() => setIsInviteDialogOpen(false)}
+        onCancel={() => setIsInviteDialogOpen(false)}
+        okText="OK"
+        cancelButtonProps={{ style: { display: 'none' } }}
+        okButtonProps={{
+          className: 'border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700',
+        }}
+      >
+        <div className="py-4">
+          <div className="flex items-start">
+            <UserAddOutlined className="mt-1 mr-3 text-2xl !text-[var(--v2-accent)]" />
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-gray-900 dark:text-gray-100">
+                {invitedEmail} was invited
+              </div>
+              <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                There&apos;s no email system to deliver this automatically - copy the link below and
+                send it to them yourself. Once they use it to sign up, they&apos;ll automatically
+                become a member of the project.
+              </div>
+              {invitedToken && (
+                <div className="mt-3 flex items-center gap-2">
+                  <Input
+                    readOnly
+                    value={buildInviteLink(invitedEmail, invitedToken)}
+                    className="!font-mono"
+                  />
+                  <Tooltip title="Copy invite link">
+                    <Button
+                      aria-label="Copy invite link"
+                      icon={<CopyOutlined />}
+                      onClick={() => handleCopyInviteLink(invitedEmail, invitedToken)}
+                    />
+                  </Tooltip>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        title="Transfer project ownership"
+        open={isTransferOwnershipModalOpen}
+        onOk={handleTransferOwnership}
+        onCancel={() => {
+          setIsTransferOwnershipModalOpen(false);
+          setTransferForm({ selectedMemberId: '' });
+          setTransferMemberError(false);
+        }}
+        confirmLoading={isTransferringOwnership}
+        okText="Transfer ownership"
+        cancelText="Cancel"
+        okButtonProps={{
+          danger: true,
+          disabled: eligibleMembers.length === 0,
+        }}
+      >
+        <div className="py-4">
+          <div className={`mb-4 ${BANNER_WARN}`}>
+            <strong>Warning:</strong> This action cannot be undone. You will lose ownership of this
+            project and the new owner will have full control.
+          </div>
+
+          {eligibleMembers.length === 0 ? (
+            <div className={`text-center ${BANNER_NOTE}`}>
+              <div>
+                No members available to transfer ownership to. You need to have at least one other
+                member in the project to transfer ownership.
+              </div>
+            </div>
+          ) : (
+            <div className="mb-4">
+              <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">
+                Select new owner
+              </div>
+              <Select
+                value={transferForm.selectedMemberId || undefined}
+                onChange={(memberId) => {
+                  setTransferMemberError(false);
+                  setTransferForm({ selectedMemberId: memberId });
+                }}
+                placeholder="Select a member to transfer ownership to"
+                style={{ width: '100%' }}
+                status={transferMemberError ? 'error' : undefined}
+                options={eligibleMembers.map((member) => ({
+                  label: (
+                    <div className="flex items-center gap-2">
+                      <UserOutlined className="text-gray-400 dark:text-gray-400" />
+                      <div>
+                        <div className="font-medium">{member.name}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-300">
+                          {member.email}
+                        </div>
+                      </div>
+                    </div>
+                  ),
+                  value: member.userId,
+                }))}
+              />
+              <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
+                The selected member will become the project owner
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+    </ProjectPageShell>
   );
 }

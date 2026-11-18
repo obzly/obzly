@@ -375,8 +375,8 @@ func partitionKeyBase(
 	size time.Duration,
 ) string {
 	queryJSON, _ := json.Marshal(request.Query)
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%d|%d", stream, queryJSON, request.GroupField,
-		request.BucketMs, int64(size/time.Second))))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%d|%d|%s", stream, queryJSON, request.GroupField,
+		request.BucketMs, int64(size/time.Second), request.GroupBands)))
 	return "logs:" + projectID.String() + ":" + hex.EncodeToString(sum[:16]) + ":"
 }
 

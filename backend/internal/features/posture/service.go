@@ -158,7 +158,7 @@ func (s *Service) UpdateAlertSettings(
 	} else if err := alerting.SaveManagedRule(&alerting.ManagedRule{
 		Key: key, ProjectID: projectID, Name: "Cloud posture finding", Source: alerting.SourceCloudPosture,
 		Query: alerting.RuleQuery{MinSeverity: request.MinSeverity}, Comparison: ">", Threshold: 0,
-		IntervalSeconds: alertInterval, Labels: alerting.Labels{"source": "posture"},
+		IntervalSeconds: alertInterval, Labels: alerting.Labels{"source": "posture"}, Severity: alerting.SeverityHigh,
 		Summary: "{{ $labels.severity }} posture finding {{ $labels.control }} on {{ $labels.resource }}: " +
 			"{{ $labels.title }}",
 		ChannelIDs: channels,
@@ -224,7 +224,7 @@ func (s *Service) projectsFor(user *users_models.User, projectID string) ([]uuid
 }
 
 // StartMaintenance lifts expired suppressions and drops chunks of batches that never completed,
-// hourly (leader-locked).
+// once an hour across replicas (leader-locked).
 func (s *Service) StartMaintenance(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(maintenanceEvery)
@@ -234,8 +234,8 @@ func (s *Service) StartMaintenance(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, err := leaderlock.RunExclusive(ctx, cache.GetCache(), "cloud-posture-maintenance",
-					2*maintenanceEvery, func(ctx context.Context) error { return s.maintain(ctx) })
+				_, err := leaderlock.RunAtMostEvery(ctx, cache.GetCache(), "cloud-posture-maintenance",
+					maintenanceEvery, 2*maintenanceEvery, func(ctx context.Context) error { return s.maintain(ctx) })
 				if err != nil {
 					s.log.Warn("Cloud posture maintenance failed", "error", err)
 				}

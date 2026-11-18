@@ -1,10 +1,19 @@
 package system_upgradestatus
 
-import "obzly/internal/storage/segments"
+import (
+	"time"
+
+	"obzly/internal/config"
+	"obzly/internal/storage/segments"
+)
 
 var service = &Service{&segments.SegmentRepository{}}
 
-var controller = &Controller{service}
+var releaseChecker = NewReleaseChecker(latestReleaseURL,
+	func() bool { return config.GetEnv().UpdateCheckEnabled() },
+	func() time.Time { return time.Now().UTC() })
+
+var controller = &Controller{service, releaseChecker}
 
 func GetController() *Controller {
 	return controller

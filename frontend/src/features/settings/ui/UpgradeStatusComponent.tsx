@@ -6,7 +6,7 @@ import {
   LoadingOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Progress, Spin, Table, Tag, Tooltip } from 'antd';
+import { Alert, Button, Progress, Spin, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import type { JSX, ReactNode } from 'react';
@@ -37,11 +37,19 @@ interface Sample {
   remaining: number;
 }
 
-const SCHEMA_TAG: Record<SchemaState, { color: string; label: string }> = {
-  'up-to-date': { color: 'green', label: 'Up to date' },
-  pending: { color: 'orange', label: 'Migrations pending' },
-  ahead: { color: 'red', label: 'Newer than this build' },
-  unknown: { color: 'default', label: 'Unknown' },
+const PILL = 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium';
+const PILL_TONE = {
+  ok: 'bg-[var(--v2-ok-soft)] text-[var(--v2-accent)]',
+  warn: 'bg-orange-500/15 text-[var(--v2-orange)]',
+  bad: 'bg-red-500/15 text-[var(--v2-red)]',
+  neutral: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+};
+
+const SCHEMA_TAG: Record<SchemaState, { tone: keyof typeof PILL_TONE; label: string }> = {
+  'up-to-date': { tone: 'ok', label: 'Up to date' },
+  pending: { tone: 'warn', label: 'Migrations pending' },
+  ahead: { tone: 'bad', label: 'Newer than this build' },
+  unknown: { tone: 'neutral', label: 'Unknown' },
 };
 
 const formatDuration = (seconds: number): string => {
@@ -62,8 +70,8 @@ const rateOf = (samples: Sample[]): number | undefined => {
 };
 
 const Card = ({ title, children }: { title: ReactNode; children: ReactNode }) => (
-  <div className="rounded-md border border-gray-200 p-4 text-sm dark:border-gray-700">
-    <div className="mb-3 font-medium text-gray-900 dark:text-gray-100">{title}</div>
+  <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm dark:border-gray-700 dark:bg-gray-800">
+    <div className="mb-3 font-semibold text-gray-900 dark:text-gray-100">{title}</div>
     {children}
   </div>
 );
@@ -227,12 +235,18 @@ export const UpgradeStatusComponent = ({ scope, title }: Props): JSX.Element => 
       title={
         <div className="flex flex-wrap items-center gap-2">
           <span>{title}</span>
-          <Tag className="!m-0 font-mono">{status.version}</Tag>
-          <Tag className="!m-0">{status.serviceMode}</Tag>
+          <span className={`${PILL} ${PILL_TONE.neutral} font-mono`}>{status.version}</span>
+          <span className={`${PILL} ${PILL_TONE.neutral}`}>{status.serviceMode}</span>
           <span className="ml-auto flex items-center gap-2 text-xs font-normal text-gray-500 dark:text-gray-400">
             {error && <span className="text-amber-600 dark:text-amber-400">Refresh failed</span>}
             Checked {dayjs(status.checkedAt).format('HH:mm:ss')}
-            <Button size="small" type="text" icon={<ReloadOutlined />} onClick={load} />
+            <Button
+              size="small"
+              type="text"
+              icon={<ReloadOutlined />}
+              onClick={load}
+              aria-label="Reload"
+            />
           </span>
         </div>
       }
@@ -294,12 +308,10 @@ export const UpgradeStatusComponent = ({ scope, title }: Props): JSX.Element => 
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div>
-          <div className="mb-2 font-medium text-gray-800 dark:text-gray-200">Database schema</div>
+          <div className="mb-2 font-semibold text-gray-800 dark:text-gray-200">Database schema</div>
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5">
             <Row label="State">
-              <Tag color={schemaTag.color} className="!m-0">
-                {schemaTag.label}
-              </Tag>
+              <span className={`${PILL} ${PILL_TONE[schemaTag.tone]}`}>{schemaTag.label}</span>
             </Row>
             <Row label="Applied">
               <span className="font-mono">{schema.currentVersion || '-'}</span>
@@ -329,7 +341,7 @@ export const UpgradeStatusComponent = ({ scope, title }: Props): JSX.Element => 
 
         {rewrites && (
           <div>
-            <div className="mb-2 font-medium text-gray-800 dark:text-gray-200">
+            <div className="mb-2 font-semibold text-gray-800 dark:text-gray-200">
               Segment rewrites
               {remaining > 0 && rate !== undefined && (
                 <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
@@ -360,7 +372,7 @@ export const UpgradeStatusComponent = ({ scope, title }: Props): JSX.Element => 
                       percent={percent}
                       showInfo={false}
                       size="small"
-                      strokeColor={stream.legacy === 0 ? '#059669' : '#d97706'}
+                      strokeColor={stream.legacy === 0 ? 'var(--v2-accent)' : 'var(--v2-orange)'}
                     />
                   </div>
                 );
@@ -380,7 +392,7 @@ export const UpgradeStatusComponent = ({ scope, title }: Props): JSX.Element => 
 
       {status.segments && (
         <div className="mt-4">
-          <div className="mb-2 font-medium text-gray-800 dark:text-gray-200">
+          <div className="mb-2 font-semibold text-gray-800 dark:text-gray-200">
             Segment backlog
             {!status.objectStorageEnabled && (
               <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
@@ -400,7 +412,7 @@ export const UpgradeStatusComponent = ({ scope, title }: Props): JSX.Element => 
 
       {status.integrityAudit && (
         <div className="mt-4">
-          <div className="mb-2 font-medium text-gray-800 dark:text-gray-200">
+          <div className="mb-2 font-semibold text-gray-800 dark:text-gray-200">
             Integrity audit
             <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
               uploaded segments checked against object storage
@@ -434,7 +446,7 @@ export const UpgradeStatusComponent = ({ scope, title }: Props): JSX.Element => 
 
       {status.ingestBuffer && status.ingestBuffer.length > 0 && (
         <div className="mt-4">
-          <div className="mb-2 font-medium text-gray-800 dark:text-gray-200">
+          <div className="mb-2 font-semibold text-gray-800 dark:text-gray-200">
             Ingest buffer
             <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
               acknowledged batches waiting for a worker

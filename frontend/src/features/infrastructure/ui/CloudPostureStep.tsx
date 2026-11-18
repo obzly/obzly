@@ -83,13 +83,13 @@ export const CloudPostureStep = ({ provider, settings, onChange, lastRefresh }: 
               role="radio"
               aria-checked={selected}
               onClick={() => onChange({ ...settings, source: card.value })}
-              className={`flex cursor-pointer flex-col gap-1.5 rounded-lg border bg-white p-3 text-left dark:bg-gray-900 ${selected ? 'border-emerald-600 ring-2 ring-emerald-600/30' : 'border-gray-200 hover:border-gray-400 dark:border-gray-700'}`}
+              className={`flex cursor-pointer flex-col gap-1.5 rounded-2xl border bg-white p-3.5 text-left dark:bg-gray-900 ${selected ? 'border-accent-600 ring-accent-600/30 ring-2' : 'border-gray-200 hover:border-gray-400 dark:border-gray-700'}`}
             >
               <span className="flex items-center gap-2 font-medium text-gray-900 dark:text-gray-100">
                 {card.label}
-                {selected && <CheckOutlined className="ml-auto text-emerald-600" />}
+                {selected && <CheckOutlined className="text-accent-600 ml-auto" />}
               </span>
-              <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              <span className="text-accent-700 dark:text-accent-400 text-xs font-medium">
                 {card.price}
               </span>
               <span className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs sm:grid-cols-2">
@@ -123,7 +123,7 @@ export const CloudPostureStep = ({ provider, settings, onChange, lastRefresh }: 
       </label>
 
       {lastRefresh && (
-        <div className="flex flex-col gap-1 rounded-md border border-gray-200 p-3 text-xs dark:border-gray-700">
+        <div className="flex flex-col gap-1 rounded-xl border border-gray-200 p-3 text-xs dark:border-gray-700">
           <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Found on the last refresh
           </span>

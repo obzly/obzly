@@ -209,6 +209,13 @@ func (r *repository) silence(projectID, silenceID uuid.UUID) (*Silence, error) {
 	return &silence, err
 }
 
+// expireSilence writes only the window, so a concurrent edit of anything
+// else is kept.
+func (r *repository) expireSilence(silence *Silence) error {
+	return storage.GetDb().Model(&Silence{}).Where("project_id = ? AND id = ?", silence.ProjectID, silence.ID).
+		Updates(map[string]any{"starts_at": silence.StartsAt, "ends_at": silence.EndsAt}).Error
+}
+
 func (r *repository) deleteSilence(projectID, silenceID uuid.UUID) (bool, error) {
 	result := storage.GetDb().Where("project_id = ? AND id = ?", projectID, silenceID).Delete(&Silence{})
 	return result.RowsAffected > 0, result.Error

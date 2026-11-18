@@ -17,19 +17,14 @@ const PLATFORM_BADGES = ['OTLP-native', 'Federated SSO', 'TOTP MFA', 'Apache 2.0
 
 export function AuthBrandPanelComponent(): JSX.Element {
   return (
-    <section
-      className="relative hidden items-center overflow-hidden p-12 text-white lg:flex"
-      style={{
-        background: 'linear-gradient(155deg, #071a14 0%, #064e3b 45%, #059669 100%)',
-      }}
-    >
+    <section className="from-accent-950 via-accent-900 to-accent-600 relative hidden items-center overflow-hidden bg-linear-155 via-45% p-12 text-white lg:flex">
       <div
         aria-hidden="true"
         className="auth-brand-glow pointer-events-none absolute -inset-[20%]"
         style={{
           background:
-            'radial-gradient(38% 32% at 18% 22%, rgba(110, 231, 183, 0.35), transparent 70%), ' +
-            'radial-gradient(34% 30% at 82% 78%, rgba(16, 185, 129, 0.32), transparent 70%)',
+            'radial-gradient(38% 32% at 18% 22%, color-mix(in srgb, var(--color-accent-300) 35%, transparent), transparent 70%), ' +
+            'radial-gradient(34% 30% at 82% 78%, color-mix(in srgb, var(--color-accent-500) 32%, transparent), transparent 70%)',
         }}
       />
 
@@ -86,7 +81,7 @@ export function AuthBrandPanelComponent(): JSX.Element {
             {PLATFORM_BADGES.map((name) => (
               <span
                 key={name}
-                className="rounded-md border border-emerald-300/40 bg-emerald-300/10 px-2.5 py-1 text-xs font-bold text-white"
+                className="border-accent-300/40 bg-accent-300/10 rounded-md border px-2.5 py-1 text-xs font-bold text-white"
               >
                 {name}
               </span>

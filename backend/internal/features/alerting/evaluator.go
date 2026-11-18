@@ -196,6 +196,9 @@ func (e *Evaluator) advance(tx *gorm.DB, rule *AlertRule, samples []sample, now 
 		state.Labels, state.Value, state.UpdatedAt = labels, s.value, now
 		if state.State == StatePending && !now.Before(state.ActiveAt.Add(time.Duration(rule.ForSeconds)*time.Second)) {
 			state.State, state.FiredAt = StateFiring, &now
+			if err := countActivity(tx, rule.ID, now, 1, 0); err != nil {
+				return err
+			}
 		}
 		if state.State == StateFiring && dueToNotify(rule, state, now) {
 			muted, err := mutedNow(labels)
@@ -259,6 +262,7 @@ func (e *Evaluator) enqueue(tx *gorm.DB, rule *AlertRule, state *AlertState, sta
 		Status: status, ProjectID: rule.ProjectID, RuleID: &ruleID, RuleName: rule.Name, Source: rule.Source,
 		Summary: rule.Summary, Comparison: rule.Comparison, Threshold: rule.Threshold, Measured: state.Value,
 		Labels: state.Labels, Fingerprint: state.Fingerprint, StartsAt: state.ActiveAt, EndsAt: state.ResolvedAt,
+		Kind: KindAlert, Severity: notificationSeverity(rule, state.Labels), RuleDescription: rule.Description,
 	}
 	for _, channelID := range rule.ChannelIDs {
 		item := &OutboxItem{
@@ -270,6 +274,18 @@ func (e *Evaluator) enqueue(tx *gorm.DB, rule *AlertRule, state *AlertState, sta
 		}
 	}
 	return nil
+}
+
+// notificationSeverity is the rule's severity, or for a managed rule whose
+// series carry their own severity (posture findings, AI budget thresholds),
+// that one.
+func notificationSeverity(rule *AlertRule, labels Labels) string {
+	if rule.ManagedBy != "" {
+		if severity, ok := managedSeriesSeverity(labels["severity"]); ok {
+			return severity
+		}
+	}
+	return normalizeSeverity(rule.Severity)
 }
 
 func (e *Evaluator) query(ctx context.Context, rule *AlertRule, now time.Time) ([]sample, error) {

@@ -90,6 +90,48 @@ func Test_GetOverview_WithUserFilter_OnlyCountsThatUser(t *testing.T) {
 	assert.Len(t, response.FilterOptions.Users, 2)
 }
 
+func Test_GetOverview_WithComparePrevious_ReturnsTheWindowBeforeTheRange(t *testing.T) {
+	router, project, token := setupProjectWithEvents(t)
+	// 90 minutes ago: inside the hour before withRange's 61-minute range.
+	older := &logs_core.LogItem{
+		ID: uuid.New(), ProjectID: project.ID, Timestamp: time.Now().UTC().Add(-90 * time.Minute),
+		Level: logs_core.LogLevelInfo, Message: "claude_code.api_request",
+		Fields: map[string]any{
+			"session_id": "session-old", "user_email": "c@example.com", "model": "claude-opus-5-5",
+			"cost_usd_micros": "250000", "input_tokens": "700", "output_tokens": "70",
+		},
+	}
+	repository := logs_core.GetAIRepository()
+	require.NoError(t, repository.StoreLogsBatch(map[uuid.UUID][]*logs_core.LogItem{project.ID: {older}}))
+	require.NoError(t, repository.ForceFlush())
+
+	var response aiusage.OverviewResponseDTO
+	test_utils.MakeGetRequestAndUnmarshal(t, router, overviewURL(project.ID, url.Values{"compare": {"previous"}}),
+		"Bearer "+token, http.StatusOK, &response)
+
+	assert.Equal(t, int64(3), response.Summary.Requests, "the older request isn't in the range")
+	require.NotNil(t, response.Previous)
+	assert.Equal(t, int64(1), response.Previous.Requests)
+	assert.InDelta(t, 0.25, response.Previous.CostUSD, 1e-9)
+	assert.Equal(t, int64(700), response.Previous.InputTokens)
+	assert.Equal(t, int64(1), response.Previous.Sessions)
+	assert.Equal(t, int64(1), response.Previous.Users)
+
+	var filtered aiusage.OverviewResponseDTO
+	test_utils.MakeGetRequestAndUnmarshal(t, router,
+		overviewURL(project.ID, url.Values{"compare": {"previous"}, "user": {"a@example.com"}}),
+		"Bearer "+token, http.StatusOK, &filtered)
+	require.NotNil(t, filtered.Previous)
+	assert.Zero(t, filtered.Previous.Requests, "the previous window keeps the filters")
+
+	var plain aiusage.OverviewResponseDTO
+	test_utils.MakeGetRequestAndUnmarshal(t, router, overviewURL(project.ID, nil), "Bearer "+token,
+		http.StatusOK, &plain)
+	assert.Nil(t, plain.Previous, "only with compare=previous")
+	test_utils.MakeGetRequest(t, router, overviewURL(project.ID, url.Values{"compare": {"yesterday"}}),
+		"Bearer "+token, http.StatusBadRequest)
+}
+
 func Test_GetSessions_SortedByCost_ReturnsPageAndTotal(t *testing.T) {
 	router, project, token := setupProjectWithEvents(t)
 

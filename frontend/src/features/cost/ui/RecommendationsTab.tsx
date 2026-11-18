@@ -1,13 +1,12 @@
 // Cost → Recommendations: what to change to save money (rightsizing, idle, modernize, storage),
 // the commitments you have and the ones to consider, and what changes actually saved. Read weekly
 // by the probe; Obzly never buys or changes anything.
-import { LoadingOutlined } from '@ant-design/icons';
-import { Alert, Empty, Segmented, Select, Spin, Table, Tag, Tooltip } from 'antd';
+import { Alert, Empty, Segmented, Select, Table, Tag, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
 
 import { type RecommendationKind, costApi } from '../../../entity/cost';
-import { Panel } from '../../synthetics';
+import { Card } from '../../../shared/ui/v2';
 import {
   KIND_LABEL,
   SECTION_LABEL,
@@ -25,13 +24,15 @@ import {
   sectionProblems,
   totalsByCurrency,
 } from '../lib/advice';
+import { guessProvider } from '../lib/cloudIcons';
 import { formatMoney } from '../lib/format';
 import type { CostSite, SiteOutcome } from '../lib/merge';
 import { fanOut } from '../lib/sites';
+import { IconLabel, ProviderMark, ServiceIcon } from './CloudIcon';
 import { CommitmentsPanel } from './CommitmentsPanel';
 import { PlannerPanel } from './PlannerPanel';
 import { RecommendationDrawer } from './RecommendationDrawer';
-import { SiteErrors, Tile } from './parts';
+import { Loading, SiteErrors, TileRow, TipTile } from './parts';
 
 interface Props {
   sites: CostSite[];
@@ -58,7 +59,7 @@ const Totals = ({
   unknown?: number;
 }) =>
   totals.length === 0 ? (
-    <span className="text-gray-400">{unknown ? 'n/a' : '—'}</span>
+    <span className="text-gray-400 dark:text-gray-500">{unknown ? 'n/a' : '—'}</span>
   ) : (
     <span className="flex flex-col">
       {totals.map((total) => (
@@ -66,6 +67,21 @@ const Totals = ({
       ))}
     </span>
   );
+
+/** What to change, on which resource, with the resource's service icon. */
+const ChangeCell = ({ item }: { item: SiteRecommendation }) => (
+  <span className="flex items-start gap-2">
+    <span className="mt-0.5">
+      <ServiceIcon text={item.resourceType || item.resourceKey} provider={item.provider} />
+    </span>
+    <span className="flex min-w-0 flex-col">
+      <span className="text-gray-900 dark:text-gray-100">{item.action}</span>
+      <span className="text-xs text-gray-500 dark:text-gray-400">
+        {item.resourceName || item.resourceKey}
+      </span>
+    </span>
+  </span>
+);
 
 export const RecommendationsTab = ({ sites, refresh }: Props) => {
   const [data, setData] = useState<Data>();
@@ -113,13 +129,7 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
     [data, status, kinds, accounts],
   );
 
-  if (!data) {
-    return (
-      <div className="flex justify-center py-16">
-        <Spin indicator={<LoadingOutlined spin />} />
-      </div>
-    );
-  }
+  if (!data) return <Loading />;
 
   const active = data.items.filter(isActive);
   const openTotals = totalsByCurrency(
@@ -177,29 +187,34 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
         />
       )}
 
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <Tile
+      <TileRow label="Summary">
+        <TipTile
           label="Open savings / month"
           value={<Totals {...openTotals} />}
-          hint={`${active.filter((item) => item.status === 'open').length} recommendations${openTotals.unknown ? `, ${openTotals.unknown} without a figure yet` : ''}`}
+          note={`${active.filter((item) => item.status === 'open').length} recommendations${openTotals.unknown ? `, ${openTotals.unknown} without a figure yet` : ''}`}
         />
-        <Tile
+        <TipTile
           label="Planned / month"
           value={<Totals {...plannedTotals} />}
-          hint={`${active.filter((item) => item.status === 'planned').length} in the plan`}
+          note={`${active.filter((item) => item.status === 'planned').length} in the plan`}
         />
-        <Tile
+        <TipTile
           label="Realized / month"
           tooltip="Median daily cost 14 days before each change vs 14 days after, from cost data"
-          value={<Totals {...realizedTotals} />}
-          hint={`${done.length} done in the last 180 days`}
+          value={
+            <span className="text-[var(--v2-accent)]">
+              <Totals {...realizedTotals} />
+            </span>
+          }
+          note={`${done.length} done in the last 180 days`}
         />
-        <Tile
+        <TipTile
           label="Commitments to check"
           value={flagged.length}
-          hint={`${data.commitments.filter((item) => item.unused).length} unused, ${data.commitments.filter((item) => item.endingSoon).length} ending soon`}
+          change={flagged.length > 0 ? { text: 'check', tone: 'bad' } : undefined}
+          note={`${data.commitments.filter((item) => item.unused).length} unused, ${data.commitments.filter((item) => item.endingSoon).length} ending soon`}
         />
-      </div>
+      </TileRow>
 
       {plans ? (
         <PlannerPanel
@@ -210,16 +225,14 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
           onRightsizingFirst={setRightsizingFirst}
         />
       ) : (
-        <Panel title="Commitment planner">
-          <div className="flex justify-center py-8">
-            <Spin indicator={<LoadingOutlined spin />} />
-          </div>
-        </Panel>
+        <Card title="Commitment planner">
+          <Loading className="py-8" />
+        </Card>
       )}
 
       <CommitmentsPanel commitments={data.commitments} coverage={data.coverage} />
 
-      <Panel
+      <Card
         title="Recommendations"
         subtitle="Largest savings first. Click one for the evidence and to plan, finish or dismiss it."
         extra={
@@ -229,6 +242,7 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
               mode="multiple"
               allowClear
               placeholder="Kind"
+              aria-label="Kind"
               className="min-w-36"
               value={kinds}
               onChange={setKinds}
@@ -243,6 +257,12 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
                 mode="multiple"
                 allowClear
                 placeholder="Account"
+                aria-label="Account"
+                optionRender={(option) => (
+                  <IconLabel icon={<ProviderMark provider={guessProvider(String(option.value))} />}>
+                    {option.label}
+                  </IconLabel>
+                )}
                 className="min-w-40"
                 value={accounts}
                 onChange={setAccounts}
@@ -280,14 +300,7 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
               {
                 title: 'Change',
                 key: 'action',
-                render: (_, item) => (
-                  <span className="flex flex-col">
-                    <span className="text-gray-900 dark:text-gray-100">{item.action}</span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      {item.resourceName || item.resourceKey}
-                    </span>
-                  </span>
-                ),
+                render: (_, item) => <ChangeCell item={item} />,
               },
               {
                 title: 'Kind',
@@ -301,7 +314,9 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
                 width: 190,
                 render: (_, item) => (
                   <span className="flex flex-col text-xs">
-                    <span>{item.connectionName || '—'}</span>
+                    <IconLabel icon={<ProviderMark provider={item.provider} size={14} />}>
+                      {item.connectionName || '—'}
+                    </IconLabel>
                     <span className="text-gray-500 dark:text-gray-400">
                       {[item.account, item.region].filter(Boolean).join(' · ')}
                     </span>
@@ -316,7 +331,7 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
                 render: (_, item) =>
                   item.monthlySavings === null ? (
                     <Tooltip title="Needs resource-level cost from an export">
-                      <span className="text-gray-400">n/a</span>
+                      <span className="text-gray-400 dark:text-gray-500">n/a</span>
                     </Tooltip>
                   ) : (
                     <span className="tabular-nums">
@@ -380,10 +395,10 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
             ]}
           />
         )}
-      </Panel>
+      </Card>
 
       {done.length > 0 && (
-        <Panel
+        <Card
           title="Realized savings"
           subtitle="Median daily cost 14 days before each change vs 14 days after, from cost data"
         >
@@ -397,14 +412,7 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
               {
                 title: 'Change',
                 key: 'action',
-                render: (_, item) => (
-                  <span className="flex flex-col">
-                    <span>{item.action}</span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      {item.resourceName || item.resourceKey}
-                    </span>
-                  </span>
-                ),
+                render: (_, item) => <ChangeCell item={item} />,
               },
               {
                 title: 'Done',
@@ -441,7 +449,7 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
                     </b>
                   ) : item.measuredAt ? (
                     <Tooltip title="Not enough resource-level cost around the change">
-                      <span className="text-gray-400">n/a</span>
+                      <span className="text-gray-400 dark:text-gray-500">n/a</span>
                     </Tooltip>
                   ) : (
                     <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -451,7 +459,7 @@ export const RecommendationsTab = ({ sites, refresh }: Props) => {
               },
             ]}
           />
-        </Panel>
+        </Card>
       )}
 
       {open && (

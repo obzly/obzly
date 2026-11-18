@@ -34,6 +34,7 @@ func (c *DashboardController) RegisterRoutes(router *gin.RouterGroup) {
 	dashboardRoutes.PUT("/:dashboardId", c.UpdateDashboard)
 	dashboardRoutes.PUT("/:dashboardId/pin", c.SetPinned)
 	dashboardRoutes.PUT("/:dashboardId/folder", c.SetDashboardFolder)
+	dashboardRoutes.POST("/:dashboardId/panels", c.AppendPanel)
 	dashboardRoutes.DELETE("/:dashboardId", c.DeleteDashboard)
 
 	folderRoutes := router.Group("/projects/dashboards/:projectId/folders")
@@ -195,6 +196,49 @@ func (c *DashboardController) DeleteFolder(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "Folder deleted successfully"})
+}
+
+// AppendPanel
+// @Summary Add one panel to the bottom of a dashboard tab
+// @Description Project members who can write. tabId empty means the first tab; the panel is validated like a full save and gets a new ID. The MCP add_dashboard_panel tool uses it.
+// @Tags dashboards
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param projectId path string true "Project ID"
+// @Param dashboardId path string true "Dashboard ID"
+// @Param request body dashboards_dto.AppendPanelRequestDTO true "Tab and panel"
+// @Success 200 {object} dashboards_dto.AppendPanelResponseDTO
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /projects/dashboards/{projectId}/{dashboardId}/panels [post]
+func (c *DashboardController) AppendPanel(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	projectID, dashboardID, ok := parseProjectAndDashboardID(ctx)
+	if !ok {
+		return
+	}
+
+	var request dashboards_dto.AppendPanelRequestDTO
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	response, err := c.dashboardService.AppendPanel(projectID, dashboardID, &request, user)
+	if err != nil {
+		c.handleError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, response)
 }
 
 // SetDashboardFolder

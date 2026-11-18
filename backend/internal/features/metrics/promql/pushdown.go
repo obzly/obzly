@@ -5,6 +5,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	metrics_core "obzly/internal/features/metrics/core"
@@ -22,6 +23,18 @@ import (
 
 // pushdownPrefix names the series that stand in for pushed-down results.
 const pushdownPrefix = "__obzly_pushdown_"
+
+// maxConcurrentPushdowns bounds the subtrees of one expression storage
+// evaluates at once: each is a distributed query, and the user's PromQL
+// limiter slot covers the whole expression.
+const maxConcurrentPushdowns = 4
+
+// pushdownOutcome is storage's answer to one request: ok false when it
+// declined.
+type pushdownOutcome struct {
+	response *metrics_core.RangeFunctionResponseDTO
+	ok       bool
+}
 
 var pushdownAggregations = map[parser.ItemType]string{
 	parser.SUM: "sum", parser.AVG: "avg", parser.MIN: "min", parser.MAX: "max", parser.COUNT: "count",
@@ -54,6 +67,8 @@ func NewInstantQuery(ctx context.Context, projectID uuid.UUID, expression string
 // engine reads like any other (a stale marker where there is no value);
 // "+ 0" drops that series' name, as the function would. Everything else -
 // and any subtree storage declines - the engine evaluates from samples.
+// Subtrees are independent, so storage evaluates them concurrently (a ratio
+// of two sums no longer waits for one before starting the other).
 func pushDown(
 	ctx context.Context, projectID uuid.UUID, expression string, startMs, endMs, stepMs int64,
 ) (storage.Queryable, string, error) {
@@ -62,85 +77,49 @@ func pushDown(
 	if err != nil {
 		return base, expression, nil
 	}
-	rewriter := &pushdownRewriter{ctx: ctx, projectID: projectID, startMs: startMs, endMs: endMs, stepMs: stepMs}
-	rewritten := rewriter.rewrite(expr)
-	if rewriter.err != nil {
-		return nil, "", rewriter.err
-	}
-	switch {
-	case rewriter.candidates == 0:
+	var requests []*metrics_core.RangeFunctionRequestDTO
+	walkPushable(expr, func(node parser.Expr, request *metrics_core.RangeFunctionRequestDTO) parser.Expr {
+		request.StartMs, request.EndMs, request.StepMs = startMs, endMs, stepMs
+		requests = append(requests, request)
+		return node
+	})
+	if len(requests) == 0 {
 		telemetry.PromQLPushdown.WithLabelValues("unsupported").Inc()
 		return base, expression, nil
-	case len(rewriter.results) == 0:
+	}
+	outcomes, err := evaluatePushdowns(ctx, projectID, requests)
+	if err != nil {
+		return nil, "", err
+	}
+
+	results := map[string]*metrics_core.RangeFunctionResponseDTO{}
+	next := 0
+	rewritten := walkPushable(expr, func(node parser.Expr, _ *metrics_core.RangeFunctionRequestDTO) parser.Expr {
+		outcome := outcomes[next]
+		next++
+		if !outcome.ok {
+			return node
+		}
+		name := pushdownPrefix + strconv.Itoa(len(results)) + "__"
+		results[name] = outcome.response
+		return &parser.ParenExpr{Expr: &parser.BinaryExpr{
+			Op: parser.ADD,
+			LHS: &parser.VectorSelector{
+				Name: name,
+				LabelMatchers: []*labels.Matcher{
+					labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, name),
+				},
+			},
+			RHS: &parser.NumberLiteral{Val: 0},
+		}}
+	})
+	if len(results) == 0 {
 		telemetry.PromQLPushdown.WithLabelValues("fallback").Inc()
 		return base, expression, nil
 	}
 	telemetry.PromQLPushdown.WithLabelValues("pushed").Inc()
-	return &pushdownQueryable{base: base, results: rewriter.results, startMs: startMs, endMs: endMs, stepMs: stepMs},
+	return &pushdownQueryable{base: base, results: results, startMs: startMs, endMs: endMs, stepMs: stepMs},
 		rewritten.String(), nil
-}
-
-type pushdownRewriter struct {
-	ctx                    context.Context
-	projectID              uuid.UUID
-	startMs, endMs, stepMs int64
-	candidates             int
-	results                map[string]*metrics_core.RangeFunctionResponseDTO
-	err                    error
-}
-
-// rewrite returns node with its pushable subtrees replaced. Subqueries are
-// left alone: they evaluate at their own steps.
-func (r *pushdownRewriter) rewrite(node parser.Expr) parser.Expr {
-	if r.err != nil {
-		return node
-	}
-	if request := pushableRequest(node); request != nil {
-		r.candidates++
-		request.StartMs, request.EndMs, request.StepMs = r.startMs, r.endMs, r.stepMs
-		response, ok, err := metrics_core.GetMetricCoreRepository().EvaluateRangeFunction(r.ctx, r.projectID, request)
-		if err != nil {
-			r.err = err
-			return node
-		}
-		if ok {
-			if r.results == nil {
-				r.results = map[string]*metrics_core.RangeFunctionResponseDTO{}
-			}
-			name := pushdownPrefix + strconv.Itoa(len(r.results)) + "__"
-			r.results[name] = response
-			return &parser.ParenExpr{Expr: &parser.BinaryExpr{
-				Op: parser.ADD,
-				LHS: &parser.VectorSelector{
-					Name: name,
-					LabelMatchers: []*labels.Matcher{
-						labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, name),
-					},
-				},
-				RHS: &parser.NumberLiteral{Val: 0},
-			}}
-		}
-		return node
-	}
-	switch n := node.(type) {
-	case *parser.AggregateExpr:
-		n.Expr = r.rewrite(n.Expr)
-		if n.Param != nil {
-			n.Param = r.rewrite(n.Param)
-		}
-	case *parser.BinaryExpr:
-		n.LHS = r.rewrite(n.LHS)
-		n.RHS = r.rewrite(n.RHS)
-	case *parser.Call:
-		for i, arg := range n.Args {
-			n.Args[i] = r.rewrite(arg)
-		}
-	case *parser.ParenExpr:
-		n.Expr = r.rewrite(n.Expr)
-	case *parser.UnaryExpr:
-		n.Expr = r.rewrite(n.Expr)
-	}
-	return node
 }
 
 // pushableRequest is node as a storage request, or nil: a supported range
@@ -207,6 +186,85 @@ func unwrapParens(node parser.Expr) parser.Expr {
 		}
 		node = paren.Expr
 	}
+}
+
+// walkPushable passes each pushable subtree of node, in a fixed order, to
+// visit and puts what it returns in its place. Subqueries are left alone:
+// they evaluate at their own steps.
+func walkPushable(
+	node parser.Expr, visit func(parser.Expr, *metrics_core.RangeFunctionRequestDTO) parser.Expr,
+) parser.Expr {
+	if request := pushableRequest(node); request != nil {
+		return visit(node, request)
+	}
+	switch n := node.(type) {
+	case *parser.AggregateExpr:
+		n.Expr = walkPushable(n.Expr, visit)
+		if n.Param != nil {
+			n.Param = walkPushable(n.Param, visit)
+		}
+	case *parser.BinaryExpr:
+		n.LHS = walkPushable(n.LHS, visit)
+		n.RHS = walkPushable(n.RHS, visit)
+	case *parser.Call:
+		for i, arg := range n.Args {
+			n.Args[i] = walkPushable(arg, visit)
+		}
+	case *parser.ParenExpr:
+		n.Expr = walkPushable(n.Expr, visit)
+	case *parser.UnaryExpr:
+		n.Expr = walkPushable(n.Expr, visit)
+	}
+	return node
+}
+
+// evaluatePushdowns asks storage for every request, at most
+// maxConcurrentPushdowns at once; the first error cancels the rest.
+func evaluatePushdowns(
+	ctx context.Context, projectID uuid.UUID, requests []*metrics_core.RangeFunctionRequestDTO,
+) ([]pushdownOutcome, error) {
+	repository := metrics_core.GetMetricCoreRepository()
+	outcomes := make([]pushdownOutcome, len(requests))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg       sync.WaitGroup
+		once     sync.Once
+		firstErr error
+	)
+	slots := make(chan struct{}, maxConcurrentPushdowns)
+	for i, request := range requests {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-slots }()
+			if ctx.Err() != nil {
+				return
+			}
+			response, ok, err := repository.EvaluateRangeFunction(ctx, projectID, request)
+			if err != nil {
+				once.Do(func() {
+					firstErr = err
+					cancel()
+				})
+				return
+			}
+			outcomes[i] = pushdownOutcome{response: response, ok: ok}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return outcomes, nil
 }
 
 // pushdownQueryable serves the pushed-down results by name and everything

@@ -38,6 +38,7 @@ import (
 	dashboards_services "obzly/internal/features/dashboards/services"
 	"obzly/internal/features/datamigration"
 	"obzly/internal/features/disk"
+	"obzly/internal/features/ingestion"
 	"obzly/internal/features/inventory"
 	logs_cleanup "obzly/internal/features/logs/cleanup"
 	logs_core "obzly/internal/features/logs/core"
@@ -82,11 +83,13 @@ import (
 	system_usage "obzly/internal/features/system/usage"
 	traces_jaeger "obzly/internal/features/traces/jaeger"
 	traces_querying "obzly/internal/features/traces/querying"
+	"obzly/internal/features/useraccess"
 	users_controllers "obzly/internal/features/users/controllers"
 	mfa_controllers "obzly/internal/features/users/mfa/controllers"
 	users_middleware "obzly/internal/features/users/middleware"
 	users_services "obzly/internal/features/users/services"
 	sso_controllers "obzly/internal/features/users/sso/controllers"
+	"obzly/internal/features/webanalytics"
 	"obzly/internal/query"
 	"obzly/internal/query/partcache"
 	"obzly/internal/storage"
@@ -111,6 +114,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.opentelemetry.io/otel/attribute"
@@ -244,6 +248,8 @@ func main() {
 	alerting.SetAICostSource(aiusage.GetAIUsageService().EvaluateBudgetRule)
 	alerting.SetCloudCostSource(cloudcost.GetService().EvaluateRule)
 	alerting.SetCloudPostureSource(posture.GetService().EvaluateRule)
+	alerting.SetIncidentImpactSource(incidentImpact)
+	sharedconfig.SetTemplatesChanged(alerting.ForgetTemplates)
 	sharedconfig.Start(context.Background(), log)
 
 	if mode.RunsBackgroundWorkers() {
@@ -251,6 +257,10 @@ func main() {
 		if config.GetEnv().UsesJetStream() {
 			startIngestConsumers(log)
 		}
+	}
+
+	if mode.RunsSignalStorage() {
+		logDuckDBBudget(log)
 	}
 
 	if !mode.ServesHTTP() {
@@ -407,15 +417,13 @@ func runQuerier(log *slog.Logger) {
 		os.Exit(1)
 	}
 	resultsDir := filepath.Join(env.LogsDataDir, "query-results")
-	db, err := openQueryExecutorDB(
-		segments.HandleMemoryLimit(queryExecutorMemoryFraction), filepath.Join(resultsDir, "spill"),
-		env.QuerierSpillMaxSize,
-	)
+	executorLimit := segments.HandleMemoryLimit(queryExecutorMemoryFraction)
+	db, err := openQueryExecutorDB(executorLimit, filepath.Join(resultsDir, "spill"), env.QuerierSpillMaxSize)
 	if err != nil {
 		log.Error("Failed to open the query executor's DuckDB", "error", err)
 		os.Exit(1)
 	}
-	telemetry.RegisterDuckDB("query_executor", db)
+	telemetry.RegisterDuckDB("query_executor", db, segments.MemoryLimitBytes(executorLimit))
 	go runPeriodicColdCacheEviction(log)
 	// The id file follows the disk: with a persistent cache volume this
 	// executor keeps its share of segments, and its cache, across restarts.
@@ -581,9 +589,23 @@ func setUpBroker(log *slog.Logger) {
 // container's memory limit (DuckDB would default each to 80%).
 const queryHandleMemoryFraction = 0.4
 
-// workerQuerierMemoryLimit caps a worker's logs search DuckDB; with the
-// compactor's 1 GB it fits the 3 GiB deploy/kubernetes/eks/ha gives a worker.
-const workerQuerierMemoryLimit = "1GB"
+// A worker's search handles (logs, AI logs, spans, metrics, and each SQL
+// sandbox) get 1/16 of the container each, between 256 and 512 MB: 268 MB at
+// 4 GiB, 403 MB at 6 GiB. A worker only searches for background work
+// (inventory PromQL, alert rules, AI budgets, correlation) over small
+// windows, spilling past the cap. They had 1 GB (logs) and 1.6 GB (spans,
+// metrics, at 4 GiB), and the inventory's PromQL on the metrics handle drove
+// 1.3-2.3 GB spikes that OOM-killed workers.
+const (
+	workerQuerierMemoryShare = 1.0 / 16
+	workerQuerierMemoryFloor = 256_000_000
+	workerQuerierMemoryCap   = 512_000_000
+)
+
+// workerQuerierThreads caps each search handle's threads on a worker. Without
+// a pod CPU limit DuckDB starts one per core of the node, each with its own
+// row-group buffers, which neither go_memstats nor duckdb_memory() shows.
+const workerQuerierThreads = 2
 
 // ingestConsumers stops the JetStream shard runners and waits for them to
 // release their shards (flush, upload, ack). Nil unless they run.
@@ -960,6 +982,7 @@ func setUpIdentityRoutes(r *gin.Engine, v1 *gin.RouterGroup) *gin.RouterGroup {
 	users_controllers.GetSettingsController().RegisterRoutes(protected)
 	sso_controllers.GetConnectorController().RegisterRoutes(protected)
 	users_controllers.GetManagementController().RegisterRoutes(protected)
+	useraccess.GetController().RegisterRoutes(protected)
 	users_controllers.GetUserPlanController().RegisterRoutes(protected)
 	access_tokens.GetAccessTokenController().RegisterRoutes(protected)
 	oauth.GetOAuthController().RegisterRoutes(protected)
@@ -1016,6 +1039,8 @@ func setUpSiteRoutes(r *gin.Engine, v1 *gin.RouterGroup, protected *gin.RouterGr
 	inventory.GetController().RegisterRoutes(protected)
 	cloudcost.GetController().RegisterRoutes(protected)
 	posture.GetController().RegisterRoutes(protected)
+	ingestion.GetController().RegisterRoutes(protected)
+	webanalytics.GetController().RegisterRoutes(protected)
 	// Organizations live where users are managed: here only on a standalone
 	// install (its own control plane); a Site enrolled in one has its
 	// organizations there.
@@ -1073,6 +1098,9 @@ func runIngestPipeline(log *slog.Logger) {
 	// Flushes this replica's own write buffer, so it's tied to local ingest.
 	go runPeriodicSegmentFlush(log)
 
+	// Writes what each source sent to this replica, for the ingestion status.
+	go ingestion.GetTracker().Run(context.Background())
+
 	// all/worker replicas upload after each compaction tick; an api replica has
 	// no such tick, and nobody else can read its disk.
 	if !config.GetEnv().ServiceMode.RunsBackgroundWorkers() && config.GetEnv().ObjectStorageURL != "" {
@@ -1104,6 +1132,8 @@ func runBackgroundCleanupWorkers(log *slog.Logger) {
 	aiusage.GetAIUsageService().StartBudgetRuleSync(context.Background())
 	// The infrastructure inventory, rebuilt every 5 minutes (leader-locked).
 	inventory.GetBuilder().Start(context.Background())
+	// Web analytics hourly and daily rollups (leader-locked).
+	webanalytics.GetBuilder().Start(context.Background())
 	// Drops cost batches that never completed, hourly (leader-locked).
 	cloudcost.GetService().StartMaintenance(context.Background())
 	posture.GetService().StartMaintenance(context.Background())
@@ -1344,14 +1374,10 @@ func setUpLogsStorage(log *slog.Logger) {
 
 	// A worker's searches are background work in a memory-capped container: an
 	// oversized one should fail, not kill the worker.
-	if config.GetEnv().ServiceMode == config.ServiceModeWorker {
-		opts = append(opts, logs_parquetstore.WithQuerierMemoryLimit(workerQuerierMemoryLimit))
-	} else {
-		opts = append(
-			opts,
-			logs_parquetstore.WithQuerierMemoryLimit(segments.HandleMemoryLimit(queryHandleMemoryFraction)),
-		)
-	}
+	opts = append(opts,
+		logs_parquetstore.WithQuerierMemoryLimit(searchMemoryLimit()),
+		logs_parquetstore.WithQuerierThreads(searchThreads()),
+	)
 
 	repository, err := logs_parquetstore.New(dataDir, opts...)
 	if err != nil {
@@ -1374,6 +1400,72 @@ func setUpLogsStorage(log *slog.Logger) {
 	cleanupStaleTempSegments(log, logs_core.StreamAILogs, aiRepository.CleanupStaleTempFiles)
 
 	logs_core.SetAIRepository(aiRepository)
+}
+
+// logDuckDBBudget logs once what this replica's DuckDB handles may use if
+// all fill their caps at once (plus Go's share), and warns when that is over
+// the container's memory limit. Call it after every long-lived handle is open.
+func logDuckDBBudget(log *slog.Logger) {
+	budget := duckDBBudget(telemetry.DuckDBHandles(), searchMemoryLimit(), segments.ContainerMemoryLimit())
+
+	attrs := []any{
+		"duckdb", segments.FormatBytes(budget.DuckDBBytes), "go", segments.FormatBytes(budget.GoBytes),
+		"total", segments.FormatBytes(budget.TotalBytes), "uncappedHandles", budget.Uncapped,
+		"handles", budget.Summary(),
+	}
+	if budget.ContainerBytes > 0 {
+		attrs = append(attrs, "containerLimit", segments.FormatBytes(budget.ContainerBytes))
+	}
+	if budget.Exceeds() {
+		log.Warn("DuckDB memory caps plus Go's share add up to more than the container memory limit: "+
+			"enough handles filling their caps at once OOM-kills this replica; watch its working set "+
+			"and raise the limit if it gets close", attrs...)
+		return
+	}
+	log.Info("DuckDB memory budget", attrs...)
+}
+
+// duckDBBudget is the budget of the registered handles plus those opened on
+// demand: a logs SQL sandbox (capped at sandboxLimit, the logs querier's
+// cap), audits, the schema anchor and the footer reader.
+func duckDBBudget(
+	handles []telemetry.DuckDBHandleKind, sandboxLimit string, containerBytes int64,
+) segments.MemoryBudget {
+	items := make([]segments.BudgetItem, 0, len(handles)+4)
+	for _, kind := range handles {
+		items = append(items, segments.BudgetItem{Kind: kind.Handle, Count: kind.Count, LimitBytes: kind.LimitBytes})
+	}
+	items = append(items, segments.BudgetItem{
+		Kind: "logs_sql_sandbox", Count: 1, LimitBytes: segments.MemoryLimitBytes(sandboxLimit),
+	})
+	items = append(items, segments.OnDemandBudget()...)
+	return segments.NewMemoryBudget(items, containerBytes)
+}
+
+// searchMemoryLimit caps a search DuckDB handle (a querier's, and its SQL
+// sandboxes'): workerQuerierMemoryShare on a worker, else
+// queryHandleMemoryFraction of the container.
+func searchMemoryLimit() string {
+	if config.GetEnv().ServiceMode == config.ServiceModeWorker {
+		return workerSearchMemoryLimit(segments.ContainerMemoryLimit())
+	}
+	return segments.HandleMemoryLimit(queryHandleMemoryFraction)
+}
+
+// workerSearchMemoryLimit is a worker search handle's cap in a container
+// of containerBytes.
+func workerSearchMemoryLimit(containerBytes int64) string {
+	return segments.ContainerShare(containerBytes, workerQuerierMemoryShare, workerQuerierMemoryFloor,
+		workerQuerierMemoryCap)
+}
+
+// searchThreads caps a search handle's threads on a worker; 0 (DuckDB's
+// default) elsewhere, where searches are interactive.
+func searchThreads() int {
+	if config.GetEnv().ServiceMode == config.ServiceModeWorker {
+		return workerQuerierThreads
+	}
+	return 0
 }
 
 func testLogsStorageConnection(log *slog.Logger) {
@@ -1416,9 +1508,9 @@ func setUpSpansStorage(log *slog.Logger) {
 		opts = append(opts, spans_parquetstore.WithTail(tail))
 	}
 
-	opts = append(
-		opts,
-		spans_parquetstore.WithQuerierMemoryLimit(segments.HandleMemoryLimit(queryHandleMemoryFraction)),
+	opts = append(opts,
+		spans_parquetstore.WithQuerierMemoryLimit(searchMemoryLimit()),
+		spans_parquetstore.WithQuerierThreads(searchThreads()),
 	)
 
 	repository, err := spans_parquetstore.New(dataDir, opts...)
@@ -1471,9 +1563,9 @@ func setUpMetricsStorage(log *slog.Logger) {
 		opts = append(opts, metrics_parquetstore.WithTail(tail))
 	}
 
-	opts = append(
-		opts,
-		metrics_parquetstore.WithQuerierMemoryLimit(segments.HandleMemoryLimit(queryHandleMemoryFraction)),
+	opts = append(opts,
+		metrics_parquetstore.WithQuerierMemoryLimit(searchMemoryLimit()),
+		metrics_parquetstore.WithQuerierThreads(searchThreads()),
 	)
 
 	repository, err := metrics_parquetstore.New(dataDir, opts...)
@@ -1638,4 +1730,23 @@ func cacheControlFor(urlPath string) string {
 	default:
 		return "public, max-age=3600"
 	}
+}
+
+// incidentImpact is the Incidents page's impact query for incident
+// notifications' top impacted services.
+func incidentImpact(projectID, sessionID uuid.UUID) ([]alerting.ImpactedService, error) {
+	impact, err := correlation_api.ComputeSessionImpact(projectID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	services := make([]alerting.ImpactedService, 0, len(impact.Services))
+	for _, service := range impact.Services {
+		services = append(services, alerting.ImpactedService{
+			Name:       service.ServiceName,
+			ErrorLogs:  service.ErrorLogs,
+			ErrorSpans: service.ErrorSpans,
+			Total:      service.Total,
+		})
+	}
+	return services, nil
 }

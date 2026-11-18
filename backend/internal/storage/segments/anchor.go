@@ -70,6 +70,9 @@ func writeAnchor(schema Schema) (string, error) {
 		return "", err
 	}
 	defer func() { _ = db.Close() }()
+	if err := SetHandleLimits(db, metadataMemoryLimit, metadataThreads); err != nil {
+		return "", err
+	}
 	temp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
 	query := fmt.Sprintf("COPY (SELECT %s LIMIT 0) TO '%s' (FORMAT PARQUET)",
 		strings.Join(columns, ", "), strings.ReplaceAll(temp, "'", "''"))

@@ -74,6 +74,12 @@ func newFixture(t *testing.T, receiverURL string, s *sender) *fixture {
 	require.NoError(t, storage.GetDb().Exec("INSERT INTO projects (id, name) VALUES (?, ?)",
 		projectID, "alerting "+projectID.String()[:8]).Error)
 	t.Cleanup(func() { storage.GetDb().Exec("DELETE FROM projects WHERE id = ?", projectID) })
+	return newFixtureForProject(t, projectID, receiverURL, s)
+}
+
+// newFixtureForProject is newFixture for an existing project.
+func newFixtureForProject(t *testing.T, projectID uuid.UUID, receiverURL string, s *sender) *fixture {
+	t.Helper()
 	f := &fixture{projectID: projectID, repo: &repository{}, clock: time.Now().UTC()}
 	now := func() time.Time { return f.clock }
 	f.evaluator = &Evaluator{repo: f.repo, log: logger.GetLogger(), now: now}

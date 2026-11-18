@@ -12,6 +12,7 @@ import type { SetAdminPasswordRequest } from '../model/SetAdminPasswordRequest';
 import type { SignInRequest } from '../model/SignInRequest';
 import type { SignInResponse } from '../model/SignInResponse';
 import type { SignUpRequest } from '../model/SignUpRequest';
+import type { UIPreferences } from '../model/UIPreferences';
 import type { UpdateUserInfoRequest } from '../model/UpdateUserInfoRequest';
 import type { UserProfile } from '../model/UserProfile';
 
@@ -114,6 +115,16 @@ export const userApi = {
     const requestOptions: RequestOptions = new RequestOptions();
     requestOptions.setBody(JSON.stringify(request));
     return apiHelper.fetchPutJson(`${getApplicationServer()}/api/v1/users/me`, requestOptions);
+  },
+
+  // Saves the caller's own preferences to their profile (central on a control plane).
+  async updatePreferences(preferences: UIPreferences): Promise<UIPreferences> {
+    const requestOptions: RequestOptions = new RequestOptions();
+    requestOptions.setBody(JSON.stringify(preferences));
+    return apiHelper.fetchPutJson(
+      `${getApplicationServer()}/api/v1/users/me/preferences`,
+      requestOptions,
+    );
   },
 
   // A server-signed CSRF token for the authorize URL's state param.

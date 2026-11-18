@@ -43,12 +43,20 @@ type options struct {
 	cacheDir    string
 	tail        segments.TailSource
 	memoryLimit string
+	threads     int
 }
 
 // WithQuerierMemoryLimit caps the querier's DuckDB (spans_querier.WithMemoryLimit).
 func WithQuerierMemoryLimit(limit string) Option {
 	return func(o *options) {
 		o.memoryLimit = limit
+	}
+}
+
+// WithQuerierThreads caps the querier's DuckDB threads (spans_querier.WithThreads).
+func WithQuerierThreads(threads int) Option {
+	return func(o *options) {
+		o.threads = threads
 	}
 }
 
@@ -91,6 +99,7 @@ func New(dataDir string, opts ...Option) (*SpanParquetStore, error) {
 	querierOpts := []spans_querier.QuerierOption{
 		spans_querier.WithQueryDir(filepath.Join(dataDir, "query", "spans")),
 		spans_querier.WithMemoryLimit(cfg.memoryLimit),
+		spans_querier.WithThreads(cfg.threads),
 	}
 	if cfg.objectStore != nil {
 		querierOpts = append(querierOpts, spans_querier.WithObjectStore(cfg.objectStore, cfg.cacheDir))
@@ -184,6 +193,38 @@ func (s *SpanParquetStore) ServiceK8sMetadata(
 	return s.querier.ServiceK8sMetadata(projectID, timeRange)
 }
 
+func (s *SpanParquetStore) ServiceNodeStats(
+	projectID uuid.UUID,
+	timeRange *spans_core.TimeRangeDTO,
+) (*spans_core.ServiceNodeStats, error) {
+	return s.querier.ServiceNodeStats(projectID, timeRange)
+}
+
+func (s *SpanParquetStore) TraceSummary(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *spans_core.TraceSummaryQuery,
+) (*spans_core.TraceSummaryResult, error) {
+	return s.querier.TraceSummary(ctx, projectID, request)
+}
+
+func (s *SpanParquetStore) ServiceErrorRates(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *spans_core.ServiceErrorRatesQuery,
+) ([]spans_core.ServiceErrorRate, error) {
+	return s.querier.ServiceErrorRates(ctx, projectID, request)
+}
+
+func (s *SpanParquetStore) ServiceErrorSpanCounts(
+	projectID uuid.UUID,
+	timeRange *spans_core.TimeRangeDTO,
+	services []string,
+	spanIDs []string,
+) (map[string]int64, error) {
+	return s.querier.ServiceErrorSpanCounts(projectID, timeRange, services, spanIDs)
+}
+
 func (s *SpanParquetStore) QueryLLMCalls(
 	ctx context.Context,
 	projectID uuid.UUID,
@@ -210,11 +251,12 @@ func (s *SpanParquetStore) GetSystemSpanStats() (*spans_core.SpansStatsDTO, erro
 
 func toSpansStatsDTO(stats segments.StreamStats) *spans_core.SpansStatsDTO {
 	return &spans_core.SpansStatsDTO{
-		TotalSpans:     stats.RowCount,
-		TotalSizeMB:    float64(stats.SizeBytes) / (1024 * 1024),
-		RawSizeMB:      float64(stats.RawSizeBytes) / (1024 * 1024),
-		OldestSpanTime: stats.OldestTime,
-		NewestSpanTime: stats.NewestTime,
+		TotalSpans:          stats.RowCount,
+		TotalSizeMB:         float64(stats.SizeBytes) / (1024 * 1024),
+		RawSizeMB:           float64(stats.RawSizeBytes) / (1024 * 1024),
+		ObjectStorageSizeMB: float64(stats.UploadedSizeBytes) / (1024 * 1024),
+		OldestSpanTime:      stats.OldestTime,
+		NewestSpanTime:      stats.NewestTime,
 	}
 }
 

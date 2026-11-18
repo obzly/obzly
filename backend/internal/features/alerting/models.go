@@ -13,6 +13,7 @@ import (
 	logs_core "obzly/internal/features/logs/core"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Rule sources.
@@ -78,6 +79,17 @@ type NotificationChannel struct {
 	// Target is a non-secret description of where it sends (a URL's host,
 	// a key's last characters, the recipients).
 	Target string `json:"target" gorm:"-"`
+	// UseEmoji: .Emoji is empty in its messages when false.
+	UseEmoji bool `json:"useEmoji" gorm:"column:use_emoji"`
+	// TemplateOverride: its own template (TemplateSubject/TemplateBody)
+	// instead of the organisation default for its kind.
+	TemplateOverride bool   `json:"templateOverride" gorm:"column:template_override"`
+	TemplateSubject  string `json:"templateSubject"  gorm:"column:template_subject"`
+	TemplateBody     string `json:"templateBody"     gorm:"column:template_body"`
+	// TemplateError is the last render failure of its template at send time
+	// (the built-in default was sent instead); cleared by the next success.
+	TemplateError   string     `json:"templateError"   gorm:"column:template_error"`
+	TemplateErrorAt *time.Time `json:"templateErrorAt" gorm:"column:template_error_at"`
 }
 
 func (NotificationChannel) TableName() string { return "notification_channels" }
@@ -130,9 +142,22 @@ type AlertRule struct {
 	// ManagedBy names the feature that maintains this rule
 	// ("synthetics:<monitor id>:<kind>"); such rules are read-only here.
 	ManagedBy string `json:"managedBy" gorm:"column:managed_by"`
+	// Severity is critical, high, medium or low.
+	Severity string `json:"severity" gorm:"column:severity"`
+	// Description is the rule's runbook text, .Rule.Description in templates.
+	Description string `json:"description" gorm:"column:description"`
 }
 
 func (AlertRule) TableName() string { return "alert_rules" }
+
+// BeforeSave gives a rule saved without a severity (by code that predates
+// it) the one its severity label implies.
+func (r *AlertRule) BeforeSave(*gorm.DB) error {
+	if !ValidSeverity(r.Severity) {
+		r.Severity = ruleSeverity(r.Severity, r.Labels)
+	}
+	return nil
+}
 
 // RuleQuery is what a rule measures. Metrics: PromQL (an instant query;
 // each result series is checked). Logs: the count of logs matching Logs
@@ -208,6 +233,10 @@ type Silence struct {
 	// ManagedBy names what maintains this silence ("synthetics-maintenance:
 	// <window id>:..."); such silences are read-only here.
 	ManagedBy string `json:"managedBy" gorm:"column:managed_by"`
+	// MCPClient names the AI assistant (OAuth app or access token) that
+	// created it through MCP; empty when created in the UI. A label only:
+	// CreatedBy and the audit log say who made it.
+	MCPClient string `json:"mcpClient,omitempty" gorm:"column:mcp_client"`
 }
 
 func (Silence) TableName() string { return "silences" }
@@ -249,21 +278,53 @@ type OutboxItem struct {
 
 func (OutboxItem) TableName() string { return "notification_outbox" }
 
+// Notification kinds.
+const (
+	KindAlert    = "alert"
+	KindIncident = "incident"
+)
+
 // Notification is what every channel renders.
 type Notification struct {
-	Status      string     `json:"status"`
-	ProjectID   uuid.UUID  `json:"projectId"`
-	RuleID      *uuid.UUID `json:"ruleId,omitempty"`
-	RuleName    string     `json:"ruleName"`
-	Source      string     `json:"source,omitempty"`
-	Summary     string     `json:"summary,omitempty"`
-	Comparison  string     `json:"comparison,omitempty"`
-	Threshold   float64    `json:"threshold"`
-	Measured    float64    `json:"value"`
-	Labels      Labels     `json:"labels"`
-	Fingerprint string     `json:"fingerprint,omitempty"`
-	StartsAt    time.Time  `json:"startsAt"`
-	EndsAt      *time.Time `json:"endsAt,omitempty"`
+	Status string `json:"status"`
+	// Kind is alert (empty in payloads queued before v1.2.0) or incident.
+	Kind     string `json:"kind,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	// RuleDescription is the rule's runbook text.
+	RuleDescription string `json:"ruleDescription,omitempty"`
+	// Incident is set on incident notifications.
+	Incident    *IncidentDetails `json:"incident,omitempty"`
+	ProjectID   uuid.UUID        `json:"projectId"`
+	RuleID      *uuid.UUID       `json:"ruleId,omitempty"`
+	RuleName    string           `json:"ruleName"`
+	Source      string           `json:"source,omitempty"`
+	Summary     string           `json:"summary,omitempty"`
+	Comparison  string           `json:"comparison,omitempty"`
+	Threshold   float64          `json:"threshold"`
+	Measured    float64          `json:"value"`
+	Labels      Labels           `json:"labels"`
+	Fingerprint string           `json:"fingerprint,omitempty"`
+	StartsAt    time.Time        `json:"startsAt"`
+	EndsAt      *time.Time       `json:"endsAt,omitempty"`
+}
+
+// IncidentDetails is what an incident notification says about it.
+type IncidentDetails struct {
+	// ID is the incident's first session, which the link opens.
+	ID          uuid.UUID         `json:"id"`
+	Services    []string          `json:"services"`
+	SignalCount int               `json:"signalCount"`
+	ErrorLogs   int               `json:"errorLogs"`
+	ErrorSpans  int               `json:"errorSpans"`
+	TopServices []ImpactedService `json:"topServices"`
+}
+
+// ImpactedService is one service's error signals in an incident.
+type ImpactedService struct {
+	Name       string `json:"name"`
+	ErrorLogs  int64  `json:"errorLogs"`
+	ErrorSpans int64  `json:"errorSpans"`
+	Total      int64  `json:"total"`
 }
 
 func (n Notification) Value() (driver.Value, error) { return jsonValue(n) }

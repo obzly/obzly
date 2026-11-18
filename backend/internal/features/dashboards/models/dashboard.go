@@ -65,15 +65,68 @@ const (
 	PanelTypePie   PanelType = "pie"
 	PanelTypeStat  PanelType = "stat"
 	PanelTypeTable PanelType = "table"
+
+	// The v2 kinds. statTrend is a separate type rather than a stat option so
+	// stat panels saved before it render exactly as they did.
+	PanelTypeStatTrend   PanelType = "statTrend"
+	PanelTypeRankedList  PanelType = "rankedList"
+	PanelTypeDonut       PanelType = "donut"
+	PanelTypeGauge       PanelType = "gauge"
+	PanelTypeStackedBar  PanelType = "stackedBar"
+	PanelTypeStatusStrip PanelType = "statusStrip"
 )
 
 func (t PanelType) IsValid() bool {
 	switch t {
-	case PanelTypeLine, PanelTypeBar, PanelTypePie, PanelTypeStat, PanelTypeTable:
+	case PanelTypeLine, PanelTypeBar, PanelTypePie, PanelTypeStat, PanelTypeTable,
+		PanelTypeStatTrend, PanelTypeRankedList, PanelTypeDonut, PanelTypeGauge,
+		PanelTypeStackedBar, PanelTypeStatusStrip:
 		return true
 	default:
 		return false
 	}
+}
+
+// UsesRange reports whether min/max mean anything for this type.
+func (t PanelType) UsesRange() bool {
+	return t == PanelTypeGauge
+}
+
+// UsesThresholds reports whether warn/critical thresholds colour this type.
+func (t PanelType) UsesThresholds() bool {
+	return t == PanelTypeGauge || t == PanelTypeStatusStrip
+}
+
+// UsesHigherIs reports whether this type judges values as good or bad: a
+// change pill's colour, or which side of a threshold is the breach.
+func (t PanelType) UsesHigherIs() bool {
+	return t == PanelTypeStatTrend || t.UsesThresholds()
+}
+
+// PanelHigherIs says whether a rising value is good or bad. "" means
+// unknown: change pills stay neutral and thresholds breach upwards.
+type PanelHigherIs string
+
+const (
+	PanelHigherIsUnset PanelHigherIs = ""
+	PanelHigherIsGood  PanelHigherIs = "good"
+	PanelHigherIsBad   PanelHigherIs = "bad"
+)
+
+func (h PanelHigherIs) IsValid() bool {
+	switch h {
+	case PanelHigherIsUnset, PanelHigherIsGood, PanelHigherIsBad:
+		return true
+	default:
+		return false
+	}
+}
+
+// PanelThresholds are in the panel's raw values (a percent unit is a 0-1
+// fraction). Which side breaches follows the panel's HigherIs.
+type PanelThresholds struct {
+	Warn     *float64 `json:"warn,omitempty"`
+	Critical *float64 `json:"critical,omitempty"`
 }
 
 // GridPos is a panel's position and size in grid units (12 columns wide).
@@ -132,8 +185,14 @@ type Panel struct {
 	Type   PanelType   `json:"type"`
 	Source PanelSource `json:"source,omitempty"`
 
-	// Logs-source only.
-	Query *logs_core.QueryNode `json:"query,omitempty"`
+	// Logs-source only. Measure ("" counts lines) reads MeasureField;
+	// TopGroups keeps a time series' N largest groups; GroupBands groups a
+	// numeric GroupField into log bands (previews only, never saved).
+	Query        *logs_core.QueryNode         `json:"query,omitempty"`
+	Measure      logs_core.AggregationMeasure `json:"measure,omitempty"`
+	MeasureField string                       `json:"measureField,omitempty"`
+	TopGroups    int                          `json:"topGroups,omitempty"`
+	GroupBands   string                       `json:"groupBands,omitempty"`
 
 	// Spans-source only. Metric is a spans_core.AggregationMetric ("" means
 	// count), kept a string so this package needn't import spans_core.
@@ -153,6 +212,13 @@ type Panel struct {
 	Limit      int       `json:"limit,omitempty"`
 	Unit       PanelUnit `json:"unit,omitempty"`
 	GridPos    GridPos   `json:"gridPos"`
+
+	// Display settings of the v2 kinds; like Unit they never affect the
+	// query. Min/Max bound a gauge's arc.
+	Min        *float64         `json:"min,omitempty"`
+	Max        *float64         `json:"max,omitempty"`
+	Thresholds *PanelThresholds `json:"thresholds,omitempty"`
+	HigherIs   PanelHigherIs    `json:"higherIs,omitempty"`
 }
 
 // VariableSource picks where a variable's selectable values come from.

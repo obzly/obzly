@@ -15,6 +15,7 @@ import (
 
 	"obzly/internal/broker"
 	"obzly/internal/storage/segments"
+	"obzly/internal/telemetry"
 
 	"github.com/google/uuid"
 	_ "github.com/marcboeker/go-duckdb/v2"
@@ -86,6 +87,16 @@ func NewTail(signal, dir string, write DeltaWriter, log *slog.Logger) (*Tail, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to open tail merge handle: %w", err)
 	}
+	if _, err := segments.ConfigureMemory(merger, segments.TailMergerMemoryLimit,
+		filepath.Join(dir, "spill")); err != nil {
+		_ = merger.Close()
+		return nil, err
+	}
+	if err := segments.SetHandleLimits(merger, "", segments.TailMergerThreads); err != nil {
+		_ = merger.Close()
+		return nil, err
+	}
+	telemetry.RegisterDuckDB("tail_merger_"+signal, merger, segments.MemoryLimitBytes(segments.TailMergerMemoryLimit))
 	return &Tail{signal: signal, dir: dir, log: log.With("signal", signal), write: write, merger: merger,
 		entries: map[uuid.UUID]*tailEntry{}}, nil
 }

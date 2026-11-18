@@ -9,6 +9,7 @@ import {
   type RunResult,
   syntheticsApi,
 } from '../../../entity/synthetics';
+import { useTheme } from '../../../shared/theme';
 import { baseOption, timeAxis, valueAxis } from '../lib/chartOptions';
 import { formatMs, formatPercent } from '../lib/format';
 import { type StepRow, failedStepNote, stepRows } from '../lib/multiStep';
@@ -54,19 +55,6 @@ const BY_STEP = ['step_index', 'step'];
 const STEP_LOCATION = 'step_index, step, location';
 const stepTotals = rangeCache<StepTotals>();
 
-const STEP_COLORS = [
-  '#34d399',
-  '#60a5fa',
-  '#fbbf24',
-  '#a78bfa',
-  '#f472b6',
-  '#22d3ee',
-  '#fb923c',
-  '#a3e635',
-  '#94a3b8',
-  '#f87171',
-];
-
 /** Per-step success rate, p50, p95, share of run time and last failure, and p95 by step over time. */
 export const MonitorStepsPanel = ({
   check,
@@ -76,6 +64,7 @@ export const MonitorStepsPanel = ({
   failuresCapped,
   refresh = 0,
 }: Props) => {
+  const { chartColors } = useTheme();
   const [data, setData] = useState<StepData>();
   const [error, setError] = useState<string>();
   const shownRange = useRef<RangeKey>(undefined);
@@ -189,7 +178,7 @@ export const MonitorStepsPanel = ({
           showSymbol: false,
           areaStyle: { opacity: 0.6 },
           lineStyle: { width: 0.8 },
-          itemStyle: { color: colorOf(Number(item.labels.step_index)) },
+          itemStyle: { color: colorOf(colors.series, Number(item.labels.step_index)) },
           data: item.points.map((point) => [
             Date.parse(point.timestamp),
             Math.round(point.value * 1000),
@@ -229,7 +218,7 @@ export const MonitorStepsPanel = ({
                   <span className="flex items-center gap-2">
                     <span
                       className="inline-block h-2 w-2 shrink-0 rounded-full"
-                      style={{ background: colorOf(row.index) }}
+                      style={{ background: colorOf(chartColors, row.index) }}
                     />
                     {row.index}. {row.name}
                   </span>
@@ -261,12 +250,12 @@ export const MonitorStepsPanel = ({
                 key: 'share',
                 render: (_, row) => (
                   <Tooltip title={formatPercent(row.share, 0)}>
-                    <div className="h-2 w-full min-w-16 rounded bg-gray-100 dark:bg-gray-700">
+                    <div className="h-2 w-full min-w-16 rounded-full bg-[var(--v2-track)]">
                       <div
-                        className="h-2 rounded"
+                        className="h-2 rounded-full"
                         style={{
                           width: `${Math.round((row.share ?? 0) * 100)}%`,
-                          background: colorOf(row.index),
+                          background: colorOf(chartColors, row.index),
                         }}
                       />
                     </div>
@@ -321,5 +310,5 @@ export const RunSteps = ({ run }: { run: RunResult }) => (
   </span>
 );
 
-const colorOf = (index: number) =>
-  STEP_COLORS[(index - 1 + STEP_COLORS.length) % STEP_COLORS.length];
+const colorOf = (palette: string[], index: number) =>
+  palette[(((index - 1) % palette.length) + palette.length) % palette.length];

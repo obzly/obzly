@@ -134,14 +134,14 @@ export const SSOGroupMappingsModal = ({ connector, onClose }: Props) => {
     >
       <div className="space-y-3">
         {!connector.groupsClaim && (
-          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+          <div className="rounded-xl bg-orange-500/10 px-3.5 py-3 text-xs text-[var(--v2-orange)]">
             No groups claim is set on this connector, so these mappings are ignored. Edit the
             connector and set it (AWS Cognito uses <code>cognito:groups</code>).
           </div>
         )}
 
         {connector.providerType === SSOProviderType.ENTRA_ID && (
-          <div className="rounded border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+          <div className="rounded-xl bg-blue-500/10 px-3.5 py-3 text-xs text-[var(--v2-blue)]">
             Entra ID sends each group&apos;s <strong>Object ID</strong> (a GUID), not its name.
             Enter the Object ID from Entra ID → Groups. Users in more than about 200 groups are
             looked up through Microsoft Graph; if that lookup fails, their access is left unchanged
@@ -212,7 +212,7 @@ export const SSOGroupMappingsModal = ({ connector, onClose }: Props) => {
             type="primary"
             loading={isSaving}
             onClick={handleAdd}
-            className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+            className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
           >
             Add
           </Button>

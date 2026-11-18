@@ -21,6 +21,15 @@ func (q *LogQuerier) ExecutePatterns(
 	projectID uuid.UUID,
 	request *logs_core.PatternsRequestDTO,
 ) (*logs_core.PatternsResponseDTO, error) {
+	return q.ExecutePatternsContext(context.Background(), projectID, request)
+}
+
+// ExecutePatternsContext is ExecutePatterns stopping when ctx ends (the client left).
+func (q *LogQuerier) ExecutePatternsContext(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *logs_core.PatternsRequestDTO,
+) (*logs_core.PatternsResponseDTO, error) {
 	empty := &logs_core.PatternsResponseDTO{Patterns: []logs_core.LogPatternDTO{}}
 
 	from, to := resolveTimeRange(request.TimeRange)
@@ -28,7 +37,10 @@ func (q *LogQuerier) ExecutePatterns(
 	if err != nil {
 		return nil, fmt.Errorf("failed to list segments for project: %w", err)
 	}
-	tail, ordered := q.searchInputs(context.Background(), projectID, records, from, to, false)
+	tail, ordered := q.searchInputs(ctx, projectID, records, from, to, false)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(tail) == 0 && len(ordered) == 0 {
 		return empty, nil
 	}
@@ -48,7 +60,7 @@ func (q *LogQuerier) ExecutePatterns(
 		limit = maxPatternsLimit
 	}
 
-	result, err := q.topGroups(context.Background(), tail, ordered, from, to, whereClause, whereArgs, facetQuery{
+	result, err := q.topGroups(ctx, tail, ordered, from, to, whereClause, whereArgs, facetQuery{
 		groupExpr:  storedPatternHashSQL,
 		withSample: true,
 		limit:      limit,

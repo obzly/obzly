@@ -4,6 +4,7 @@ import (
 	"time"
 
 	users_enums "obzly/internal/features/users/enums"
+	users_models "obzly/internal/features/users/models"
 
 	"github.com/google/uuid"
 )
@@ -98,6 +99,26 @@ type UserProfileResponseDTO struct {
 	MFAEnabled bool `json:"mfaEnabled"`
 	// IsRootAdmin marks the bootstrap root admin, whose email can only change via ADMIN_EMAIL.
 	IsRootAdmin bool `json:"isRootAdmin,omitempty"`
+	// UIPreferences is omitted until the user saves one (the theme menu does).
+	UIPreferences *users_models.UIPreferences `json:"uiPreferences,omitempty"`
+}
+
+type UpdateUIPreferencesRequestDTO struct {
+	Theme *users_models.ThemePreferences `json:"theme" binding:"required"`
+}
+
+// UpdateUsersSettingsRequestDTO: an empty theme field or a missing
+// isUserThemeChoiceAllowed keeps the stored value, so clients that predate
+// them don't reset the theme defaults.
+type UpdateUsersSettingsRequestDTO struct {
+	IsAllowExternalRegistrations    bool   `json:"isAllowExternalRegistrations"`
+	IsAllowMemberInvitations        bool   `json:"isAllowMemberInvitations"`
+	IsMemberAllowedToCreateProjects bool   `json:"isMemberAllowedToCreateProjects"`
+	IsMFARequiredForEveryone        bool   `json:"isMfaRequiredForEveryone"`
+	DefaultThemeMode                string `json:"defaultThemeMode"`
+	DefaultLightTheme               string `json:"defaultLightTheme"`
+	DefaultDarkTheme                string `json:"defaultDarkTheme"`
+	IsUserThemeChoiceAllowed        *bool  `json:"isUserThemeChoiceAllowed"`
 }
 
 type ListUsersResponseDTO struct {
@@ -118,6 +139,31 @@ type ListUsersRequestDTO struct {
 	Offset     int        `form:"offset"     json:"offset"`
 	BeforeDate *time.Time `form:"beforeDate" json:"beforeDate"`
 	Query      string     `form:"query"      json:"query"`
+	// Filters, all optional: role ADMIN or MEMBER; mfa "on" or "off"; status
+	// ACTIVE, INVITED or INACTIVE (the account); activity "active" or
+	// "inactive" (see users_repositories.InactiveAfter).
+	Role     string `form:"role"     json:"role"`
+	MFA      string `form:"mfa"      json:"mfa"`
+	Status   string `form:"status"   json:"status"`
+	Activity string `form:"activity" json:"activity"`
+}
+
+// UsersSummaryResponseDTO is the Users page's headline numbers. There is no
+// instance-wide seat limit: only organization plans cap members.
+type UsersSummaryResponseDTO struct {
+	Total int64 `json:"total"`
+	// Accounts by status: ACTIVE, INVITED (sign-up pending), INACTIVE (deactivated).
+	ActiveAccounts int64 `json:"activeAccounts"`
+	Invited        int64 `json:"invited"`
+	Deactivated    int64 `json:"deactivated"`
+	// ActiveLast7Days: active accounts with a sign-in or request in the last 7 days.
+	ActiveLast7Days int64 `json:"activeLast7Days"`
+	// Inactive matches the activity=inactive filter.
+	Inactive int64 `json:"inactive"`
+	// MFAEnabled counts active accounts with an authenticator, out of ActiveAccounts.
+	MFAEnabled       int64 `json:"mfaEnabled"`
+	Admins           int64 `json:"admins"`
+	AdminsWithoutMFA int64 `json:"adminsWithoutMfa"`
 }
 
 type CreatePlanRequestDTO struct {

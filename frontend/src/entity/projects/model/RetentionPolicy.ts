@@ -1,10 +1,14 @@
 export type RetentionSignal = 'logs' | 'traces' | 'metrics';
 
 // Keeps `rate` of the logs of `service` (any if empty) at `level` (any if
-// empty); the first matching rule wins.
+// empty) with message pattern `pattern` (any if absent); the first matching rule wins.
 export interface LogSampleRule {
   service: string;
   level: string;
+  /** A message pattern's pattern_hash (rules made on Logs › Volume & noise). */
+  pattern?: string;
+  /** That pattern's template, for display. */
+  patternText?: string;
   rate: number;
 }
 

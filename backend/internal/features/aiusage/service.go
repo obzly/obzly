@@ -51,6 +51,9 @@ func (s *AIUsageService) GetOverview(
 	if err := s.authorize(projectID, user, &request.UsageFilter); err != nil {
 		return nil, err
 	}
+	if err := validateCompare(request.Compare); err != nil {
+		return nil, err
+	}
 
 	span := int64(request.To.Sub(request.From) / time.Second)
 	if request.BucketSeconds <= 0 {
@@ -78,25 +81,7 @@ func (s *AIUsageService) GetOverview(
 		FilterOptions: FilterOptionsDTO{Users: []string{}, Models: []string{}, Terminals: []string{}},
 	}
 
-	if rows := results[0].Rows; len(rows) > 0 {
-		r := rows[0]
-		response.Summary = UsageSummaryDTO{
-			Requests:            toInt(r[0]),
-			CostUSD:             toFloat(r[1]),
-			InputTokens:         toInt(r[2]),
-			OutputTokens:        toInt(r[3]),
-			CacheReadTokens:     toInt(r[4]),
-			CacheCreationTokens: toInt(r[5]),
-			Sessions:            toInt(r[6]),
-			Users:               toInt(r[7]),
-			Prompts:             toInt(r[8]),
-			APIErrors:           toInt(r[9]),
-			ToolCalls:           toInt(r[10]),
-			AvgDurationMs:       toFloat(r[11]),
-			P50TtftMs:           toFloat(r[12]),
-		}
-		response.LatestEventAt = toInt(r[13])
-	}
+	response.Summary, response.LatestEventAt = summaryOf(results[0].Rows)
 	for _, r := range results[1].Rows {
 		response.Timeseries = append(response.Timeseries, TimeseriesPointDTO{
 			Bucket: toInt(
@@ -131,6 +116,14 @@ func (s *AIUsageService) GetOverview(
 		response.FilterOptions = FilterOptionsDTO{
 			Users: toStrings(rows[0][0]), Models: toStrings(rows[0][1]), Terminals: toStrings(rows[0][2]),
 		}
+	}
+
+	if request.Compare == ComparePrevious {
+		previous, err := s.previousSummary(projectID, &request.UsageFilter)
+		if err != nil {
+			return nil, err
+		}
+		response.Previous = previous
 	}
 
 	return response, nil
@@ -261,6 +254,22 @@ func (s *AIUsageService) authorize(projectID uuid.UUID, user *users_models.User,
 	return nil
 }
 
+// previousSummary is the overview's total over the equally long window just before filter's.
+func (s *AIUsageService) previousSummary(projectID uuid.UUID, filter *UsageFilter) (*UsageSummaryDTO, error) {
+	previous := previousWindow(filter)
+	results, err := logs_core.GetAIRepository().ExecuteScopedSQL(projectID, &logs_core.ScopedSQLRequestDTO{
+		From:          previous.From,
+		To:            previous.To,
+		MessagePrefix: eventPrefix,
+		Statements:    []logs_core.ScopedSQLStatement{summaryStatement(&previous)},
+	})
+	if err != nil {
+		return nil, err
+	}
+	summary, _ := summaryOf(results[0].Rows)
+	return &summary, nil
+}
+
 // niceBucketSeconds rounds up to a clock-friendly size, so bars start on
 // round times (a 24h range gets 30-minute bars, not 24-minute ones).
 func niceBucketSeconds(seconds int64) int64 {
@@ -285,6 +294,43 @@ func eventRows(rows [][]any) []SessionEventDTO {
 		})
 	}
 	return events
+}
+
+// summaryOf reads summaryStatement's row and the newest event's time.
+func summaryOf(rows [][]any) (UsageSummaryDTO, int64) {
+	if len(rows) == 0 {
+		return UsageSummaryDTO{}, 0
+	}
+	r := rows[0]
+	return UsageSummaryDTO{
+		Requests:            toInt(r[0]),
+		CostUSD:             toFloat(r[1]),
+		InputTokens:         toInt(r[2]),
+		OutputTokens:        toInt(r[3]),
+		CacheReadTokens:     toInt(r[4]),
+		CacheCreationTokens: toInt(r[5]),
+		Sessions:            toInt(r[6]),
+		Users:               toInt(r[7]),
+		Prompts:             toInt(r[8]),
+		APIErrors:           toInt(r[9]),
+		ToolCalls:           toInt(r[10]),
+		AvgDurationMs:       toFloat(r[11]),
+		P50TtftMs:           toFloat(r[12]),
+	}, toInt(r[13])
+}
+
+func validateCompare(compare string) error {
+	if compare != "" && compare != ComparePrevious {
+		return fmt.Errorf("%w: compare must be previous", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// previousWindow is filter moved back by its own length, so it ends where filter starts.
+func previousWindow(filter *UsageFilter) UsageFilter {
+	previous := *filter
+	previous.From, previous.To = filter.From.Add(-filter.To.Sub(filter.From)), filter.From
+	return previous
 }
 
 func breakdownRows(rows [][]any) []BreakdownRowDTO {

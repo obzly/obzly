@@ -1,23 +1,24 @@
-// Hashed, not random, so a service keeps its color across renders and views.
-const PALETTE = [
-  '#2563eb', // blue
-  '#059669', // emerald
-  '#d97706', // amber
-  '#7c3aed', // violet
-  '#db2777', // pink
-  '#0891b2', // cyan
-  '#65a30d', // lime
-  '#dc2626', // red
-  '#4f46e5', // indigo
-  '#ea580c', // orange
-];
+import { useCallback } from 'react';
 
-export function colorForService(serviceName: string): string {
+import { useTheme } from '../../../shared/theme';
+
+// Hashed, not random, so a service keeps its colour across renders and views.
+// `colors` is the theme's chart series (useTheme().chartColors).
+export function colorForService(serviceName: string, colors: string[]): string {
   let hash = 0;
   for (let i = 0; i < serviceName.length; i++) {
     hash = (hash * 31 + serviceName.charCodeAt(i)) >>> 0;
   }
-  return PALETTE[hash % PALETTE.length];
+  return colors[hash % colors.length];
+}
+
+/** colorForService bound to the active theme's chart colours. */
+export function useServiceColor(): (serviceName: string) => string {
+  const { chartColors } = useTheme();
+  return useCallback(
+    (serviceName: string) => colorForService(serviceName, chartColors),
+    [chartColors],
+  );
 }
 
 export function formatDurationMs(durationMs: number): string {

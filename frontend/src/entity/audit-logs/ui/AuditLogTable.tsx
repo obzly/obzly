@@ -39,7 +39,7 @@ function searchColumn(placeholder: string, value: string): Partial<ColumnType<Au
   return {
     filteredValue: value ? [value] : null,
     filterIcon: (filtered: boolean) => (
-      <SearchOutlined className={filtered ? '!text-emerald-600' : undefined} />
+      <SearchOutlined className={filtered ? '!text-accent-600' : undefined} />
     ),
     filterDropdown: ({ selectedKeys, setSelectedKeys, confirm, clearFilters }) => (
       <div className="flex w-64 flex-col gap-2 p-2" onKeyDown={(e) => e.stopPropagation()}>
@@ -65,7 +65,7 @@ function searchColumn(placeholder: string, value: string): Partial<ColumnType<Au
             type="primary"
             icon={<SearchOutlined />}
             onClick={() => confirm()}
-            className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+            className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
           >
             Search
           </Button>
@@ -222,7 +222,7 @@ export function AuditLogTable({
           : record.userEmail;
 
         return (
-          <span className="inline-block rounded-full bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-800">
+          <span className="bg-accent-100 text-accent-800 inline-block rounded-full px-1.5 py-0.5 text-xs font-medium">
             {displayText}
           </span>
         );
@@ -282,7 +282,7 @@ export function AuditLogTable({
   return (
     <div className="max-w-[1200px]">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">{title}</h2>
+        <h2 className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-50">{title}</h2>
         <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-300">
           <span>
             {total} {isFiltered ? 'matching' : 'total'} {total === 1 ? 'log' : 'logs'}

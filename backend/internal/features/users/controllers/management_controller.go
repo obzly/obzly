@@ -7,6 +7,7 @@ import (
 	user_dto "obzly/internal/features/users/dto"
 	user_enums "obzly/internal/features/users/enums"
 	user_middleware "obzly/internal/features/users/middleware"
+	user_repositories "obzly/internal/features/users/repositories"
 	users_services "obzly/internal/features/users/services"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,7 @@ type ManagementController struct {
 
 func (c *ManagementController) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/users", user_middleware.RequireRole(user_enums.UserRoleAdmin), c.GetUsers)
+	router.GET("/users/summary", user_middleware.RequireRole(user_enums.UserRoleAdmin), c.GetUsersSummary)
 	router.GET("/users/:id", c.GetUserProfile)
 	router.GET("/users/count-by-plan/:planId", user_middleware.RequireRole(user_enums.UserRoleAdmin), c.CountByPlan)
 	router.POST("/users/:id/deactivate", user_middleware.RequireRole(user_enums.UserRoleAdmin), c.DeactivateUser)
@@ -39,7 +41,12 @@ func (c *ManagementController) RegisterRoutes(router *gin.RouterGroup) {
 // @Param offset query int false "Page offset" default(0)
 // @Param beforeDate query string false "Filter users created before this date (RFC3339 format)" format(date-time)
 // @Param query query string false "Search by email or name (case-insensitive)"
+// @Param role query string false "ADMIN or MEMBER"
+// @Param mfa query string false "on or off"
+// @Param status query string false "Account status: ACTIVE, INVITED or INACTIVE"
+// @Param activity query string false "inactive: not ACTIVE, or no sign-in or request for 30 days; active: the rest"
 // @Success 200 {object} users_dto.ListUsersResponseDTO
+// @Failure 400 {object} map[string]string "Invalid filter"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 403 {object} map[string]string "Forbidden"
 // @Router /users [get]
@@ -67,10 +74,20 @@ func (c *ManagementController) GetUsers(ctx *gin.Context) {
 		user,
 		request.Limit,
 		request.Offset,
-		request.BeforeDate,
-		request.Query,
+		user_repositories.UserListFilter{
+			BeforeCreatedAt: request.BeforeDate,
+			Query:           request.Query,
+			Role:            request.Role,
+			MFA:             request.MFA,
+			Status:          request.Status,
+			Activity:        request.Activity,
+		},
 	)
-	if err != nil {
+	switch {
+	case errors.Is(err, users_services.ErrInvalidUserFilter):
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	case err != nil:
 		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
@@ -97,6 +114,47 @@ func (c *ManagementController) GetUsers(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, response)
+}
+
+// GetUsersSummary
+// @Summary Users summary (admin only)
+// @Description Headline counts for the Users page: accounts by status, active in the last 7 days, inactive (not ACTIVE, or no sign-in or request for 30 days), MFA on among active accounts, and admins. No seat limit: only organization plans cap members.
+// @Tags user-management
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} users_dto.UsersSummaryResponseDTO
+// @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Router /users/summary [get]
+func (c *ManagementController) GetUsersSummary(ctx *gin.Context) {
+	user, ok := user_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	summary, err := c.managementService.GetUsersSummary(user)
+	switch {
+	case errors.Is(err, users_services.ErrListUsersForbidden):
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	case err != nil:
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count users"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, user_dto.UsersSummaryResponseDTO{
+		Total:            summary.Total,
+		ActiveAccounts:   summary.ActiveAccounts,
+		Invited:          summary.Invited,
+		Deactivated:      summary.Deactivated,
+		ActiveLast7Days:  summary.ActiveLast7Days,
+		Inactive:         summary.Inactive,
+		MFAEnabled:       summary.MFAEnabled,
+		Admins:           summary.Admins,
+		AdminsWithoutMFA: summary.AdminsWithoutMFA,
+	})
 }
 
 // GetUserProfile

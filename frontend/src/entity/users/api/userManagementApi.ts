@@ -4,7 +4,9 @@ import { apiHelper } from '../../../shared/api/apiHelper';
 import type { ChangeUserRoleRequest } from '../model/ChangeUserRoleRequest';
 import type { ListUsersRequest } from '../model/ListUsersRequest';
 import type { ListUsersResponse } from '../model/ListUsersResponse';
+import type { UserDetail } from '../model/UserDetail';
 import type { UserProfile } from '../model/UserProfile';
+import type { UsersSummary } from '../model/UsersSummary';
 
 export const userManagementApi = {
   async getUsers(request?: ListUsersRequest): Promise<ListUsersResponse> {
@@ -25,12 +27,34 @@ export const userManagementApi = {
     if (request?.query) {
       params.append('query', request.query);
     }
+    for (const key of ['role', 'mfa', 'status', 'activity'] as const) {
+      const value = request?.[key];
+      if (value) {
+        params.append(key, value);
+      }
+    }
 
     if (params.toString()) {
       url += `?${params.toString()}`;
     }
 
     return apiHelper.fetchGetJson(url, requestOptions);
+  },
+
+  /** Headline counts for the Users page (admins). */
+  async getUsersSummary(): Promise<UsersSummary> {
+    return apiHelper.fetchGetJson(
+      `${getApplicationServer()}/api/v1/users/summary`,
+      new RequestOptions(),
+    );
+  },
+
+  /** Sign-in methods, organizations and access for the side panel (admins). */
+  async getUserDetail(userId: string): Promise<UserDetail> {
+    return apiHelper.fetchGetJson(
+      `${getApplicationServer()}/api/v1/users/${userId}/detail`,
+      new RequestOptions(),
+    );
   },
 
   async getUserProfile(userId: string): Promise<UserProfile> {

@@ -28,14 +28,17 @@ const (
 // StandardScore is a standard's passed controls of those evaluated. Controls failed only by
 // suppressed findings count as passed; controls nothing evaluated aren't counted at all.
 type StandardScore struct {
-	Standard  string       `json:"standard"`
-	Name      string       `json:"name"`
-	Passed    int          `json:"passed"`
-	Failed    int          `json:"failed"`
-	Evaluated int          `json:"evaluated"`
-	Percent   float64      `json:"percent"`
-	Sources   []string     `json:"sources"`
-	Trend     []ScorePoint `json:"trend,omitempty"`
+	Standard  string   `json:"standard"`
+	Name      string   `json:"name"`
+	Passed    int      `json:"passed"`
+	Failed    int      `json:"failed"`
+	Evaluated int      `json:"evaluated"`
+	Percent   float64  `json:"percent"`
+	Sources   []string `json:"sources"`
+	// Reason explains Sources from the scopes' latest reads, e.g. "Security Hub in every scanned
+	// region" (Summary only).
+	Reason string       `json:"reason,omitempty"`
+	Trend  []ScorePoint `json:"trend,omitempty"`
 }
 
 type ScorePoint struct {
@@ -178,6 +181,10 @@ func (s *Service) Summary(ctx context.Context, projects []uuid.UUID) (*SummaryDT
 	rows, err := s.Coverage(ctx, projects)
 	if err != nil {
 		return nil, err
+	}
+	reasons := sourceReasons(rows)
+	for i := range summary.Standards {
+		summary.Standards[i].Reason = reasons[summary.Standards[i].Standard]
 	}
 	for _, row := range rows {
 		switch row.Status {
@@ -523,6 +530,133 @@ func coverageOf(row CoverageRow, now time.Time) (string, string) {
 		return CoverageStale, fmt.Sprintf("last read %s", row.ScannedAt.Format(time.RFC3339))
 	}
 	return status, reason
+}
+
+// sourceReasons says, per standard, where its results come from: in how many scopes the native
+// service is read, where the Obzly baseline stands in and why, and where neither does.
+func sourceReasons(rows []CoverageRow) map[string]string {
+	type scope struct {
+		row                               *CoverageRow
+		nativeOK, baselineOK, triedNative bool
+		reason                            string
+	}
+	byStandard := map[string][]*scope{}
+	for i := range rows {
+		scopes := map[string]*scope{}
+		for _, run := range rows[i].Runs {
+			sc := scopes[run.Standard]
+			if sc == nil {
+				sc = &scope{row: &rows[i]}
+				scopes[run.Standard] = sc
+				byStandard[run.Standard] = append(byStandard[run.Standard], sc)
+			}
+			ok := run.Result == spec.PostureRunOK
+			switch run.Source {
+			case spec.PostureSourceNative:
+				sc.triedNative = true
+				sc.nativeOK = sc.nativeOK || ok
+			case spec.PostureSourceBaseline:
+				sc.baselineOK = sc.baselineOK || ok
+			}
+			if !ok && sc.reason == "" {
+				sc.reason = run.Reason
+			}
+		}
+	}
+	reasons := map[string]string{}
+	for standard, scopes := range byStandard {
+		providers := map[string]bool{}
+		var native int
+		var baseline, uncovered []*CoverageRow
+		baselineWhy, uncoveredWhy, triedNative := map[string]int{}, map[string]int{}, false
+		for _, sc := range scopes {
+			providers[sc.row.Provider] = true
+			triedNative = triedNative || sc.triedNative
+			switch {
+			case sc.nativeOK:
+				native++
+			case sc.baselineOK:
+				baseline = append(baseline, sc.row)
+				if sc.triedNative && sc.reason != "" {
+					baselineWhy[sc.reason]++
+				}
+			default:
+				uncovered = append(uncovered, sc.row)
+				if sc.reason != "" {
+					uncoveredWhy[sc.reason]++
+				}
+			}
+		}
+		service, unit := "the native service", "scope"
+		if len(providers) == 1 {
+			switch {
+			case providers[spec.ProviderAWS]:
+				service, unit = "Security Hub", "region"
+			case providers[spec.ProviderAzure]:
+				service, unit = "Defender for Cloud", "subscription"
+			}
+		}
+		var parts []string
+		switch {
+		case native == len(scopes):
+			parts = append(parts, fmt.Sprintf("%s in every scanned %s", service, unit))
+		case native > 0:
+			parts = append(parts, fmt.Sprintf("%s in %d of %d %ss", service, native, len(scopes), unit))
+		}
+		if len(baseline) > 0 {
+			why := mostCommon(baselineWhy)
+			switch {
+			case native == 0 && len(uncovered) == 0 && why != "":
+				parts = append(parts, fmt.Sprintf("Obzly baseline: %s in %s", why, places(baseline, unit)))
+			case native == 0 && len(uncovered) == 0 && !triedNative:
+				parts = append(parts, fmt.Sprintf("Obzly baseline checks in every scanned %s", unit))
+			case why != "":
+				parts = append(parts, fmt.Sprintf("Obzly baseline in %s (%s)", places(baseline, unit), why))
+			default:
+				parts = append(parts, fmt.Sprintf("Obzly baseline in %s", places(baseline, unit)))
+			}
+		}
+		if len(uncovered) > 0 {
+			text := fmt.Sprintf("not covered in %s", places(uncovered, unit))
+			if why := mostCommon(uncoveredWhy); why != "" {
+				text += fmt.Sprintf(" (%s)", why)
+			}
+			parts = append(parts, text)
+		}
+		reasons[standard] = strings.Join(parts, "; ")
+	}
+	return reasons
+}
+
+// places names up to three regions, or counts the scopes: "eu-central-1", "2 subscriptions".
+func places(rows []*CoverageRow, unit string) string {
+	if unit == "region" {
+		names := []string{}
+		for _, row := range rows {
+			if !slices.Contains(names, row.Region) {
+				names = append(names, row.Region)
+			}
+		}
+		if len(names) <= 3 {
+			slices.Sort(names)
+			return strings.Join(names, ", ")
+		}
+	}
+	if len(rows) == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", len(rows), unit)
+}
+
+// mostCommon is the reason given most often (the first alphabetically on a tie), or "".
+func mostCommon(counts map[string]int) string {
+	best := ""
+	for _, reason := range slices.Sorted(maps.Keys(counts)) {
+		if counts[reason] > counts[best] {
+			best = reason
+		}
+	}
+	return best
 }
 
 // severityOrder sorts the most severe first.

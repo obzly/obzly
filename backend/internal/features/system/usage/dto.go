@@ -7,6 +7,8 @@ import "time"
 type Response struct {
 	Hours   []Hour    `json:"hours"`
 	Storage []Storage `json:"storage"`
+	// Projects is how many projects the Site has (Organizations → Sites).
+	Projects int64 `json:"projects"`
 }
 
 type Hour struct {

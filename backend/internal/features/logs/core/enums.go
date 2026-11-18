@@ -68,3 +68,40 @@ const (
 	QueryableFieldTypeTimestamp QueryableFieldType = "timestamp"
 	QueryableFieldTypeArray     QueryableFieldType = "array"
 )
+
+// AggregationMeasure is what an aggregation computes per bucket and group.
+type AggregationMeasure string
+
+const (
+	// AggregationMeasureCount ("" too) counts matching lines.
+	AggregationMeasureCount    AggregationMeasure = "count"
+	AggregationMeasureDistinct AggregationMeasure = "distinct"
+	AggregationMeasureSum      AggregationMeasure = "sum"
+	AggregationMeasureAvg      AggregationMeasure = "avg"
+	AggregationMeasureMin      AggregationMeasure = "min"
+	AggregationMeasureMax      AggregationMeasure = "max"
+	AggregationMeasureP50      AggregationMeasure = "p50"
+	AggregationMeasureP95      AggregationMeasure = "p95"
+	AggregationMeasureP99      AggregationMeasure = "p99"
+)
+
+// IsValid also accepts "", which means count.
+func (m AggregationMeasure) IsValid() bool {
+	switch m {
+	case "", AggregationMeasureCount, AggregationMeasureDistinct, AggregationMeasureSum, AggregationMeasureAvg,
+		AggregationMeasureMin, AggregationMeasureMax, AggregationMeasureP50, AggregationMeasureP95,
+		AggregationMeasureP99:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsCount reports whether m counts lines (the only measure per-minute counts
+// and the partition cache can answer).
+func (m AggregationMeasure) IsCount() bool {
+	return m == "" || m == AggregationMeasureCount
+}
+
+// GroupBandsLog groups a numeric GroupField into 1-2-5 log-scale bands.
+const GroupBandsLog = "log"

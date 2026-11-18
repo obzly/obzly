@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import type { CostDimension, FacetValue } from '../../../entity/cost';
 import { dimensionLabel, valueLabel } from '../lib/explorer';
 import { formatMoneyCompact } from '../lib/format';
+import { DimensionIcon } from './CloudIcon';
 
 interface Props {
   dimension: CostDimension;
@@ -56,12 +57,13 @@ export const FacetFilter = ({ dimension, values, selected, scope, onChange }: Pr
         {options.slice(0, SHOWN).map((option) => (
           <label
             key={option.value}
-            className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+            className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
           >
             <Checkbox
               checked={selected.includes(option.value)}
               onChange={(event) => toggle(option.value, event.target.checked)}
             />
+            <DimensionIcon dimension={dimension} value={option.value} size={14} />
             <span className="min-w-0 flex-1 truncate text-gray-800 dark:text-gray-200">
               {valueLabel(dimension, option.value, option.label)}
             </span>

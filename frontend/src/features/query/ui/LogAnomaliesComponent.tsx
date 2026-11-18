@@ -1,6 +1,5 @@
 import { FilterOutlined } from '@ant-design/icons';
-import { Alert, Button, Drawer, Empty, Segmented, Spin, Tag, Tooltip } from 'antd';
-import type dayjs from 'dayjs';
+import { Alert, Button, Drawer, Empty, Segmented, Spin, Tooltip } from 'antd';
 import React, { useEffect, useState } from 'react';
 
 import {
@@ -9,7 +8,8 @@ import {
   type QueryNode,
   queryApi,
 } from '../../../entity/query';
-import { levelColor } from '../lib/logLevels';
+import { type Baseline, baselineRange } from '../lib/anomalies';
+import { LevelPillComponent } from './LevelPillComponent';
 import type { TimeRange } from './TimeRangePickerComponent';
 
 interface Props {
@@ -23,31 +23,24 @@ interface Props {
   onShowPattern: (hash: string) => void;
 }
 
-type Baseline = 'previous' | 'day' | 'week';
-
 const BASELINES: { value: Baseline; label: string }[] = [
   { value: 'previous', label: 'Previous period' },
   { value: 'day', label: 'Same time yesterday' },
   { value: 'week', label: 'Same time last week' },
 ];
 
-const baselineRange = (
-  range: TimeRange,
-  baseline: Baseline,
-): { from: dayjs.Dayjs; to: dayjs.Dayjs } => {
-  if (baseline === 'day')
-    return { from: range.from.subtract(1, 'day'), to: range.to.subtract(1, 'day') };
-  if (baseline === 'week')
-    return { from: range.from.subtract(1, 'week'), to: range.to.subtract(1, 'week') };
-  const length = range.to.diff(range.from);
-  return { from: range.from.subtract(length, 'ms'), to: range.from };
-};
-
 const SECTIONS: { kind: PatternChange['change']; title: string; empty: string }[] = [
   { kind: 'new', title: 'New patterns', empty: 'No pattern appeared that the baseline lacked' },
   { kind: 'spike', title: 'Spiking', empty: 'No pattern at least doubled' },
   { kind: 'drop', title: 'Dropped', empty: 'No pattern at least halved' },
 ];
+
+// New and spiking patterns are bad news, a drop is worth a look.
+const CHANGE_PILL: Record<PatternChange['change'], string> = {
+  new: 'bg-red-500/15 text-[var(--v2-red)]',
+  spike: 'bg-orange-500/15 text-[var(--v2-orange)]',
+  drop: 'bg-blue-500/15 text-[var(--v2-blue)]',
+};
 
 const changeLabel = (change: PatternChange): string => {
   if (change.change === 'new') return 'new';
@@ -104,11 +97,14 @@ export const LogAnomaliesComponent = ({
     return (
       <li
         key={change.hash}
-        className="flex items-start gap-2 rounded px-1 py-1 text-xs hover:bg-gray-100 dark:hover:bg-gray-700"
+        className="flex items-start gap-2 rounded-lg bg-gray-50 px-2 py-1.5 text-xs hover:bg-gray-100 dark:bg-gray-900/50 dark:hover:bg-gray-700"
       >
-        <span className="w-12 shrink-0 font-semibold" style={{ color: levelColor(level) }}>
-          {level}
+        <span
+          className={`inline-flex min-w-[44px] shrink-0 justify-center rounded-full px-2 py-0.5 font-medium ${CHANGE_PILL[change.change]}`}
+        >
+          {changeLabel(change)}
         </span>
+        <LevelPillComponent level={level} className="mt-px shrink-0" />
         <Tooltip title={change.sample ? `e.g. ${change.sample}` : undefined} placement="left">
           <span className="min-w-0 flex-1 font-mono text-[11px] break-all text-gray-800 dark:text-gray-100">
             {change.pattern || change.hash}
@@ -117,12 +113,6 @@ export const LogAnomaliesComponent = ({
         <span className="shrink-0 text-right text-gray-500 tabular-nums dark:text-gray-400">
           {change.current.toLocaleString()} vs {change.baseline.toLocaleString()}
         </span>
-        <Tag
-          className="!mr-0 shrink-0"
-          color={change.change === 'drop' ? 'blue' : change.change === 'new' ? 'red' : 'orange'}
-        >
-          {changeLabel(change)}
-        </Tag>
         <Tooltip title="Show these logs">
           <Button
             size="small"
@@ -140,6 +130,7 @@ export const LogAnomaliesComponent = ({
     <Drawer title="Log anomalies" open={open} onClose={onClose} size={720}>
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-gray-500 dark:text-gray-400">Compare with</span>
           <Segmented
             size="small"
             value={baseline}
@@ -147,7 +138,7 @@ export const LogAnomaliesComponent = ({
             options={BASELINES}
           />
           {data && (
-            <span className="text-xs text-gray-500 dark:text-gray-400">
+            <span className="ml-auto text-xs text-gray-500 dark:text-gray-400">
               {data.currentTotal.toLocaleString()} logs vs {data.baselineTotal.toLocaleString()} in
               the baseline
             </span>
@@ -166,15 +157,18 @@ export const LogAnomaliesComponent = ({
           SECTIONS.map((section) => {
             const changes = data.changes.filter((c) => c.change === section.kind);
             return (
-              <div key={section.kind}>
-                <div className="mb-1 text-sm font-semibold text-gray-800 dark:text-gray-100">
+              <div
+                key={section.kind}
+                className="rounded-2xl border border-gray-200 p-3 dark:border-gray-700"
+              >
+                <div className="mb-2 text-sm font-semibold text-gray-800 dark:text-gray-100">
                   {section.title}{' '}
-                  <span className="font-normal text-gray-400">({changes.length})</span>
+                  <span className="font-normal text-gray-400">· {changes.length}</span>
                 </div>
                 {changes.length === 0 ? (
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={section.empty} />
                 ) : (
-                  <ul>{changes.map(renderChange)}</ul>
+                  <ul className="flex flex-col gap-1">{changes.map(renderChange)}</ul>
                 )}
               </div>
             );

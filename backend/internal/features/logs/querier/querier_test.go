@@ -643,3 +643,33 @@ func Test_ExecuteQuery_SegmentMissingLocallyAndNoObjectStoreConfigured_ReturnsEm
 	require.Equal(t, int64(0), response.Total)
 	require.Empty(t, response.Logs)
 }
+
+func Test_ExecuteQueryContext_CancelledContext_StopsTheQuery(t *testing.T) {
+	now := time.Now().UTC()
+	projectID, querier := seedProject(t, []*logs_core.LogItem{
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "one"},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := querier.ExecuteQueryContext(ctx, projectID,
+		queryRequest(nil, now.Add(-time.Minute), now.Add(time.Minute)))
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func Test_ExecutePatternsContext_CancelledContext_StopsTheQuery(t *testing.T) {
+	now := time.Now().UTC()
+	projectID, querier := seedProject(t, []*logs_core.LogItem{
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "one"},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	from, to := now.Add(-time.Minute), now.Add(time.Minute)
+
+	_, err := querier.ExecutePatternsContext(ctx, projectID, &logs_core.PatternsRequestDTO{
+		TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to},
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+}

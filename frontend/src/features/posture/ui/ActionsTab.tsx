@@ -1,12 +1,21 @@
 // Posture → Recommendations: ranked actions (coverage gaps first, then the most severity closed
 // per unit of effort), guardrails, and what each standard would score with the plan done.
-import { LoadingOutlined } from '@ant-design/icons';
-import { App, Checkbox, Empty, Progress, Segmented, Spin, Table, Tag, Tooltip } from 'antd';
+import { App, Checkbox, Empty, Segmented, Table, Tag, Tooltip } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 
 import { postureApi } from '../../../entity/posture';
-import { type CostSite, SiteErrors, type SiteOutcome, fanOut } from '../../cost';
-import { Panel } from '../../synthetics';
+import { useTheme } from '../../../shared/theme';
+import { Card } from '../../../shared/ui/v2';
+import {
+  type CostSite,
+  IconLabel,
+  Loading,
+  ProviderMark,
+  SiteErrors,
+  type SiteOutcome,
+  StandardMark,
+  fanOut,
+} from '../../cost';
 import {
   type ActionFilter,
   KIND_LABEL,
@@ -16,20 +25,19 @@ import {
   matchesFilter,
   mergeActions,
 } from '../lib/actions';
+import { scoreColor } from '../lib/format';
 import { ActionDrawer } from './ActionDrawer';
 import { FindingDrawer } from './FindingDrawer';
-import { SeverityTag } from './parts';
+import { ScoreRing, SeverityTag } from './parts';
 
 interface Props {
   sites: CostSite[];
   refresh: number;
 }
 
-const scoreColor = (percent: number) =>
-  percent >= 80 ? '#009966' : percent >= 50 ? '#f59e0b' : '#dc2626';
-
 export const ActionsTab = ({ sites, refresh }: Props) => {
   const { message } = App.useApp();
+  const { status } = useTheme();
   const [data, setData] = useState<
     ReturnType<typeof mergeActions> & { outcomes: SiteOutcome<unknown>[] }
   >();
@@ -54,13 +62,7 @@ export const ActionsTab = ({ sites, refresh }: Props) => {
     [data, filter],
   );
 
-  if (!data) {
-    return (
-      <div className="flex justify-center py-16">
-        <Spin indicator={<LoadingOutlined spin />} />
-      </div>
-    );
-  }
+  if (!data) return <Loading />;
 
   const togglePlan = async (action: SiteAction, planned: boolean) => {
     setBusy(actionId(action));
@@ -98,48 +100,60 @@ export const ActionsTab = ({ sites, refresh }: Props) => {
     <div className="flex flex-col gap-4">
       <SiteErrors outcomes={data.outcomes} />
       {data.standards.length > 0 && (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {data.standards.map((score) => (
-            <div
-              key={score.standard}
-              className="flex flex-col gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700"
-            >
-              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                {score.name}
-              </span>
-              <span className="flex items-center gap-3">
-                <Progress
-                  type="circle"
-                  size={52}
-                  percent={score.current}
-                  strokeColor={scoreColor(score.current)}
-                  format={(value) => `${Math.round(value ?? 0)}%`}
-                />
-                <span className="flex flex-col text-xs text-gray-600 dark:text-gray-300">
-                  <span>
-                    With the plan done:{' '}
-                    <b style={{ color: scoreColor(score.withPlan) }}>
-                      {Math.round(score.withPlan)}%
-                    </b>
-                  </span>
-                  <span>
-                    With everything done:{' '}
-                    <b style={{ color: scoreColor(score.withAll) }}>{Math.round(score.withAll)}%</b>
-                  </span>
-                  <span className="text-gray-400">{score.evaluated} controls evaluated</span>
+        <Card
+          title="Scores"
+          subtitle="Now, with the planned actions done, and with every action done"
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {data.standards.map((score) => (
+              <div
+                key={score.standard}
+                className="flex flex-col gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40"
+              >
+                <span className="text-sm font-semibold text-gray-900 dark:text-gray-50">
+                  <IconLabel icon={<StandardMark standard={score.standard} name={score.name} />}>
+                    {score.name}
+                  </IconLabel>
                 </span>
-              </span>
-            </div>
-          ))}
-        </div>
+                <span className="flex items-center gap-3">
+                  <ScoreRing
+                    size={60}
+                    name={score.name}
+                    passed={(score.current * score.evaluated) / 100}
+                    evaluated={score.evaluated}
+                    percent={score.current}
+                  />
+                  <span className="flex flex-col text-xs text-gray-600 dark:text-gray-300">
+                    <span>
+                      With the plan done:{' '}
+                      <b style={{ color: scoreColor(score.withPlan, status) }}>
+                        {score.evaluated ? `${Math.round(score.withPlan)}%` : 'n/a'}
+                      </b>
+                    </span>
+                    <span>
+                      With everything done:{' '}
+                      <b style={{ color: scoreColor(score.withAll, status) }}>
+                        {score.evaluated ? `${Math.round(score.withAll)}%` : 'n/a'}
+                      </b>
+                    </span>
+                    <span className="text-gray-400 dark:text-gray-500">
+                      {score.evaluated} controls evaluated
+                    </span>
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
       )}
 
-      <Panel
+      <Card
         title="Actions"
         subtitle={`Coverage gaps first, then the most severity closed per unit of effort. ${inPlan.length} in the plan.`}
         extra={
           <Segmented
             size="small"
+            aria-label="Actions"
             value={filter}
             onChange={(value) => setFilter(value as ActionFilter)}
             options={[
@@ -238,7 +252,9 @@ export const ActionsTab = ({ sites, refresh }: Props) => {
                 width: 180,
                 render: (_, action) => (
                   <span className="flex flex-col text-xs">
-                    <span>{action.connectionName || '—'}</span>
+                    <IconLabel icon={<ProviderMark provider={action.provider} size={14} />}>
+                      {action.connectionName || '—'}
+                    </IconLabel>
                     <span className="text-gray-500 dark:text-gray-400">
                       {[action.account, action.region].filter(Boolean).join(' · ') ||
                         (action.scopes
@@ -281,7 +297,7 @@ export const ActionsTab = ({ sites, refresh }: Props) => {
           Tick actions to add them to the plan; the cards above show each standard&apos;s score with
           the plan done. Obzly is read-only: the changes are made by your team.
         </p>
-      </Panel>
+      </Card>
 
       {open && (
         <ActionDrawer

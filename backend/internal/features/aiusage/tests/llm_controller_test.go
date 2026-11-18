@@ -203,3 +203,28 @@ func llmURL(endpoint string, projectID uuid.UUID, params url.Values) string {
 func ptr(value float64) *float64 {
 	return &value
 }
+
+func Test_GetLLMOverview_WithComparePrevious_ReturnsTheWindowBeforeTheRange(t *testing.T) {
+	router, project, token := setupProjectWithLLMSpans(t)
+	// The same calls 90 minutes ago: inside the hour before withRange's 61-minute range.
+	seedLLMSpans(t, project.ID, time.Now().UTC().Add(-90*time.Minute))
+
+	var response aiusage.LLMOverviewResponseDTO
+	test_utils.MakeGetRequestAndUnmarshal(t, router,
+		llmURL("overview", project.ID, url.Values{"compare": {"previous"}}), "Bearer "+token, http.StatusOK, &response)
+
+	assert.Equal(t, int64(4), response.Summary.Calls, "the older calls aren't in the range")
+	require.NotNil(t, response.Previous)
+	assert.Equal(t, int64(4), response.Previous.Calls)
+	assert.Equal(t, int64(2), response.Previous.Errors)
+	assert.Equal(t, int64(1600), response.Previous.InputTokens)
+	assert.InDelta(t, 0.00492+0.00028, response.Previous.CostUSD, 1e-9, "priced like the range")
+	assert.Equal(t, []string{"mistral-large-latest"}, response.Previous.UnpricedModels)
+
+	var plain aiusage.LLMOverviewResponseDTO
+	test_utils.MakeGetRequestAndUnmarshal(t, router, llmURL("overview", project.ID, nil), "Bearer "+token,
+		http.StatusOK, &plain)
+	assert.Nil(t, plain.Previous, "only with compare=previous")
+	test_utils.MakeGetRequest(t, router, llmURL("overview", project.ID, url.Values{"compare": {"last-year"}}),
+		"Bearer "+token, http.StatusBadRequest)
+}

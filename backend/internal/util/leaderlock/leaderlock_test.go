@@ -320,3 +320,111 @@ func Test_RunExclusive_LockTakenOver_CancelsThePass(t *testing.T) {
 		t.Fatal("a pass that lost its lock must be cancelled")
 	}
 }
+
+func Test_RunAtMostEvery_ManyReplicasTickingWithinOneInterval_RunOnce(t *testing.T) {
+	client := cache.GetCache()
+	name := uniqueName(t)
+	var runCount int64
+	pass := func(context.Context) error {
+		atomic.AddInt64(&runCount, 1)
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	}
+
+	const replicas = 10
+	results := make(chan bool, replicas)
+	for range replicas {
+		go func() {
+			ran, err := leaderlock.RunAtMostEvery(context.Background(), client, name, time.Minute, 5*time.Second, pass)
+			require.NoError(t, err)
+			results <- ran
+		}()
+	}
+	ranCount := 0
+	for range replicas {
+		if <-results {
+			ranCount++
+		}
+	}
+	// The same replicas ticking again, after the first pass released its lock.
+	for range replicas {
+		ran, err := leaderlock.RunAtMostEvery(context.Background(), client, name, time.Minute, 5*time.Second, pass)
+		require.NoError(t, err)
+		require.False(t, ran, "a later tick within the interval must skip")
+	}
+
+	require.Equal(t, 1, ranCount)
+	require.Equal(t, int64(1), atomic.LoadInt64(&runCount))
+	require.Equal(t, float64(1), testutil.ToFloat64(telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultOK)))
+	require.Equal(t, float64(2*replicas-1),
+		testutil.ToFloat64(telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultSkipped)))
+}
+
+func Test_RunAtMostEvery_OnceTheIntervalPassed_RunsAgain(t *testing.T) {
+	client := cache.GetCache()
+	name := uniqueName(t)
+	const interval = 400 * time.Millisecond
+	pass := func(context.Context) error { return nil }
+
+	ran, err := leaderlock.RunAtMostEvery(context.Background(), client, name, interval, 5*time.Second, pass)
+	require.NoError(t, err)
+	require.True(t, ran)
+	ran, err = leaderlock.RunAtMostEvery(context.Background(), client, name, interval, 5*time.Second, pass)
+	require.NoError(t, err)
+	require.False(t, ran)
+
+	time.Sleep(interval)
+
+	ran, err = leaderlock.RunAtMostEvery(context.Background(), client, name, interval, 5*time.Second, pass)
+	require.NoError(t, err)
+	require.True(t, ran, "a tick one interval after the last run must run")
+}
+
+func Test_RunAtMostEvery_FailedPass_KeepsItsIntervalAndCountsAsError(t *testing.T) {
+	client := cache.GetCache()
+	name := uniqueName(t)
+
+	ran, err := leaderlock.RunAtMostEvery(context.Background(), client, name, time.Minute, 5*time.Second,
+		func(context.Context) error { return errors.New("pass failed") })
+	require.Error(t, err)
+	require.True(t, ran)
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultError)))
+
+	ran, err = leaderlock.RunAtMostEvery(context.Background(), client, name, time.Minute, 5*time.Second,
+		func(context.Context) error { return nil })
+	require.NoError(t, err)
+	require.False(t, ran, "a failed pass is retried next interval, not by every other replica now")
+}
+
+func Test_RunAtMostEvery_PassLongerThanTheInterval_OthersSkipUntilItEnds(t *testing.T) {
+	client := cache.GetCache()
+	name := uniqueName(t)
+	const interval = 200 * time.Millisecond
+
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = leaderlock.RunAtMostEvery(context.Background(), client, name, interval, 5*time.Second,
+			func(context.Context) error {
+				close(started)
+				<-finish
+				return nil
+			})
+	}()
+	<-started
+
+	time.Sleep(2 * interval)
+	ran, err := leaderlock.RunAtMostEvery(context.Background(), client, name, interval, 5*time.Second,
+		func(context.Context) error { return nil })
+	require.NoError(t, err)
+	require.False(t, ran, "passes never overlap, even past the interval")
+
+	close(finish)
+	<-done
+	ran, err = leaderlock.RunAtMostEvery(context.Background(), client, name, interval, 5*time.Second,
+		func(context.Context) error { return nil })
+	require.NoError(t, err)
+	require.True(t, ran, "the interval passed during the long pass, so the next tick runs")
+}

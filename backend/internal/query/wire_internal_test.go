@@ -20,10 +20,11 @@ func Test_Fragment_RoundTripsThroughTheWire(t *testing.T) {
 		Args:     []any{"text", int64(7), 3, 1.5, true, at, nil},
 	}
 
-	data, err := encodeFragment(fragment)
+	data, err := encodeFragment(fragment, nil)
 	require.NoError(t, err)
-	decoded, err := decodeFragment(data)
+	decoded, shipped, err := decodeFragment(data)
 	require.NoError(t, err)
+	require.Empty(t, shipped)
 
 	require.Equal(t, []any{"text", int64(7), int64(3), 1.5, true, at, nil}, decoded.Args)
 	require.Equal(t, fragment.Segments[0].ID, decoded.Segments[0].ID)
@@ -31,7 +32,7 @@ func Test_Fragment_RoundTripsThroughTheWire(t *testing.T) {
 }
 
 func Test_EncodeFragment_WithLocalFiles_IsRejected(t *testing.T) {
-	_, err := encodeFragment(Fragment{ID: "f1", LocalFiles: []segments.ResolvedFile{{Path: "/tail"}}})
+	_, err := encodeFragment(Fragment{ID: "f1", LocalFiles: []segments.ResolvedFile{{Path: "/tail"}}}, nil)
 
 	require.ErrorContains(t, err, "cannot run remotely")
 }

@@ -58,8 +58,8 @@ export const DashboardFilterBarComponent = ({
     onChange({ ...filters, [key]: value });
 
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded border border-gray-100 bg-gray-50 px-2 py-1 dark:border-gray-700 dark:bg-gray-900">
-      <FilterOutlined className="text-gray-400" />
+    <div role="group" aria-label="Filters" className="flex flex-wrap items-center gap-2">
+      <FilterOutlined className="text-gray-500 dark:text-gray-400" />
       {namespaces.length > 0 && (
         <Select
           size="small"
@@ -111,12 +111,15 @@ export const DashboardFilterBarComponent = ({
       {hasActiveFilters(filters) && (
         <button
           type="button"
-          className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+          className="text-accent-600 dark:text-accent-400 cursor-pointer text-sm hover:underline"
           onClick={() => onChange({})}
         >
           Clear filters
         </button>
       )}
+      <span className="text-xs text-gray-500 dark:text-gray-400">
+        Filters apply now and aren&apos;t saved.
+      </span>
     </div>
   );
 };

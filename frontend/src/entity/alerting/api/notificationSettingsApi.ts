@@ -4,11 +4,17 @@ import RequestOptions from '../../../shared/api/RequestOptions';
 import { apiHelper } from '../../../shared/api/apiHelper';
 import type {
   AdoptResult,
+  ChannelKind,
+  ChannelTemplateRequest,
+  MessageTemplate,
+  MessageTemplatesView,
   SMTPRequest,
   SMTPSettings,
   SettingsChannel,
   SettingsChannelRequest,
   SettingsSync,
+  TemplatePreviewRequest,
+  TemplatePreviewResponse,
 } from '../model/Alerting';
 
 const base = () => `${getApplicationServer()}/api/v1/settings`;
@@ -24,6 +30,20 @@ export const notificationSettingsApi = {
     apiHelper.fetchDeleteJson(`${base()}/channels/${id}`),
   testChannel: (id: string): Promise<{ message: string }> =>
     apiHelper.fetchPostJson(`${base()}/channels/${id}/test`),
+  saveChannelTemplate: (id: string, request: ChannelTemplateRequest): Promise<SettingsChannel> =>
+    apiHelper.fetchPutJson(`${base()}/channels/${id}/template`, body(request)),
+
+  listTemplates: (): Promise<MessageTemplatesView> =>
+    apiHelper.fetchGetJson(`${base()}/message-templates`),
+  saveTemplate: (kind: ChannelKind, template: MessageTemplate): Promise<MessageTemplatesView> =>
+    apiHelper.fetchPutJson(`${base()}/message-templates/${kind}`, body(template)),
+  resetTemplate: (kind: ChannelKind): Promise<MessageTemplatesView> =>
+    apiHelper.fetchDeleteJson(`${base()}/message-templates/${kind}`),
+  previewTemplate: (request: TemplatePreviewRequest): Promise<TemplatePreviewResponse> =>
+    apiHelper.fetchPostJson(`${base()}/message-templates/preview`, body(request)),
+  /** Sends a test rendered with the (unsaved) template through a channel of that kind. */
+  testTemplate: (request: TemplatePreviewRequest & { channelId: string }): Promise<unknown> =>
+    apiHelper.fetchPostJson(`${base()}/message-templates/test`, body(request)),
 
   getSMTP: (): Promise<SMTPSettings> => apiHelper.fetchGetJson(`${base()}/smtp`),
   saveSMTP: (request: SMTPRequest): Promise<unknown> =>

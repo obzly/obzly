@@ -68,6 +68,30 @@ func (r *repository) deleteChangesBefore(before time.Time) error {
 	return storage.GetDb().Where("at < ?", before).Delete(&Change{}).Error
 }
 
+// saveCounts replaces the project's counts of the hour: a later build in the hour wins.
+func (r *repository) saveCounts(ctx context.Context, projectID uuid.UUID, hour time.Time, rows []countRow) error {
+	return storage.GetDb().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("project_id = ? AND hour = ?", projectID, hour).Delete(&countRow{}).Error; err != nil {
+			return err
+		}
+		return tx.CreateInBatches(rows, 500).Error
+	})
+}
+
+func (r *repository) deleteCountsBefore(before time.Time) error {
+	return storage.GetDb().Where("hour < ?", before).Delete(&countRow{}).Error
+}
+
+// counts sums the projects' hourly counts since, by hour, kind and health, oldest first.
+func (r *repository) counts(projectIDs []uuid.UUID, since time.Time) ([]countRow, error) {
+	var rows []countRow
+	err := storage.GetDb().Model(&countRow{}).
+		Select("hour, kind, health, sum(count) AS count").
+		Where("project_id IN ? AND hour >= ?", projectIDs, since).
+		Group("hour, kind, health").Order("hour").Scan(&rows).Error
+	return rows, err
+}
+
 func (r *repository) listAssets(projectIDs []uuid.UUID, filter assetFilter, limit int) ([]Asset, int64, error) {
 	query := storage.GetDb().Model(&Asset{}).Where("project_id IN ?", projectIDs)
 	if len(filter.kinds) > 0 {

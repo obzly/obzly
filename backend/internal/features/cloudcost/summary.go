@@ -30,6 +30,9 @@ type CurrencySummary struct {
 	MonthToDate       float64 `json:"monthToDate"`
 	LastMonth         float64 `json:"lastMonth"`
 	LastMonthSameDays float64 `json:"lastMonthSameDays"`
+	// LastMonthFinal: no day of last month is estimated any more and every source that
+	// delivered it has finalised it, so it won't change.
+	LastMonthFinal bool `json:"lastMonthFinal"`
 	// Forecast: month to date plus the providers' forecast for the rest (nil without one).
 	Forecast *float64     `json:"forecast,omitempty"`
 	Daily    []DailyPoint `json:"daily"`
@@ -79,6 +82,7 @@ func (s *Service) Summary(ctx context.Context, projects []uuid.UUID) (*SummaryDT
 	today := utcDay(s.now())
 	monthStart := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
 	lastStart := monthStart.AddDate(0, -1, 0)
+	lastEnd := monthStart.AddDate(0, 0, -1)
 	lastSameEnd := lastStart.AddDate(0, 0, today.Day()-1)
 	if lastSameEnd.Month() != lastStart.Month() {
 		lastSameEnd = monthStart.AddDate(0, 0, -1)
@@ -139,6 +143,26 @@ func (s *Service) Summary(ctx context.Context, projects []uuid.UUID) (*SummaryDT
 		}
 		total := summary.MonthToDate + forecast.Remaining
 		summary.Forecast = &total
+	}
+	var settled []struct {
+		Currency  string
+		Estimated bool
+		Final     bool
+	}
+	if err := db.Raw(`SELECT d.currency, bool_or(d.estimated) AS estimated,
+			bool_and(COALESCE(s.final_through >= ?, false)) AS final
+		FROM (SELECT project_id, connection_id, source, currency, bool_or(estimated) AS estimated
+			FROM cloud_cost_daily WHERE project_id IN ? AND day BETWEEN ? AND ? GROUP BY 1, 2, 3, 4) d
+		LEFT JOIN cloud_cost_sources s ON s.project_id = d.project_id AND s.connection_id = d.connection_id
+			AND s.source = d.source
+		GROUP BY 1`, lastEnd.Format(dayLayout), projects, lastStart.Format(dayLayout), lastEnd.Format(dayLayout)).
+		Scan(&settled).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range settled {
+		if summary := byCurrency[row.Currency]; summary != nil {
+			summary.LastMonthFinal = row.Final && !row.Estimated
+		}
 	}
 	result := &SummaryDTO{Today: today.Format(dayLayout), Currencies: []CurrencySummary{}}
 	for _, currency := range sortedKeys(byCurrency) {
