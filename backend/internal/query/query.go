@@ -62,6 +62,11 @@ const (
 	// staleQueryDirAge: well past fragmentTimeout, so no live query's
 	// results are removed.
 	staleQueryDirAge = 10 * time.Minute
+	// maxShippedBytes / maxShippedFiles bound what a single-fragment request
+	// ships to a remote executor (the query-time tail and segments not
+	// uploaded yet, normally minutes of data); past either it runs here.
+	maxShippedBytes = 64 << 20
+	maxShippedFiles = 64
 )
 
 // Fragment is one executor's share of a query. Args hold only plain values
@@ -76,6 +81,12 @@ type Fragment struct {
 	Args       []any
 	// Tokens: see Request.Tokens.
 	Tokens []string
+}
+
+// LocalFileShipper is an executor that runs fragments with LocalFiles:
+// in-process ones read them, remote ones get them shipped first.
+type LocalFileShipper interface {
+	ShipsLocalFiles() bool
 }
 
 // Executor runs fragments.
@@ -116,8 +127,10 @@ type Request struct {
 	// full rows (a quota pass ran out of memory that way).
 	SingleSQL  string
 	SingleArgs []any
-	// SingleFragment runs the query as one in-process fragment (e.g. a deep
-	// offset, whose per-fragment results would each be as large as the page).
+	// SingleFragment runs the query as one fragment (e.g. a join that must
+	// see every span of a trace): on the remote executor already holding
+	// most of its segments, with the local files shipped to it, or
+	// in-process (no executors, too much to ship, or the remote run failed).
 	SingleFragment bool
 	// Slices, if set, replace Segments, LocalFiles and the fragment SQL:
 	// each is a fragment with its own SQL that must run whole (one
@@ -202,7 +215,7 @@ func (c *Coordinator) Query(ctx context.Context, request Request, scan func(*sql
 	// it, so that holds only in-process.
 	fragmentSQL, fragmentArgs := request.FragmentSQL, request.FragmentArgs
 	finalSQL, finalArgs := request.FinalSQL, request.FinalArgs
-	if len(parts) == 1 && parts[0].executor == nil && len(request.Slices) == 0 {
+	if len(parts) == 1 && (parts[0].executor == nil || parts[0].fallback != nil) && len(request.Slices) == 0 {
 		if request.SingleSQL != "" {
 			fragmentSQL, fragmentArgs = request.SingleSQL, request.SingleArgs
 		} else {
@@ -294,12 +307,14 @@ func Ranked(record *segments.SegmentRecord, executors []Executor) []Executor {
 }
 
 // part is one fragment to run: on a remote executor, or in-process when
-// executor is nil. A slice's part has its own SQL and is never split.
+// executor is nil. A slice's part has its own SQL and is never split. A
+// part with a fallback runs that (in-process, whole) if its executor fails.
 type part struct {
 	executor   Executor
 	segments   []*segments.SegmentRecord
 	localFiles []segments.ResolvedFile
 	slice      *Slice
+	fallback   *part
 }
 
 // fragmentRun collects one query's fragment results.
@@ -326,7 +341,10 @@ func (c *Coordinator) plan(request Request) []part {
 		return nil
 	}
 	remote := c.remote()
-	if request.SingleFragment || len(remote) == 0 {
+	if request.SingleFragment {
+		return c.planSingle(request, remote)
+	}
+	if len(remote) == 0 {
 		return []part{{segments: request.Segments, localFiles: request.LocalFiles}}
 	}
 
@@ -347,6 +365,65 @@ func (c *Coordinator) plan(request Request) []part {
 		parts = append(parts, part{executor: assigned.Executor, segments: assigned.Segments})
 	}
 	return parts
+}
+
+// planSingle places a single-fragment request on the remote executor that
+// owns (Ranked first) most of its uploaded bytes - the segments it keeps
+// warm - shipping it the files only this process has: the API pods have no
+// warm cache, and a week of cold segments read here outlasted the query.
+// It stays in-process, as before, when there is nothing uploaded, no
+// executor that takes shipped files, or more to ship than the bounds.
+// Segments not uploaded and not on this disk are left out, as the local
+// executor skips them (their rows come from the tail).
+func (c *Coordinator) planSingle(request Request, remote []Executor) []part {
+	whole := part{segments: request.Segments, localFiles: request.LocalFiles}
+	inProcess := func(placement string) []part {
+		telemetry.QuerySingleFragments.WithLabelValues(placement).Inc()
+		return []part{whole}
+	}
+	if len(remote) == 0 {
+		return inProcess("no_executor")
+	}
+	ship := append([]segments.ResolvedFile{}, request.LocalFiles...)
+	var uploaded []*segments.SegmentRecord
+	for _, record := range request.Segments {
+		if record.ObjectKey != "" {
+			uploaded = append(uploaded, record)
+		} else if _, err := os.Stat(record.Path); err == nil {
+			ship = append(ship, segments.ResolvedFile{Path: record.Path, Legacy: record.IsLegacy()})
+		}
+	}
+	if len(uploaded) == 0 {
+		return inProcess("no_upload")
+	}
+	var shipBytes int64
+	for _, file := range ship {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return inProcess("over_bound")
+		}
+		shipBytes += info.Size()
+	}
+	if len(ship) > maxShippedFiles || shipBytes > maxShippedBytes {
+		return inProcess("over_bound")
+	}
+	candidates := remote
+	if len(ship) > 0 {
+		candidates = nil
+		for _, executor := range remote {
+			// An executor that predates shipping would ignore the files.
+			if shipper, ok := executor.(LocalFileShipper); ok && shipper.ShipsLocalFiles() {
+				candidates = append(candidates, executor)
+			}
+		}
+		if len(candidates) == 0 {
+			return inProcess("no_executor")
+		}
+	}
+	telemetry.QuerySingleFragments.WithLabelValues("remote").Inc()
+	return []part{{
+		executor: mostOwned(uploaded, candidates), segments: uploaded, localFiles: ship, fallback: &whole,
+	}}
 }
 
 // RemoteExecutors is how many remote executors are live now.
@@ -421,6 +498,14 @@ func (r *fragmentRun) execute(ctx context.Context, p part, failed map[string]boo
 		r.mu.Lock()
 		r.errs = append(r.errs, err)
 		r.mu.Unlock()
+		return
+	}
+	if p.fallback != nil {
+		telemetry.QueryFragmentRetries.Inc()
+		telemetry.QuerySingleFragments.WithLabelValues("fallback").Inc()
+		r.coordinator.log.Warn("single query fragment failed on an executor, running it in-process",
+			"executor", p.executor.ID(), "error", err)
+		r.execute(ctx, *p.fallback, failed)
 		return
 	}
 
@@ -556,6 +641,26 @@ func BudgetRefusal(err error) (string, bool) {
 		return refused.Error(), true
 	}
 	return "", false
+}
+
+// mostOwned is the executor Ranked first for the most bytes of records
+// (ties: the lower id).
+func mostOwned(records []*segments.SegmentRecord, executors []Executor) Executor {
+	owned := map[string]int64{}
+	byID := map[string]Executor{}
+	for _, record := range records {
+		best := Ranked(record, executors)[0]
+		owned[best.ID()] += record.SizeBytes + 1
+		byID[best.ID()] = best
+	}
+	var chosen Executor
+	for id, executor := range byID {
+		if chosen == nil || owned[id] > owned[chosen.ID()] ||
+			(owned[id] == owned[chosen.ID()] && id < chosen.ID()) {
+			chosen = executor
+		}
+	}
+	return chosen
 }
 
 func allUploaded(records []*segments.SegmentRecord) bool {

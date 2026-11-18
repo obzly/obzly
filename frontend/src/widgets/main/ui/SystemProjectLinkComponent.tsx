@@ -17,7 +17,7 @@ export const SystemProjectLinkComponent = ({ onClick, className = '' }: Props): 
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full cursor-pointer items-center gap-2 text-left text-xs text-gray-500 hover:text-emerald-600 dark:text-gray-400 dark:hover:text-emerald-400 ${className}`}
+      className={`hover:text-accent-600 dark:hover:text-accent-400 flex w-full cursor-pointer items-center gap-2 text-left text-xs text-gray-500 dark:text-gray-400 ${className}`}
     >
       <EyeOutlined />
       View system project

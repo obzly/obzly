@@ -5,10 +5,12 @@ import {
   MEMORY_LIMITER_PROCESSOR_YAML,
   OTLP_REMOTE_FIELD,
   RESOURCEDETECTION_PROCESSOR_YAML,
+  SOURCE_NAME_FIELD,
   extensionsYaml,
   otlpHttpExporterYaml,
   otlpReceiverYaml,
   serviceExtensionsYaml,
+  sourceNameAttributeYaml,
 } from './otelCollectorCommon';
 import type { DataSourceDefinition } from './types';
 
@@ -29,6 +31,7 @@ export const envoyDataSource: DataSourceDefinition = {
       label: 'Admin stats endpoint (Prometheus format)',
       defaultValue: 'http://localhost:9901/stats/prometheus',
     },
+    SOURCE_NAME_FIELD,
     OTLP_REMOTE_FIELD,
   ],
   build: ({ baseUrl, apiKey, fieldValues }) => {
@@ -91,7 +94,7 @@ ${RESOURCEDETECTION_PROCESSOR_YAML}
     attributes:
       - key: service.name
         value: envoy
-        action: upsert
+        action: upsert${sourceNameAttributeYaml(fieldValues)}
 
 ${extensionsYaml({ fileStorageDir: FILE_STORAGE_DIR })}
 

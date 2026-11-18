@@ -1,6 +1,7 @@
 package users_testing
 
 import (
+	users_models "obzly/internal/features/users/models"
 	users_repositories "obzly/internal/features/users/repositories"
 )
 
@@ -38,6 +39,10 @@ func ResetSettingsToDefaults() {
 	settings.IsAllowExternalRegistrations = true
 	settings.IsAllowMemberInvitations = true
 	settings.IsMemberAllowedToCreateProjects = true
+	settings.DefaultThemeMode = users_models.DefaultThemeMode
+	settings.DefaultLightTheme = users_models.DefaultLightTheme
+	settings.DefaultDarkTheme = users_models.DefaultDarkTheme
+	settings.IsUserThemeChoiceAllowed = true
 
 	err = repository.UpdateSettings(settings)
 	if err != nil {

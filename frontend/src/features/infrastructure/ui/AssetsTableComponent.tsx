@@ -3,6 +3,7 @@ import type { ColumnsType, SorterResult } from 'antd/es/table/interface';
 import { useMemo, useState } from 'react';
 
 import type { AssetHealth, AssetKind, SiteAsset } from '../../../entity/inventory';
+import { Card } from '../../../shared/ui/v2';
 import {
   type AssetNode,
   HEALTH_COLOR,
@@ -71,6 +72,9 @@ const HEALTH_FILTERS: HealthFilter[] = [
   'inactive',
   'unknown',
 ];
+
+// Kind filters look like the v2 chips; antd keeps the checked colours.
+const CHIP = 'm-0 rounded-lg border border-gray-200 px-2.5 py-0.5 text-[13px] dark:border-gray-700';
 
 const byName = (a: SiteAsset, b: SiteAsset) => a.name.localeCompare(b.name);
 const numeric = (value: (asset: SiteAsset) => number | undefined) => (a: SiteAsset, b: SiteAsset) =>
@@ -155,9 +159,14 @@ export const AssetsTableComponent = ({
     {
       title: 'Health',
       key: 'health',
-      width: 80,
+      width: 110,
       ...sortable('health'),
-      render: (_, asset) => <HealthDot health={asset.health} />,
+      render: (_, asset) => (
+        <span className="inline-flex items-center gap-2 text-xs whitespace-nowrap text-gray-600 dark:text-gray-300">
+          <HealthDot health={asset.health} />
+          {HEALTH_LABEL[asset.health]}
+        </span>
+      ),
     },
     {
       title: 'Kind',
@@ -176,7 +185,7 @@ export const AssetsTableComponent = ({
         <span className="inline-flex max-w-[270px] items-center gap-1.5 align-middle">
           {layout === 'tree' && <KindIcon asset={asset} size={16} />}
           <Tooltip title={asset.name} placement="top" mouseEnterDelay={0.4}>
-            <span className="truncate font-medium">{asset.name}</span>
+            <span className="truncate font-mono text-[13px] font-medium">{asset.name}</span>
           </Tooltip>
         </span>
       ),
@@ -291,7 +300,7 @@ export const AssetsTableComponent = ({
   };
 
   return (
-    <div>
+    <Card>
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <Input.Search
           allowClear
@@ -331,12 +340,17 @@ export const AssetsTableComponent = ({
         />
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Tag.CheckableTag checked={kinds.size === 0} onChange={() => onKindsChange(new Set())}>
+        <Tag.CheckableTag
+          className={CHIP}
+          checked={kinds.size === 0}
+          onChange={() => onKindsChange(new Set())}
+        >
           All kinds
         </Tag.CheckableTag>
         {KIND_FILTERS.map((kind) => (
           <Tag.CheckableTag
             key={kind.value}
+            className={CHIP}
             checked={kinds.has(kind.value)}
             onChange={() => toggleKind(kind.value)}
           >
@@ -394,6 +408,6 @@ export const AssetsTableComponent = ({
           emptyText: assets.length === 0 ? 'Nothing in the inventory yet' : 'No assets match',
         }}
       />
-    </div>
+    </Card>
   );
 };

@@ -67,6 +67,8 @@ type ManagedRule struct {
 	Labels          Labels
 	Summary         string
 	ChannelIDs      []uuid.UUID
+	// Severity: critical, high, medium or low (empty: from the severity label, else medium).
+	Severity string
 }
 
 // SetAICostSource wires the ai_cost source (set at startup, before the
@@ -102,6 +104,7 @@ func SaveManagedRule(managed *ManagedRule) error {
 		if rule.Labels == nil {
 			rule.Labels = Labels{}
 		}
+		rule.Severity = ruleSeverity(managed.Severity, rule.Labels)
 		rule.ChannelIDs, rule.UpdatedAt, rule.LastEvalAt = channels, now, nil
 		return saveRuleTx(tx, &rule)
 	})

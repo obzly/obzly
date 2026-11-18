@@ -4,8 +4,12 @@ import { apiHelper } from '../../../shared/api/apiHelper';
 import type {
   AlertRule,
   AlertView,
+  AlertsSummary,
+  IncidentNotificationRequest,
+  IncidentNotificationSettings,
   NotificationChannel,
   PreviewSeries,
+  RuleActivityResponse,
   RuleRequest,
   Silence,
   SilenceRequest,
@@ -22,6 +26,10 @@ const withBody = (body: unknown): RequestOptions => {
 export const alertingApi = {
   listAlerts: (projectId: string): Promise<AlertView[]> =>
     apiHelper.fetchGetJson(`${base(projectId)}/alerts`, new RequestOptions()),
+  getSummary: (projectId: string): Promise<AlertsSummary> =>
+    apiHelper.fetchGetJson(`${base(projectId)}/alerts/summary`, new RequestOptions()),
+  getRuleActivity: (projectId: string): Promise<RuleActivityResponse> =>
+    apiHelper.fetchGetJson(`${base(projectId)}/alert-rules/activity`, new RequestOptions()),
 
   listRules: (projectId: string): Promise<AlertRule[]> =>
     apiHelper.fetchGetJson(`${base(projectId)}/alert-rules`, new RequestOptions()),
@@ -41,6 +49,14 @@ export const alertingApi = {
       `${base(projectId)}/notification-channels/${channelId}/test`,
       new RequestOptions(),
     ),
+
+  getIncidentNotifications: (projectId: string): Promise<IncidentNotificationSettings> =>
+    apiHelper.fetchGetJson(`${base(projectId)}/incident-notifications`, new RequestOptions()),
+  saveIncidentNotifications: (
+    projectId: string,
+    request: IncidentNotificationRequest,
+  ): Promise<IncidentNotificationSettings> =>
+    apiHelper.fetchPutJson(`${base(projectId)}/incident-notifications`, withBody(request)),
 
   listSilences: (projectId: string): Promise<Silence[]> =>
     apiHelper.fetchGetJson(`${base(projectId)}/silences`, new RequestOptions()),

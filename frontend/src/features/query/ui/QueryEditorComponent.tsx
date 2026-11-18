@@ -35,22 +35,29 @@ const baseTheme = EditorView.theme({
   '.cm-tooltip-autocomplete ul': { fontFamily: MONO },
   '.cm-line': { padding: '0 4px' },
   '.cm-tooltip': { borderRadius: '6px', fontSize: '12px' },
-  '.cm-tooltip-autocomplete ul li[aria-selected]': { background: '#059669', color: '#fff' },
+  '.cm-tooltip-autocomplete ul li[aria-selected]': {
+    background: 'var(--v2-accent)',
+    color: '#fff',
+  },
 });
 
 const darkTheme = EditorView.theme(
   {
-    '&': { color: '#e5e7eb', backgroundColor: 'transparent' },
-    '.cm-cursor': { borderLeftColor: '#e5e7eb' },
-    '.cm-tooltip': { backgroundColor: '#1f2937', color: '#e5e7eb', border: '1px solid #374151' },
-    '.cm-placeholder': { color: '#6b7280' },
+    '&': { color: 'var(--v2-text)', backgroundColor: 'transparent' },
+    '.cm-cursor': { borderLeftColor: 'var(--v2-text)' },
+    '.cm-tooltip': {
+      backgroundColor: 'var(--v2-panel)',
+      color: 'var(--v2-text)',
+      border: '1px solid var(--v2-border)',
+    },
+    '.cm-placeholder': { color: 'var(--color-gray-500)' },
   },
   { dark: true },
 );
 
 const lightTheme = EditorView.theme({
-  '.cm-tooltip': { backgroundColor: '#fff', border: '1px solid #e5e7eb' },
-  '.cm-placeholder': { color: '#9ca3af' },
+  '.cm-tooltip': { backgroundColor: 'var(--v2-panel)', border: '1px solid var(--v2-border)' },
+  '.cm-placeholder': { color: 'var(--color-gray-400)' },
 });
 
 // Search mode is one line: newlines typed or pasted become spaces.
@@ -184,10 +191,10 @@ export const QueryEditorComponent = ({
 
   return (
     <div
-      className={`flex min-w-[280px] flex-1 items-start rounded-md border bg-white px-1 transition-colors focus-within:border-emerald-500 dark:bg-transparent ${
+      className={`focus-within:border-accent-500 flex min-w-[280px] flex-1 items-start rounded-md border bg-white px-1 transition-colors dark:bg-transparent ${
         hasError
           ? 'border-red-400 dark:border-red-500'
-          : 'border-gray-300 hover:border-emerald-400 dark:border-gray-600'
+          : 'hover:border-accent-400 border-gray-300 dark:border-gray-600'
       }`}
     >
       <div ref={hostRef} className="min-w-0 flex-1" data-testid="query-editor" />

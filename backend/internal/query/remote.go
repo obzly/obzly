@@ -12,11 +12,13 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"obzly/internal/storage/segments"
 	"obzly/internal/telemetry"
 
 	"github.com/google/uuid"
@@ -36,9 +38,13 @@ const (
 	cancelSubjectBase = "obzly.query.cancel."
 	resultAddrKey     = "results"
 	affinityKey       = "affinity"
-	discoveryWait     = 300 * time.Millisecond
-	discoveryMissing  = 3
-	drainTimeout      = 30 * time.Second
+	// capabilitiesKey lists what an executor understands beyond the
+	// original protocol; shipCapability: fragments with shipped files.
+	capabilitiesKey  = "capabilities"
+	shipCapability   = "ship"
+	discoveryWait    = 300 * time.Millisecond
+	discoveryMissing = 3
+	drainTimeout     = 30 * time.Second
 	// signatureHeader carries a fragment's HMAC-SHA256, keyed with
 	// QUERIER_TOKEN: any client holding the NATS token can publish to an
 	// executor's subject, so an executor runs only SQL a coordinator signed.
@@ -100,6 +106,8 @@ type remoteExecutor struct {
 	token      string
 	// gone is closed when the registry drops the executor.
 	gone chan struct{}
+	// ships: it advertised shipCapability.
+	ships bool
 }
 
 var defaultRegistry struct {
@@ -154,9 +162,11 @@ func Serve(ctx context.Context, config ServeConfig) error {
 	}
 
 	service, err := micro.AddService(config.Conn, micro.Config{
-		Name:     ServiceName,
-		Version:  "1.0.0",
-		Metadata: map[string]string{resultAddrKey: advertise, affinityKey: config.Affinity},
+		Name:    ServiceName,
+		Version: "1.0.0",
+		Metadata: map[string]string{
+			resultAddrKey: advertise, affinityKey: config.Affinity, capabilitiesKey: shipCapability,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to register query executor: %w", err)
@@ -181,8 +191,16 @@ func Serve(ctx context.Context, config ServeConfig) error {
 				_ = request.Error("401", "invalid query executor token: the fragment is not signed with it", nil)
 				return
 			}
-			fragment, err := decodeFragment(request.Data())
+			fragment, shipped, err := decodeFragment(request.Data())
 			if err != nil {
+				_ = request.Error("400", err.Error(), nil)
+				return
+			}
+			// Removed whatever happens: the coordinator ships again (or runs
+			// the fragment itself) on a retry.
+			defer removeShipped(config.ResultsDir, shipped)
+			if fragment.LocalFiles, err = shippedFiles(config.ResultsDir, shipped); err != nil {
+				telemetry.QueryExecutorFragments.WithLabelValues(telemetry.ResultError).Inc()
 				_ = request.Error("400", err.Error(), nil)
 				return
 			}
@@ -273,8 +291,27 @@ func (e *remoteExecutor) Affinity() string {
 	return e.id
 }
 
+// ShipsLocalFiles: the coordinator may send it fragments with local files.
+func (e *remoteExecutor) ShipsLocalFiles() bool {
+	return e.ships
+}
+
 func (e *remoteExecutor) Execute(ctx context.Context, fragment Fragment, resultPath string) error {
-	payload, err := encodeFragment(fragment)
+	var shipped []wireShipped
+	if len(fragment.LocalFiles) > 0 {
+		if !e.ships {
+			return fmt.Errorf("executor %s takes no shipped files", e.id)
+		}
+		for _, file := range fragment.LocalFiles {
+			id, err := e.results.ship(ctx, e.resultAddr, file.Path)
+			if err != nil {
+				return err
+			}
+			shipped = append(shipped, wireShipped{ID: id, Legacy: file.Legacy})
+		}
+		telemetry.QueryShippedFiles.Add(float64(len(shipped)))
+	}
+	payload, err := encodeFragment(fragment, shipped)
 	if err != nil {
 		return err
 	}
@@ -396,6 +433,7 @@ func (r *Registry) refresh() {
 				results:    r.results,
 				token:      r.token,
 				gone:       make(chan struct{}),
+				ships:      slices.Contains(strings.Split(ping.Metadata[capabilitiesKey], ","), shipCapability),
 			}
 			r.log.Info("query executor joined", "id", id, "results", ping.Metadata[resultAddrKey])
 		}
@@ -410,6 +448,30 @@ func (r *Registry) refresh() {
 			delete(r.executors, id)
 			delete(r.missed, id)
 			r.log.Info("query executor left", "id", id)
+		}
+	}
+}
+
+// shippedFiles is the local files of a fragment's shipped ids.
+func shippedFiles(resultsDir string, shipped []wireShipped) ([]segments.ResolvedFile, error) {
+	var files []segments.ResolvedFile
+	for _, file := range shipped {
+		if _, err := uuid.Parse(file.ID); err != nil {
+			return nil, fmt.Errorf("invalid shipped file id %q", file.ID)
+		}
+		path := resultPath(shippedDir(resultsDir), file.ID)
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("shipped file %s is missing", file.ID)
+		}
+		files = append(files, segments.ResolvedFile{Path: path, Legacy: file.Legacy})
+	}
+	return files, nil
+}
+
+func removeShipped(resultsDir string, shipped []wireShipped) {
+	for _, file := range shipped {
+		if _, err := uuid.Parse(file.ID); err == nil {
+			_ = os.Remove(resultPath(shippedDir(resultsDir), file.ID))
 		}
 	}
 }

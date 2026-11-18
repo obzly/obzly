@@ -13,6 +13,7 @@ import type { ColumnsType, SorterResult } from 'antd/es/table/interface';
 import { type ReactNode, memo, useMemo, useState } from 'react';
 
 import type { CheckView } from '../../../entity/synthetics';
+import { Card } from '../../../shared/ui/v2';
 import { type FolderRow, type TreeRow, folderPaths, folderTree, inFolder } from '../lib/folders';
 import { formatInterval, formatMs, formatPercent } from '../lib/format';
 import { maintenanceTitle, withMaintenance } from '../lib/maintenance';
@@ -26,7 +27,7 @@ import {
 } from '../lib/status';
 import type { MonitorData } from '../lib/useMonitorData';
 import { MaintenanceMarker } from './MaintenanceMarker';
-import { IconAction, StatusBadge, StatusDot, TypeTag } from './parts';
+import { IconAction, LocationPill, StatusBadge, StatusDot, TypeTag } from './parts';
 
 type SortKey = 'status' | 'type' | 'name';
 type SortOrder = 'ascend' | 'descend';
@@ -231,7 +232,7 @@ const MonitorsTable = ({
     {
       title: 'Locations',
       key: 'locations',
-      width: 160,
+      width: 220,
       onCell: (row) => (row.kind === 'folder' ? { colSpan: canManage ? 6 : 5 } : {}),
       render: (_, row) => {
         if (row.kind === 'folder') return <FolderCounts row={row} />;
@@ -250,14 +251,7 @@ const MonitorsTable = ({
                 : state
                   ? withMaintenance(locationStatus(state), inMaintenance)
                   : 'none';
-              return (
-                <Tooltip key={location} title={`${location}: ${STATUS_LABEL[status]}`}>
-                  <span
-                    className="inline-block h-3 w-3 rounded-[3px]"
-                    style={{ background: STATUS_COLOR[status] }}
-                  />
-                </Tooltip>
-              );
+              return <LocationPill key={location} location={location} status={status} />;
             })}
           </span>
         );
@@ -339,7 +333,7 @@ const MonitorsTable = ({
   }
 
   return (
-    <div>
+    <Card>
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <Input.Search
           allowClear
@@ -428,7 +422,7 @@ const MonitorsTable = ({
         }}
         locale={{ emptyText: checks.length === 0 ? 'No monitors yet' : 'No monitors match' }}
       />
-    </div>
+    </Card>
   );
 };
 

@@ -4,6 +4,15 @@ export { projectMembershipApi } from './api/projectMembershipApi';
 export type { Project } from './model/Project';
 export type { LogSampleRule, RetentionPolicy, RetentionSignal } from './model/RetentionPolicy';
 export type { PromotedField, PromotedFieldType } from './model/PromotedField';
+export type {
+  IngestionHealth,
+  IngestionSignal,
+  IngestionSignalStatus,
+  IngestionSource,
+  IngestionSourceLocation,
+  IngestionStatus,
+  SourceIdentifiedBy,
+} from './model/IngestionStatus';
 export type { ProjectMembership } from './model/ProjectMembership';
 export type { CreateProjectRequest } from './model/CreateProjectRequest';
 export type { ProjectResponse } from './model/ProjectResponse';

@@ -6,10 +6,32 @@ import React, { useEffect, useRef, useState } from 'react';
 import { type Panel, dashboardApi, effectivePanelSource } from '../../../entity/dashboards';
 import type { AggregationBucket } from '../../../entity/dashboards/model/AggregationResponse';
 import { useTheme } from '../../../shared/theme';
+import { Sparkline } from '../../../shared/ui/v2';
 import type { TimeRange } from '../../query';
 import { mergeBuckets } from '../lib/mergeBuckets';
+import {
+  changeVsPrevious,
+  formatWindow,
+  isAdditive,
+  isTimeBucketedType,
+  latestPerSeries,
+  stackedSummary,
+  statusRows,
+  summaryValue,
+  totalPerTimestamp,
+  valuesByGroup,
+  valuesOnGrid,
+} from '../lib/panelKinds';
+import {
+  DonutView,
+  GaugeView,
+  RankedListView,
+  StackedFooter,
+  StatTrendView,
+  StatusStripView,
+} from './PanelKindViews';
 import { computeAutoBucketMs } from './bucketInterval';
-import { buildEchartsOption, formatByUnit, parseLabelSet } from './echartsOption';
+import { buildEchartsOption, chartPalette, formatByUnit, parseLabelSet } from './echartsOption';
 import echarts from './echartsSetup';
 
 interface Props {
@@ -27,16 +49,14 @@ interface TableRow {
 
 type Bucket = { timestamp?: string; groupKey?: string; value: number };
 
-// A metrics panel returns every point of every series; stat/table show each series' latest one.
-function latestPerSeries(buckets: Bucket[]): Bucket[] {
-  const latest = new Map<string, Bucket>();
-  for (const bucket of buckets) {
-    const key = bucket.groupKey ?? '';
-    const current = latest.get(key);
-    if (!current || (bucket.timestamp ?? '') >= (current.timestamp ?? '')) latest.set(key, bucket);
-  }
-  return [...latest.values()];
-}
+const ECHARTS_TYPES = new Set<Panel['type']>(['line', 'bar', 'pie', 'stackedBar']);
+
+// A stat with trend's sparkline aims for about this many points.
+const TREND_BUCKETS = 30;
+
+// The value of a stat with trend for a window: undefined while loading, null
+// when unknown.
+type WindowValue = number | null | undefined;
 
 /** One panel's live data, for the grid and for the editor's preview. */
 export const PanelChartComponent = ({
@@ -45,7 +65,7 @@ export const PanelChartComponent = ({
   timeRange,
   refreshToken,
 }: Props): React.JSX.Element => {
-  const { theme } = useTheme();
+  const { definition, chartColors } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ECharts | null>(null);
 
@@ -53,13 +73,21 @@ export const PanelChartComponent = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const isTimeSeries = panel.type === 'line' || panel.type === 'bar';
+  const [previousValue, setPreviousValue] = useState<WindowValue>(undefined);
+  // Only a span duration needs its own un-bucketed total; anything else is
+  // read off the bucketed answer.
+  const [currentValue, setCurrentValue] = useState<WindowValue>(undefined);
+
+  const isTimeSeries = isTimeBucketedType(panel.type);
+  const isTrend = panel.type === 'statTrend';
   const effectiveBucketMs =
     panel.bucketMs && panel.bucketMs > 0
       ? panel.bucketMs
       : isTimeSeries
         ? computeAutoBucketMs(timeRange.from.valueOf(), timeRange.to.valueOf())
-        : undefined;
+        : isTrend
+          ? computeAutoBucketMs(timeRange.from.valueOf(), timeRange.to.valueOf(), TREND_BUCKETS)
+          : undefined;
 
   useEffect(() => {
     let cancelled = false;
@@ -97,8 +125,61 @@ export const PanelChartComponent = ({
     };
   }, [projectId, panel, timeRange, effectiveBucketMs, refreshToken]);
 
+  // A stat with trend compares against the window just before this one, read
+  // as one un-bucketed total (a metrics panel as a range query, latest point).
   useEffect(() => {
-    if (panel.type === 'stat' || panel.type === 'table') {
+    if (panel.type !== 'statTrend') return;
+    let cancelled = false;
+    const abort = new AbortController();
+    const isMetricsPanel = effectivePanelSource(panel) === 'metrics';
+    const additive = isAdditive(panel);
+    const fromMs = timeRange.from.valueOf();
+    const windowMs = timeRange.to.valueOf() - fromMs;
+    const totalPanel = { ...panel, bucketMs: undefined };
+    const totalOf = (result: { buckets: Bucket[] }): number | null =>
+      !additive && !isMetricsPanel && result.buckets.length === 0
+        ? null
+        : summaryValue(result.buckets, isMetricsPanel);
+
+    setPreviousValue(undefined);
+    setCurrentValue(undefined);
+    dashboardApi
+      .executePanelQuery(
+        projectId,
+        {
+          panel: totalPanel,
+          timeRange: {
+            from: new Date(fromMs - windowMs).toISOString(),
+            to: timeRange.from.toISOString(),
+          },
+        },
+        abort.signal,
+      )
+      .then((result) => !cancelled && setPreviousValue(totalOf(result)))
+      .catch(() => !cancelled && setPreviousValue(null));
+
+    if (!additive && !isMetricsPanel) {
+      dashboardApi
+        .executePanelQuery(
+          projectId,
+          {
+            panel: totalPanel,
+            timeRange: { from: timeRange.from.toISOString(), to: timeRange.to.toISOString() },
+          },
+          abort.signal,
+        )
+        .then((result) => !cancelled && setCurrentValue(totalOf(result)))
+        .catch(() => !cancelled && setCurrentValue(null));
+    }
+
+    return () => {
+      cancelled = true;
+      abort.abort();
+    };
+  }, [projectId, panel, timeRange, refreshToken]);
+
+  useEffect(() => {
+    if (!ECHARTS_TYPES.has(panel.type)) {
       chartRef.current?.dispose();
       chartRef.current = null;
       return;
@@ -106,14 +187,22 @@ export const PanelChartComponent = ({
 
     if (!containerRef.current) return;
 
+    // Switching kinds in the editor's preview can remount the container.
+    if (chartRef.current && chartRef.current.getDom() !== containerRef.current) {
+      chartRef.current.dispose();
+      chartRef.current = null;
+    }
     const chart = chartRef.current ?? echarts.init(containerRef.current);
     chartRef.current = chart;
-    chart.setOption(buildEchartsOption(panel, { buckets }, theme === 'dark'), true);
+    chart.setOption(
+      buildEchartsOption(panel, { buckets }, chartPalette(definition.colors, chartColors)),
+      true,
+    );
 
     const handleResize = () => chart.resize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [buckets, panel, theme]);
+  }, [buckets, panel, definition, chartColors]);
 
   useEffect(() => {
     return () => {
@@ -140,14 +229,92 @@ export const PanelChartComponent = ({
 
   const isMetrics = effectivePanelSource(panel) === 'metrics';
   const summaryBuckets = isMetrics ? latestPerSeries(buckets) : buckets;
+  const additive = isAdditive(panel);
+  const grid = {
+    fromMs: timeRange.from.valueOf(),
+    toMs: timeRange.to.valueOf(),
+    bucketMs:
+      effectiveBucketMs ?? computeAutoBucketMs(timeRange.from.valueOf(), timeRange.to.valueOf()),
+  };
+  const colors = chartColors;
+
+  if (panel.type === 'statTrend') {
+    const value = additive || isMetrics ? summaryValue(buckets, isMetrics) : currentValue;
+    const trend = additive
+      ? (valuesOnGrid(buckets, grid, true) as number[])
+      : totalPerTimestamp(buckets);
+    return (
+      <StatTrendView
+        panel={panel}
+        value={value ?? null}
+        change={
+          previousValue === undefined || value === undefined
+            ? undefined
+            : changeVsPrevious(value, previousValue, panel.unit, panel.higherIs)
+        }
+        window={formatWindow(grid.toMs - grid.fromMs)}
+        trend={trend}
+      />
+    );
+  }
+
+  if (panel.type === 'rankedList') {
+    return <RankedListView panel={panel} rows={valuesByGroup(buckets, isMetrics)} />;
+  }
+
+  if (panel.type === 'donut') {
+    return <DonutView panel={panel} rows={valuesByGroup(buckets, isMetrics)} colors={colors} />;
+  }
+
+  if (panel.type === 'gauge') {
+    const groups = valuesByGroup(buckets, isMetrics);
+    const gauges =
+      groups.length > 1
+        ? groups
+        : [
+            {
+              key: '',
+              value: !additive && groups.length === 0 ? null : summaryValue(buckets, isMetrics),
+            },
+          ];
+    return <GaugeView panel={panel} gauges={gauges} />;
+  }
+
+  if (panel.type === 'statusStrip') {
+    return (
+      <StatusStripView
+        panel={panel}
+        rows={statusRows(buckets, grid, {
+          additive,
+          thresholds: panel.thresholds,
+          higherIs: panel.higherIs,
+          unit: panel.unit,
+        })}
+      />
+    );
+  }
+
+  if (panel.type === 'stackedBar') {
+    return (
+      <div className="flex h-full flex-col gap-2">
+        <div ref={containerRef} className="min-h-0 w-full flex-1" />
+        <StackedFooter panel={panel} summary={stackedSummary(buckets, additive)} colors={colors} />
+      </div>
+    );
+  }
 
   if (panel.type === 'stat') {
     const total = summaryBuckets.reduce((sum, bucket) => sum + bucket.value, 0);
+    // Only metrics stats carry points over time; logs and traces stats are one total.
+    const trend = isMetrics ? totalPerTimestamp(buckets) : [];
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-4xl font-semibold text-gray-800 dark:text-gray-100">
+      <div className="flex h-full flex-col justify-center gap-2 overflow-hidden px-2">
+        <div className="text-center text-4xl leading-none font-semibold text-gray-900 dark:text-gray-50">
           {formatByUnit(total, panel.unit)}
         </div>
+        {trend.length > 1 && (
+          <Sparkline values={trend} color="var(--v2-accent)" label={`${panel.title} trend`} />
+        )}
       </div>
     );
   }

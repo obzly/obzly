@@ -45,6 +45,7 @@ export const reuseUnchanged = (
     previous.to !== next.to ||
     previous.stepSeconds !== next.stepSeconds ||
     previous.data.size !== next.data.size ||
+    JSON.stringify(previous.previous) !== JSON.stringify(next.previous) ||
     !sameList(previous.errors, next.errors, (x, y) => x === y);
   const data = new Map<string, MonitorData>();
   for (const [id, item] of next.data) {

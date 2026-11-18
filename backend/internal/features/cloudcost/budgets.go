@@ -173,6 +173,7 @@ func (s *Service) UpdateAlertSettings(
 			Key: anomalyRuleKey(projectID), ProjectID: projectID, Name: "Cloud cost anomaly",
 			Source: alerting.SourceCloudCost, Query: alerting.RuleQuery{CostAnomalies: true}, Comparison: ">",
 			Threshold: 0, IntervalSeconds: anomalyRuleInterval, Labels: alerting.Labels{"source": "cost_anomaly"},
+			Severity: alerting.SeverityMedium,
 			Summary: "Cloud cost on {{ $labels.day }} for {{ $labels.service }} ({{ $labels.account }}) " +
 				"was far from the usual for that weekday",
 			ChannelIDs: channels,
@@ -187,6 +188,7 @@ func (s *Service) UpdateAlertSettings(
 			Threshold:       endingSoonDays,
 			IntervalSeconds: commitmentRuleInterval,
 			Labels:          alerting.Labels{"source": "cost_commitment"},
+			Severity:        alerting.SeverityLow,
 			Summary:         "{{ $labels.commitment }} ({{ $labels.connection }}) ends on {{ $labels.ends }}: renew or replace it",
 			ChannelIDs:      channels,
 		},
@@ -350,6 +352,7 @@ func budgetRule(budget *Budget) *alerting.ManagedRule {
 		Source: alerting.SourceCloudCost, Query: alerting.RuleQuery{BudgetID: budget.ID.String()},
 		Comparison: ">=", Threshold: float64(budget.ThresholdPercent), IntervalSeconds: budgetRuleInterval,
 		RepeatSeconds: budgetRuleRepeat, Labels: alerting.Labels{"source": "cost_budget"},
+		Severity: alerting.SeverityMedium,
 		Summary: fmt.Sprintf("%s is heading for {{ $value }}%% of its %s %.2f monthly budget", budget.Name,
 			budget.Currency, budget.Amount),
 		ChannelIDs: budget.ChannelIDs,

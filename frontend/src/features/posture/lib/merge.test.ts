@@ -19,6 +19,7 @@ const summary = (
       evaluated: passed + failed,
       percent: 0,
       sources: [source],
+      reason: source === 'native' ? 'Security Hub in every scanned region' : undefined,
       trend: [{ day: '2026-11-10', percent: (passed / (passed + failed)) * 100 }],
     },
   ],
@@ -39,9 +40,20 @@ describe('merging posture across Sites', () => {
     const fsbp = merged.standards[0];
     expect([fsbp.passed, fsbp.failed, fsbp.evaluated, fsbp.percent]).toEqual([4, 4, 8, 50]);
     expect(fsbp.sources).toEqual(['baseline', 'native']);
+    expect(fsbp.reason).toBe('Security Hub in every scanned region');
     expect(fsbp.trend).toEqual([{ day: '2026-11-10', percent: 50 }]);
     expect(merged.open).toEqual({ high: 4 });
     expect(merged.coverage.notCovered).toBe(2);
+  });
+
+  it("names each Site's reason when several give one", () => {
+    const merged = mergeSummary([
+      { site: site('eu'), value: summary(3, 1, 'native') },
+      { site: site('us'), value: summary(2, 1, 'native') },
+    ]);
+    expect(merged.standards[0].reason).toBe(
+      'eu: Security Hub in every scanned region; us: Security Hub in every scanned region',
+    );
   });
 
   it('orders findings most severe first and adds totals', () => {

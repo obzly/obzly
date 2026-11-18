@@ -18,6 +18,7 @@ import (
 	users_models "obzly/internal/features/users/models"
 
 	"github.com/google/uuid"
+	"github.com/valkey-io/valkey-go"
 )
 
 // ingestionRateWindowMinutes is the trailing window the System Dashboard
@@ -29,9 +30,12 @@ type LogQueryService struct {
 	concurrentQueryLimiter *ConcurrentQueryLimiter
 	queryValidator         *QueryValidator
 	logger                 *slog.Logger
+	// cache holds the Anomalies button's counts (anomaly_count.go).
+	cache valkey.Client
 }
 
 func (s *LogQueryService) ExecuteQuery(
+	ctx context.Context,
 	projectID uuid.UUID,
 	request *logs_core.LogQueryRequestDTO,
 	user *users_models.User,
@@ -42,7 +46,7 @@ func (s *LogQueryService) ExecuteQuery(
 	}
 	defer release()
 
-	return logs_core.GetLogCoreRepository().ExecuteQueryForProject(projectID, request)
+	return logs_core.GetLogCoreRepository().ExecuteQueryForProjectContext(ctx, projectID, request)
 }
 
 // StreamQuery is ExecuteQuery that hands emit each search window's rows. start
@@ -113,6 +117,7 @@ func (s *LogQueryService) prepareQuery(
 // ExecutePatterns returns the most frequent message patterns among the logs a
 // query matches, with ExecuteQuery's access, concurrency and validation checks.
 func (s *LogQueryService) ExecutePatterns(
+	ctx context.Context,
 	projectID uuid.UUID,
 	request *logs_core.PatternsRequestDTO,
 	user *users_models.User,
@@ -141,7 +146,7 @@ func (s *LogQueryService) ExecutePatterns(
 	}
 
 	request.ScanBudget = config.GetEnv().QueryMaxScanBytes
-	return logs_core.GetLogCoreRepository().ExecutePatterns(projectID, request)
+	return logs_core.GetLogCoreRepository().ExecutePatternsContext(ctx, projectID, request)
 }
 
 // ExecuteFieldValues returns a field's most frequent values among the logs a
@@ -201,18 +206,23 @@ func (s *LogQueryService) ExecuteFieldValues(
 }
 
 // ExecutePatternChanges compares message patterns between two ranges, with
-// the same checks as ExecuteFieldValues for both.
+// the same checks as ExecuteFieldValues for both. A CountOnly request takes no
+// concurrency slot: like the histogram's aggregation it reads per-minute counts
+// (anything needing raw logs isn't counted) and is cached, and it runs beside
+// the search it annotates, which would otherwise crowd out the user's slots.
 func (s *LogQueryService) ExecutePatternChanges(
 	ctx context.Context,
 	projectID uuid.UUID,
 	request *logs_core.PatternChangesRequestDTO,
 	user *users_models.User,
 ) (*logs_core.PatternChangesResponseDTO, error) {
-	queryID := uuid.New().String()
-	if err := s.concurrentQueryLimiter.AcquireQuerySlot(user.ID, queryID); err != nil {
-		return nil, err
+	if !request.CountOnly {
+		queryID := uuid.New().String()
+		if err := s.concurrentQueryLimiter.AcquireQuerySlot(user.ID, queryID); err != nil {
+			return nil, err
+		}
+		defer s.concurrentQueryLimiter.ReleaseQuerySlot(user.ID, queryID)
 	}
-	defer s.concurrentQueryLimiter.ReleaseQuerySlot(user.ID, queryID)
 
 	decision, err := authz.Authorize(ctx, user, authz.ProjectRead, authz.Project(projectID))
 	if err != nil {
@@ -230,6 +240,9 @@ func (s *LogQueryService) ExecutePatternChanges(
 		}
 	}
 	request.ScanBudget = config.GetEnv().QueryMaxScanBytes
+	if request.CountOnly {
+		return s.countPatternChanges(ctx, projectID, request)
+	}
 	return logs_core.GetLogCoreRepository().ExecutePatternChanges(ctx, projectID, request)
 }
 
@@ -316,6 +329,7 @@ const maxSQLQueryLength = 10_000
 // ExecuteSQLQuery is SQL mode (see logs_querier.ExecuteSQLQuery for the
 // security model); it shares ExecuteQuery's limiter and time-range rules.
 func (s *LogQueryService) ExecuteSQLQuery(
+	ctx context.Context,
 	projectID uuid.UUID,
 	request *logs_core.ExecuteSQLQueryRequestDTO,
 	user *users_models.User,
@@ -361,8 +375,7 @@ func (s *LogQueryService) ExecuteSQLQuery(
 	}
 
 	request.ScanBudget = config.GetEnv().QueryMaxScanBytes
-	response, err := logs_core.GetLogCoreRepository().ExecuteSQLQuery(projectID, request)
-	return response, err
+	return logs_core.GetLogCoreRepository().ExecuteSQLQueryContext(ctx, projectID, request)
 }
 
 func (s *LogQueryService) GetQueryableFields(

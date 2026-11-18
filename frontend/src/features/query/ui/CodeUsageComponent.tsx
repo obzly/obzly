@@ -365,7 +365,7 @@ export function CodeUsageComponent({
             onClick={() => handleLanguageChange(lang)}
             className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
               selectedLanguage === lang
-                ? 'bg-emerald-600 text-white'
+                ? 'bg-accent-600 text-white'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200'
             }`}
           >
@@ -381,7 +381,7 @@ export function CodeUsageComponent({
             onClick={() => handleIntegrationChange(index)}
             className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
               selectedIntegration === index
-                ? 'bg-emerald-100 text-emerald-700 ring-2 ring-emerald-600'
+                ? 'bg-accent-100 text-accent-700 ring-accent-600 ring-2'
                 : 'bg-gray-50 text-gray-600 hover:bg-gray-100 dark:bg-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-700'
             }`}
           >

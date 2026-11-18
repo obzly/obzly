@@ -28,6 +28,25 @@ type SpanRepository interface {
 	// ServiceK8sMetadata resolves each service's k8s namespace, deployment
 	// and node from span resource attributes.
 	ServiceK8sMetadata(projectID uuid.UUID, timeRange *TimeRangeDTO) (map[string]K8sResourceInfo, error)
+	// ServiceNodeStats is the Service Map's per-node RED numbers and the
+	// untraced peers (databases, caches, brokers, external APIs) seen from
+	// client spans.
+	ServiceNodeStats(projectID uuid.UUID, timeRange *TimeRangeDTO) (*ServiceNodeStats, error)
+	// TraceSummary is the Traces page's summary tiles (current and previous
+	// period, bucketed) and its capped count of matching traces.
+	TraceSummary(ctx context.Context, projectID uuid.UUID, request *TraceSummaryQuery) (*TraceSummaryResult, error)
+	// ServiceErrorRates is each service's entry spans and errors in a period
+	// and the one before it, most errors first.
+	ServiceErrorRates(
+		ctx context.Context,
+		projectID uuid.UUID,
+		request *ServiceErrorRatesQuery,
+	) ([]ServiceErrorRate, error)
+	// ServiceErrorSpanCounts counts error spans per service in the range, for
+	// services plus the services that own spanIDs.
+	ServiceErrorSpanCounts(
+		projectID uuid.UUID, timeRange *TimeRangeDTO, services []string, spanIDs []string,
+	) (map[string]int64, error)
 	QueryLLMCalls(ctx context.Context, projectID uuid.UUID, request *LLMCallsQueryDTO) (*LLMCallsResultDTO, error)
 	GetProjectSpanStats(projectID uuid.UUID) (*SpansStatsDTO, error)
 	GetSystemSpanStats() (*SpansStatsDTO, error)

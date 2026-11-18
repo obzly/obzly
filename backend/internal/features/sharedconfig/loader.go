@@ -299,13 +299,21 @@ func apply(doc *document, now time.Time) (string, error) {
 				return err
 			}
 			projectIDs, _ := json.Marshal(nonNil(channel.ProjectIDs))
+			// A changed template clears the last render error recorded for the old one.
 			if err := tx.Exec(
 				`INSERT INTO notification_channels
-				(id, project_id, name, kind, config_encrypted, source, all_projects, project_ids, created_at, updated_at)
-				VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+				(id, project_id, name, kind, config_encrypted, source, all_projects, project_ids, created_at, updated_at,
+					use_emoji, template_override, template_subject, template_body)
+				VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (id) DO UPDATE SET project_id = NULL, name = EXCLUDED.name, kind = EXCLUDED.kind,
 					config_encrypted = EXCLUDED.config_encrypted, source = EXCLUDED.source,
-					all_projects = EXCLUDED.all_projects, project_ids = EXCLUDED.project_ids, updated_at = EXCLUDED.updated_at`,
+					all_projects = EXCLUDED.all_projects, project_ids = EXCLUDED.project_ids, updated_at = EXCLUDED.updated_at,
+					use_emoji = EXCLUDED.use_emoji, template_override = EXCLUDED.template_override,
+					template_subject = EXCLUDED.template_subject, template_body = EXCLUDED.template_body,
+					template_error = CASE WHEN notification_channels.template_override = EXCLUDED.template_override
+						AND notification_channels.template_subject = EXCLUDED.template_subject
+						AND notification_channels.template_body = EXCLUDED.template_body
+						THEN notification_channels.template_error ELSE '' END`,
 				channel.ID,
 				channel.Name,
 				channel.Kind,
@@ -315,6 +323,10 @@ func apply(doc *document, now time.Time) (string, error) {
 				string(projectIDs),
 				now,
 				now,
+				channel.EmojiOn(),
+				channel.TemplateOverride,
+				channel.TemplateSubject,
+				channel.TemplateBody,
 			).Error; err != nil {
 				return err
 			}
@@ -324,10 +336,16 @@ func apply(doc *document, now time.Time) (string, error) {
 		if len(keep) > 0 {
 			remove = remove.Where("id NOT IN ?", keep)
 		}
-		return remove.Delete(&channelRow{}).Error
+		if err := remove.Delete(&channelRow{}).Error; err != nil {
+			return err
+		}
+		return applyTemplates(tx, content.Templates, now)
 	})
 	if err != nil {
 		return "", err
+	}
+	if templatesChanged != nil {
+		templatesChanged()
 	}
 	if applyMonitorAlerts != nil {
 		if err := applyMonitorAlerts(content.MonitorAlerts); err != nil {
@@ -351,6 +369,35 @@ func apply(doc *document, now time.Time) (string, error) {
 		`INSERT INTO shared_config_state (id, version, issued_at, fetched_at) VALUES (TRUE, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, issued_at = EXCLUDED.issued_at, fetched_at = EXCLUDED.fetched_at`,
 		doc.Version, issued, now).Error
+}
+
+// applyTemplates replaces the central organisation-default templates with
+// what the control plane sent, keeping a kind's last render error while its
+// template is unchanged.
+func applyTemplates(tx *gorm.DB, templates []SyncedTemplate, now time.Time) error {
+	kinds := make([]string, 0, len(templates))
+	for _, template := range templates {
+		if err := tx.Exec(
+			`INSERT INTO notification_templates (source, kind, subject, body, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (source, kind) DO UPDATE SET subject = EXCLUDED.subject, body = EXCLUDED.body,
+				updated_at = CASE WHEN notification_templates.subject = EXCLUDED.subject
+					AND notification_templates.body = EXCLUDED.body
+					THEN notification_templates.updated_at ELSE EXCLUDED.updated_at END,
+				last_error = CASE WHEN notification_templates.subject = EXCLUDED.subject
+					AND notification_templates.body = EXCLUDED.body
+					THEN notification_templates.last_error ELSE '' END`,
+			SourceCentral, template.Kind, template.Subject, template.Body, now,
+		).Error; err != nil {
+			return err
+		}
+		kinds = append(kinds, template.Kind)
+	}
+	remove := tx.Where("source = ?", SourceCentral)
+	if len(kinds) > 0 {
+		remove = remove.Where("kind NOT IN ?", kinds)
+	}
+	return remove.Delete(&MessageTemplate{}).Error
 }
 
 // channelRow is notification_channels as far as this package touches it.

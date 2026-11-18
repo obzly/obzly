@@ -1,6 +1,7 @@
 package logs_querier
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -65,7 +66,7 @@ func Test_CountMatching_Unfiltered_CountsInsideSegmentsFromTheCatalog(t *testing
 	where := "project_id = ? AND timestamp >= ? AND timestamp <= ?"
 	args := []any{projectID.String(), from, to}
 
-	total, err := q.countMatching(nil, records, from, to, true, where, args, 0, nil)
+	total, err := q.countMatching(context.Background(), nil, records, from, to, true, where, args, 0, nil)
 
 	require.NoError(t, err)
 	require.EqualValues(t, 1000+7, total, "catalog rows plus the boundary file's 7 rows in the window")

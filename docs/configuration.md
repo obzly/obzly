@@ -25,6 +25,7 @@ Kubernetes in the ConfigMap and Secret (`deploy/kubernetes/eks/common/`) or the 
 | `SELF_TRACING_SAMPLE_RATE` | `0.01` | Fraction of the replica's own requests and background passes traced into the system project; `0` off |
 | `WEBSITE_URL` | empty | Product website linked from the UI |
 | `APP_VERSION` | `dev` | Set by the image build; shown in Upgrade status and Site info |
+| `UPDATE_CHECK` | `true` | Settings > Updates asks GitHub for the latest Obzly release (an anonymous request with a generic User-Agent, cached 6 hours); `false` turns it off |
 | `BACKEND_ROOT_PATH` | working directory | Where `migrations/` is found |
 
 ## Valkey
@@ -86,6 +87,7 @@ Caches, rate limits and leases only - no data that needs a backup.
 | `ALERT_EVAL_SHARDS` | `1` | Rule evaluation split this many ways, each under its own leader lock |
 | `INVENTORY_RETENTION_DAYS` | `30` | Infrastructure inventory: an asset not seen for this many days is dropped (terminated pods and containers after 7 days; a Job or CronJob run's pod once it succeeds, or a day after it failed) |
 | `INVENTORY_MAX_ASSETS_PER_PROJECT` | `50000` | Infrastructure inventory: past this many assets in a project the least recently seen are dropped, with a warning in the worker log |
+| `WEB_ANALYTICS_GEOIP_DB` | `/app/geoip/dbip-country-lite.mmdb` | Web analytics: the country database visitor IPs are looked up in. The image bundles DB-IP Lite (CC BY 4.0; the report shows "IP geolocation by DB-IP"); any GeoIP2-Country compatible `.mmdb` (e.g. your own MaxMind GeoLite2-Country) works. A missing or unreadable file only leaves the Countries panel empty |
 | `ALERT_EGRESS_ALLOWLIST` | empty | CIDRs webhooks, and Synthetics Tests run from the control plane, may reach although not public (in-network receivers) |
 | `ALERT_EGRESS_DENYLIST` | empty | CIDRs webhooks and control-plane Synthetics Tests may never reach (e.g. the cluster's service range) |
 
@@ -110,6 +112,42 @@ Both are set up in **Obzly settings**, not the environment:
   takes over a Site's existing channels under the same ids, so its rules keep working, plus its
   relay if the control plane has none; an id that belongs to a central channel reaching other
   Sites is refused.
+- **Severity:** every alert rule has one (Critical, High, Medium, Low; set in the rule editor). It
+  picks the emoji, Slack's side-bar colour and PagerDuty's severity (Critical → critical, High →
+  error, Medium → warning, Low → info). Managed rules set their own: Synthetics down Critical,
+  degraded and certificate Medium; AI budgets and posture findings High (or the finding's or
+  threshold's own severity); cost anomalies and budgets Medium; commitments ending Low.
+- **Message templates** (Obzly settings › Notifications & alerting › Message templates): an
+  organisation default per channel kind (email subject and body, Slack text, PagerDuty summary,
+  webhook JSON: Obzly's fixed `obzly.alert/1` body or your own JSON template, checked to render
+  valid JSON when saved), plus an optional override per channel (its Message template action,
+  where its **Use emoji** switch also lives). Templates are Go `text/template` with string helpers
+  only (`upper`, `lower`, `title`, `trim`, `truncate`, `join`, `default`, `contains`, `hasPrefix`,
+  `hasSuffix`, `label`), at most 16 KB, rendered within 2 seconds to at most 64 KB; `define`,
+  `template` calls and ranging over a number are refused. Variables include `.Emoji`, `.Status`,
+  `.Severity`, `.Rule.Name`, `.Rule.Description` (the rule's runbook), `.Summary`, `.Value`,
+  `.Comparison`, `.Threshold`, `.Labels`/`.SortedLabels`, `.StartsAt`, `.Duration`,
+  `.Project.Name`, `.Site.Name`, `.Source`, `.Link` and, on incident notifications, `.Incident`
+  (services, signal counts, top impacted services). Every value is escaped for its channel
+  (Slack's `& < >`, JSON for webhooks, control characters dropped for email and PagerDuty), so
+  text from telemetry can't add a mention or link or break the JSON. Emoji: Critical firing
+  📣❗🔥, High 📣❗🚨, Medium 📣 🔔⚠️, Low 🔔🔔👀, resolved ✅️, tests 🧪. A template that fails at
+  send time never drops the notification: the built-in template is sent, the worker logs it, and
+  the channel or template shows **template error** on the deployment that sends (a Site, or a
+  standalone install). Every template change is audit-logged. On a control plane templates are
+  central and reach the Sites with the channels; an enrolled Site shows them read-only.
+- **Links:** `.Link` opens the alert's or incident's page. It uses `PUBLIC_URL`; on a Site enrolled
+  in a control plane, the control plane's address (`CONTROL_PLANE_ISSUER`) with the Site selected.
+  Without either it is empty (the built-in templates then leave the link out).
+- **Incident notifications** (Incidents › gear icon, project owners and admins): notify chosen
+  channels when an incident opens, and optionally when it ends, once it holds at least N error
+  signals or N services (default 3 or 2), at a chosen severity (default High). The correlation
+  scanner folds the sessions it keeps creating for the same services into one incident (a session
+  sharing a service within 15 minutes joins it), so each incident notifies once when it opens and
+  once when it ends (15 minutes without a new session). They go through the same outbox (retries,
+  circuit breaker) and carry the labels `alertname=Incident`, `obzly_kind=incident` and
+  `severity`, so a silence matching those mutes them; silences on other labels (a service's
+  alerts) don't, as an incident spans services.
 - **Upgrading from `ALERT_SMTP_*`:** on first start of v0.55.0 the variables are imported once (a
   control plane's as its central relay, a Site's as its own) and then ignored; remove them.
 

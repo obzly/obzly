@@ -277,7 +277,7 @@ export const LocationPickerComponent = ({
           options.indent ? 'pl-8' : ''
         } ${
           isSelected
-            ? 'bg-emerald-50 font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+            ? 'bg-accent-50 text-accent-800 dark:bg-accent-950 dark:text-accent-200 font-medium'
             : 'text-gray-800 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800'
         }`}
       >
@@ -374,7 +374,7 @@ export const LocationPickerComponent = ({
                   setIsOpen(false);
                   onCreateProject(site);
                 }}
-                className="cursor-pointer rounded px-1 text-gray-400 hover:bg-gray-100 hover:text-emerald-600 dark:hover:bg-gray-800"
+                className="hover:text-accent-600 cursor-pointer rounded px-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
               >
                 <PlusOutlined />
               </button>
@@ -514,7 +514,7 @@ export const LocationPickerComponent = ({
           type="button"
           aria-haspopup="dialog"
           aria-expanded={isOpen}
-          className="flex max-w-[380px] cursor-pointer items-center gap-2 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm hover:border-emerald-500 dark:border-gray-600 dark:bg-gray-900 dark:hover:border-emerald-500"
+          className="hover:border-accent-500 dark:hover:border-accent-500 flex max-w-[380px] cursor-pointer items-center gap-2 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
         >
           {selectedSite ? (
             <>

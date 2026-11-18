@@ -127,6 +127,25 @@ func Test_ListPendingUpload_ThenMarkUploaded_RemovesItFromPending(t *testing.T) 
 	require.Empty(t, pending)
 }
 
+func Test_AggregateStatsForProject_SplitsObjectStorageFromLocalOnly(t *testing.T) {
+	repo := &segments.SegmentRepository{}
+	projectID := uuid.New()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	uploaded := segments.FromSegment(sampleSegment(projectID, "logs", base, base.Add(time.Hour)))
+	uploaded.SizeBytes = 3000
+	fresh := segments.FromSegment(sampleSegment(projectID, "logs", base.Add(time.Hour), base.Add(2*time.Hour)))
+	fresh.SizeBytes = 1000
+	require.NoError(t, repo.Create(uploaded))
+	require.NoError(t, repo.Create(fresh))
+	require.NoError(t, repo.MarkUploaded(uploaded.ID, "logs/"+uploaded.ID.String()+".parquet"))
+
+	stats, err := repo.AggregateStatsForProject(projectID, "logs")
+	require.NoError(t, err)
+	require.Equal(t, int64(4000), stats.SizeBytes)
+	require.Equal(t, int64(3000), stats.UploadedSizeBytes)
+}
+
 func Test_DeleteByIDs_RemovesRecords(t *testing.T) {
 	repo := &segments.SegmentRepository{}
 	projectID := uuid.New()

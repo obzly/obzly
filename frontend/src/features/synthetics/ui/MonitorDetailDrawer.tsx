@@ -18,13 +18,14 @@ import {
   type TestRun,
   syntheticsApi,
 } from '../../../entity/synthetics';
+import { useTheme } from '../../../shared/theme';
 import { baseOption, timeAxis, valueAxis } from '../lib/chartOptions';
 import { formatInterval, formatMs, formatPercent, targetOf } from '../lib/format';
 import { heatmapGrid, hourLabel, hourWindow } from '../lib/heatmap';
 import { heatmapTooltip } from '../lib/heatmapTooltip';
 import { durationText, intervalsFor, markMaintenance } from '../lib/maintenance';
 import { failedStep, failedStepNote } from '../lib/multiStep';
-import { PHASE_COLORS, PHASE_LABELS } from '../lib/phases';
+import { PHASE_LABELS, phaseColor } from '../lib/phases';
 import {
   indexBy,
   latestBy,
@@ -107,16 +108,6 @@ interface RangeDetail {
   p99ByLocation: Map<string, number>;
 }
 
-const LOCATION_COLORS = [
-  '#059669',
-  '#8b5cf6',
-  '#f97316',
-  '#0ea5e9',
-  '#ec4899',
-  '#84cc16',
-  '#eab308',
-  '#64748b',
-];
 const RUN_LIMIT = 500;
 const FAILURE_LIMIT = 500;
 const NO_MAINTENANCE: MaintenanceOccurrence[] = [];
@@ -150,6 +141,7 @@ export const MonitorDetailDrawer = ({
   refresh = 0,
 }: Props) => {
   const { message } = App.useApp();
+  const { chartColors } = useTheme();
   const [detail, setDetail] = useState<DetailData>();
   const [rangeDetail, setRangeDetail] = useState<RangeDetail>();
   const [error, setError] = useState<string>();
@@ -388,9 +380,9 @@ export const MonitorDetailDrawer = ({
     }
   };
 
-  const colorFor = (name: string) => {
+  const colorFor = (name: string, palette: string[] = chartColors) => {
     const index = [...(detail?.locationStrips.keys() ?? [])].indexOf(name);
-    return LOCATION_COLORS[(index < 0 ? 0 : index) % LOCATION_COLORS.length];
+    return palette[(index < 0 ? 0 : index) % palette.length];
   };
   const filterSeries = (series: PromQLSeries[]) =>
     series.filter((item) => !location || item.labels.location === location);
@@ -409,7 +401,7 @@ export const MonitorDetailDrawer = ({
         type: 'line',
         showSymbol: false,
         lineStyle: { width: 1.6 },
-        itemStyle: { color: colorFor(item.labels.location) },
+        itemStyle: { color: colorFor(item.labels.location, colors.series) },
         data: item.points.map((point) => [
           Date.parse(point.timestamp),
           Math.round(point.value * 1000),
@@ -439,7 +431,7 @@ export const MonitorDetailDrawer = ({
           showSymbol: false,
           areaStyle: { opacity: 0.55 },
           lineStyle: { width: 0.8 },
-          itemStyle: { color: PHASE_COLORS[item.labels.phase] },
+          itemStyle: { color: phaseColor(colors.series, item.labels.phase) },
           data: item.points.map((point) => [
             Date.parse(point.timestamp),
             Math.round(point.value * 1000),
@@ -619,7 +611,7 @@ export const MonitorDetailDrawer = ({
           name: 'bytes',
           type: 'line',
           showSymbol: false,
-          itemStyle: { color: '#059669' },
+          itemStyle: { color: colors.series[0] },
           data: (detail?.size[0]?.points ?? []).map((point) => [
             Date.parse(point.timestamp),
             point.value,
@@ -631,7 +623,7 @@ export const MonitorDetailDrawer = ({
           step: 'end',
           yAxisIndex: 1,
           showSymbol: false,
-          itemStyle: { color: '#8b5cf6' },
+          itemStyle: { color: colors.series[2 % colors.series.length] },
           data: (detail?.redirects[0]?.points ?? []).map((point) => [
             Date.parse(point.timestamp),
             point.value,
@@ -659,7 +651,7 @@ export const MonitorDetailDrawer = ({
           name: `${item.labels.location} rtt`,
           type: 'line' as const,
           showSymbol: false,
-          itemStyle: { color: colorFor(item.labels.location) },
+          itemStyle: { color: colorFor(item.labels.location, colors.series) },
           data: item.points.map((point) => [Date.parse(point.timestamp), point.value * 1000]),
         })),
         ...filterSeries(detail?.icmpLoss ?? []).map((item) => ({
@@ -696,7 +688,9 @@ export const MonitorDetailDrawer = ({
       title={
         <div className="flex flex-wrap items-center gap-3">
           <StatusDot status={status} size={14} tooltip />
-          <span className="text-lg font-semibold">{check.name}</span>
+          <span className="text-lg font-semibold text-gray-900 dark:text-gray-50">
+            {check.name}
+          </span>
           <TypeTag type={check.type} />
           {activeMaintenance && (
             <StatusBadge
@@ -744,7 +738,7 @@ export const MonitorDetailDrawer = ({
           description={error}
         />
       )}
-      <div className="mb-4 grid grid-cols-2 overflow-hidden rounded-lg border border-gray-200 sm:grid-cols-4 lg:grid-cols-7 dark:border-gray-700">
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         <Stat label="Status" value={<StatusBadge status={status} />} />
         <Stat
           label="Uptime"
@@ -794,12 +788,17 @@ export const MonitorDetailDrawer = ({
       {detail && (
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap gap-2">
-            <Tag.CheckableTag checked={!location} onChange={() => setLocation(undefined)}>
+            <Tag.CheckableTag
+              className="rounded-full px-3"
+              checked={!location}
+              onChange={() => setLocation(undefined)}
+            >
               All locations
             </Tag.CheckableTag>
             {[...detail.locationStrips.keys()].map((name) => (
               <Tag.CheckableTag
                 key={name}
+                className="rounded-full px-3 font-mono"
                 checked={location === name}
                 onChange={() => setLocation(location === name ? undefined : name)}
               >
@@ -1100,7 +1099,7 @@ const Dependencies = ({
           <button
             key={item.id}
             type="button"
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs text-gray-800 hover:border-emerald-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+            className="hover:border-accent-500 inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
             onClick={() => onOpen(item)}
           >
             <StatusDot status={statusOf(item)} size={8} />
@@ -1138,11 +1137,11 @@ const Dependencies = ({
 };
 
 const Stat = ({ label, value, note }: { label: string; value: React.ReactNode; note?: string }) => (
-  <div className="border-r border-b border-gray-200 px-4 py-2.5 last:border-r-0 dark:border-gray-700">
-    <div className="text-[11px] tracking-wide text-gray-500 uppercase dark:text-gray-400">
-      {label}
+  <div className="flex min-w-0 flex-col gap-1 rounded-2xl border border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-800">
+    <div className="text-xs text-gray-500 dark:text-gray-400">{label}</div>
+    <div className="text-lg font-semibold text-gray-900 tabular-nums dark:text-gray-50">
+      {value}
     </div>
-    <div className="text-lg font-semibold tabular-nums">{value}</div>
     {note && <div className="text-[11px] text-gray-500 dark:text-gray-400">{note}</div>}
   </div>
 );

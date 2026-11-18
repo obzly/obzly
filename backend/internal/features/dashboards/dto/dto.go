@@ -23,6 +23,19 @@ type UpdateDashboardRequestDTO struct {
 	Variables   []dashboards_models.Variable `json:"variables"`
 }
 
+// AppendPanelRequestDTO adds one panel to the bottom of a tab. TabID "" means
+// the first tab; the panel's ID is always assigned by the server.
+type AppendPanelRequestDTO struct {
+	TabID string                  `json:"tabId"`
+	Panel dashboards_models.Panel `json:"panel"`
+}
+
+type AppendPanelResponseDTO struct {
+	Dashboard *dashboards_models.Dashboard `json:"dashboard"`
+	TabID     string                       `json:"tabId"`
+	Panel     dashboards_models.Panel      `json:"panel"`
+}
+
 type SetPinnedRequestDTO struct {
 	Pinned bool `json:"pinned"`
 }

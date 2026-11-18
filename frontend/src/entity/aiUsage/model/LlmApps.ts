@@ -5,6 +5,8 @@ export interface LlmOverviewParams {
   to: string;
   groupBy: LlmGroupBy;
   bucketSeconds?: number;
+  /** 'previous' adds the summary of the equally long window before the range. */
+  compare?: 'previous';
 }
 
 export interface LlmSummary {
@@ -50,6 +52,8 @@ export interface LlmOverview {
   groupBy: LlmGroupBy;
   breakdown: LlmBreakdownRow[];
   latestCallAt: number;
+  /** The equally long window before the range (compare: 'previous' only). */
+  previous?: LlmSummary;
 }
 
 /** One call's metadata; message content is never returned. */

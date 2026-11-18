@@ -12,6 +12,8 @@ type AuditLog struct {
 	ProjectID *uuid.UUID `json:"projectId" gorm:"column:project_id"`
 	Message   string     `json:"message"   gorm:"column:message"`
 	CreatedAt time.Time  `json:"createdAt" gorm:"column:created_at"`
+	// OrgID: the organization the entry is about (SCIM provisioning).
+	OrgID *uuid.UUID `json:"orgId,omitempty" gorm:"column:org_id"`
 }
 
 func (AuditLog) TableName() string {

@@ -1,6 +1,7 @@
 package segments
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -12,14 +13,20 @@ import (
 	"obzly/internal/telemetry"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 )
 
 // Compactor holds the schema-agnostic mechanics of merging segment files and
 // deleting them. Which segments to merge or expire is per-stream policy
 // (e.g. logs/compactor.LogCompactor).
 type Compactor struct {
-	db       *sql.DB
+	db *sql.DB
+	// spillDir: a private handle's spill directory ("" when shared).
 	spillDir string
+	shared   bool
+	// gate admits one sorting statement, or several streaming ones, at a
+	// time on db (shared by every compactor on the shared handle).
+	gate *semaphore.Weighted
 }
 
 // CompactorOption adjusts a Compactor.
@@ -27,6 +34,7 @@ type CompactorOption func(*compactorOptions)
 
 type compactorOptions struct {
 	spillDir string
+	shared   bool
 }
 
 // compactorMemoryLimit bounds a merge: DuckDB defaults to 80% of RAM per
@@ -36,6 +44,32 @@ type compactorOptions struct {
 const (
 	compactorMemoryLimit = "1GB"
 	compactorThreads     = 1
+)
+
+// A sorting statement (an L1 merge, a legacy rewrite, an ordered rollup)
+// sorts in memory and may need the whole limit, so it holds every slot of
+// its handle's gate; a streaming one (a cold concatenation, a grouped
+// rollup, which spill) holds one. On the shared handle three cleanup loops
+// and the segment rewrite compact at once: their cold merges, the long
+// I/O-bound ones, still overlap, but two sorts never split the limit.
+const (
+	compactorGateSlots = 4
+	sortingWeight      = compactorGateSlots
+	streamingWeight    = 1
+)
+
+// compactorHandle and compactorGate back every WithSharedHandle compactor.
+var (
+	compactorHandle = &sharedHandle{
+		kind: "compactor", limit: compactorMemoryLimit, threads: compactorThreads,
+		setup: func(db *sql.DB) error {
+			if _, err := db.Exec("SET preserve_insertion_order = false"); err != nil {
+				return err
+			}
+			return RegisterNormalizationFunctions(db)
+		},
+	}
+	compactorGate = semaphore.NewWeighted(compactorGateSlots)
 )
 
 // placeSegmentFile moves a finished temp file to its segment name; a
@@ -48,10 +82,24 @@ func WithSpillDir(dir string) CompactorOption {
 	return func(o *compactorOptions) { o.spillDir = dir }
 }
 
+// WithSharedHandle merges on the process's one compactor database, capped at
+// compactorMemoryLimit for all streams together, instead of a database per
+// stream (4 GB on a worker).
+func WithSharedHandle() CompactorOption {
+	return func(o *compactorOptions) { o.shared = true }
+}
+
 func NewCompactor(opts ...CompactorOption) (*Compactor, error) {
 	cfg := compactorOptions{spillDir: filepath.Join(os.TempDir(), "obzly-compaction-spill")}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.shared {
+		db, err := compactorHandle.acquire(cfg.spillDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open the shared compaction duckdb handle: %w", err)
+		}
+		return &Compactor{db: db, shared: true, gate: compactorGate}, nil
 	}
 	// Each stream's compactor spills to its own directory (NewSpillDir).
 	spillDir, err := NewSpillDir(cfg.spillDir)
@@ -82,11 +130,14 @@ func NewCompactor(opts ...CompactorOption) (*Compactor, error) {
 		_ = os.RemoveAll(spillDir)
 		return nil, err
 	}
-	telemetry.RegisterDuckDB("compactor", db)
-	return &Compactor{db: db, spillDir: spillDir}, nil
+	telemetry.RegisterDuckDB("compactor", db, MemoryLimitBytes(compactorMemoryLimit))
+	return &Compactor{db: db, spillDir: spillDir, gate: semaphore.NewWeighted(compactorGateSlots)}, nil
 }
 
 func (c *Compactor) Close() error {
+	if c.shared {
+		return compactorHandle.release()
+	}
 	telemetry.UnregisterDuckDB(c.db)
 	err := c.db.Close()
 	_ = os.RemoveAll(c.spillDir)
@@ -165,8 +216,10 @@ func (c *Compactor) MergeSegmentsWhere(
 	}
 	fromExpr, args := ParquetFilesExpr(paths)
 	query := "SELECT * FROM " + fromExpr
-	if mergeSelect, ok := DeduplicatingMerges[stream]; ok {
-		query = fmt.Sprintf(mergeSelect, fromExpr)
+	_, deduplicates := DeduplicatingMerges[stream]
+	sorts := deduplicates || level < LevelCold
+	if deduplicates {
+		query = fmt.Sprintf(DeduplicatingMerges[stream], fromExpr)
 	} else if level < LevelCold {
 		sorted, err := sortedSelect(c.db, stream, fromExpr, args, !records[0].IsLegacy())
 		if err != nil {
@@ -178,7 +231,7 @@ func (c *Compactor) MergeSegmentsWhere(
 		query = "SELECT * FROM (" + query + ") WHERE " + where
 		args = append(append([]any{}, args...), whereArgs...)
 	}
-	if err := c.copyToSegment(query, args, outputPath); err != nil {
+	if err := c.copyToSegment(query, args, outputPath, sorts); err != nil {
 		return nil, fmt.Errorf("failed to merge segments: %w", err)
 	}
 
@@ -187,7 +240,7 @@ func (c *Compactor) MergeSegmentsWhere(
 		_ = os.Remove(outputPath)
 		return nil, fmt.Errorf("failed to stat merged segment: %w", err)
 	}
-	if _, ok := DeduplicatingMerges[stream]; ok || where != "" {
+	if deduplicates || where != "" {
 		if err := c.db.QueryRow("SELECT count(*) FROM read_parquet(?)", outputPath).Scan(&totalRows); err != nil {
 			_ = os.Remove(outputPath)
 			return nil, fmt.Errorf("failed to count merged segment rows: %w", err)
@@ -228,7 +281,7 @@ func (c *Compactor) RewriteLegacySegment(record *SegmentRecord, sourcePath, data
 	if err != nil {
 		return nil, err
 	}
-	if err := c.copyToSegment(query, args, outputPath); err != nil {
+	if err := c.copyToSegment(query, args, outputPath, true); err != nil {
 		return nil, fmt.Errorf("failed to rewrite segment: %w", err)
 	}
 
@@ -267,9 +320,9 @@ func (c *Compactor) DeleteSegmentFiles(records []*SegmentRecord) error {
 // leaves only a ".parquet.tmp" (swept by CleanupStaleTempFiles), never a
 // truncated file under a segment's name. A failed merge is retried
 // (MaxCompactionAttempts), so the temp file is removed on failure.
-func (c *Compactor) copyToSegment(query string, args []any, outputPath string) error {
+func (c *Compactor) copyToSegment(query string, args []any, outputPath string, sorts bool) error {
 	tempPath := outputPath + ".tmp"
-	if _, err := c.db.Exec(compactionCopySQL(query, tempPath), args...); err != nil {
+	if err := c.execGated(sorts, compactionCopySQL(query, tempPath), args...); err != nil {
 		_ = os.Remove(tempPath)
 		return err
 	}
@@ -278,4 +331,19 @@ func (c *Compactor) copyToSegment(query string, args []any, outputPath string) e
 		return fmt.Errorf("failed to finalize segment file: %w", err)
 	}
 	return nil
+}
+
+// execGated runs a statement that reads or writes whole segments once the
+// gate admits it (see sortingWeight).
+func (c *Compactor) execGated(sorts bool, statement string, args ...any) error {
+	weight := int64(streamingWeight)
+	if sorts {
+		weight = sortingWeight
+	}
+	if err := c.gate.Acquire(context.Background(), weight); err != nil {
+		return err
+	}
+	defer c.gate.Release(weight)
+	_, err := c.db.Exec(statement, args...)
+	return err
 }

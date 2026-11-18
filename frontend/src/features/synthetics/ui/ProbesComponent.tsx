@@ -22,6 +22,7 @@ import {
   syntheticsApi,
 } from '../../../entity/synthetics';
 import { copyToClipboard } from '../../../shared/lib';
+import { Card } from '../../../shared/ui/v2';
 import { IconAction, StatusDot } from './parts';
 
 interface Props {
@@ -115,19 +116,19 @@ export const ProbesComponent = ({ probes, canManage, onChanged }: Props) => {
   const snippet = created ? installSnippet(install, created.token) : '';
 
   return (
-    <div>
-      {canManage && (
-        <div className="mb-3 flex justify-end">
+    <Card>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <p className="m-0 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
+          A probe group is one location with one token. Run as many instances with that token as you
+          like: each monitor runs on one live instance, and moves to another within about a minute
+          if it stops.
+        </p>
+        {canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>
             Add probe group
           </Button>
-        </div>
-      )}
-      <p className="mt-0 mb-3 text-xs text-gray-500 dark:text-gray-400">
-        A probe group is one location with one token. Run as many instances with that token as you
-        like: each monitor runs on one live instance, and moves to another within about a minute if
-        it stops.
-      </p>
+        )}
+      </div>
       <Table<Probe>
         rowKey="id"
         size="middle"
@@ -321,7 +322,7 @@ export const ProbesComponent = ({ probes, canManage, onChanged }: Props) => {
             { value: 'helm', label: 'Kubernetes (Helm)' },
           ]}
         />
-        <pre className="m-0 overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs dark:bg-gray-900">
+        <pre className="m-0 overflow-x-auto rounded-xl bg-gray-50 p-3 font-mono text-xs dark:bg-gray-900">
           {snippet}
         </pre>
         <p className="mt-2 mb-0 text-xs text-gray-500 dark:text-gray-400">
@@ -338,7 +339,7 @@ export const ProbesComponent = ({ probes, canManage, onChanged }: Props) => {
           </Button>
         </div>
       </Modal>
-    </div>
+    </Card>
   );
 };
 

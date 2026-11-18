@@ -33,6 +33,10 @@ definitions:
         maxLength: 100
         minLength: 1
         type: string
+      write:
+        description: Write adds the mcp:write scope (MCP write tools). Needs a session
+          that passed MFA.
+        type: boolean
     required:
     - expiresInDays
     - name
@@ -327,6 +331,11 @@ definitions:
       latestCallAt:
         description: Newest call in the range, Unix ms (0 when there is none).
         type: integer
+      previous:
+        allOf:
+        - $ref: '#/definitions/aiusage.LLMSummaryDTO'
+        description: 'Previous: the summary of the equally long window before the
+          range (compare=previous only).'
       summary:
         $ref: '#/definitions/aiusage.LLMSummaryDTO'
       timeseries:
@@ -462,6 +471,11 @@ definitions:
         items:
           $ref: '#/definitions/aiusage.BreakdownRowDTO'
         type: array
+      previous:
+        allOf:
+        - $ref: '#/definitions/aiusage.UsageSummaryDTO'
+        description: 'Previous: the summary of the equally long window before the
+          range (compare=previous only).'
       summary:
         $ref: '#/definitions/aiusage.UsageSummaryDTO'
       timeseries:
@@ -614,6 +628,10 @@ definitions:
         type: string
       createdBy:
         type: string
+      description:
+        description: Description is the rule's runbook text, .Rule.Description in
+          templates.
+        type: string
       enabled:
         type: boolean
       forSeconds:
@@ -641,6 +659,9 @@ definitions:
         $ref: '#/definitions/alerting.RuleQuery'
       repeatSeconds:
         type: integer
+      severity:
+        description: Severity is critical, high, medium or low.
+        type: string
       source:
         type: string
       summary:
@@ -677,6 +698,17 @@ definitions:
       value:
         type: number
     type: object
+  alerting.AlertsSummary:
+    properties:
+      firing:
+        type: integer
+      pending:
+        type: integer
+      rules:
+        type: integer
+      silences:
+        type: integer
+    type: object
   alerting.ChannelConfig:
     properties:
       headers:
@@ -692,6 +724,55 @@ definitions:
       url:
         type: string
     type: object
+  alerting.ChannelTemplateRequest:
+    properties:
+      body:
+        type: string
+      subject:
+        type: string
+      useEmoji:
+        type: boolean
+      useOrgDefault:
+        type: boolean
+    type: object
+  alerting.IncidentNotificationRequest:
+    properties:
+      channelIds:
+        items:
+          type: string
+        type: array
+      minServices:
+        type: integer
+      minSignals:
+        type: integer
+      notifyEnd:
+        type: boolean
+      notifyOpen:
+        type: boolean
+      severity:
+        type: string
+    type: object
+  alerting.IncidentNotificationSettings:
+    properties:
+      channelIds:
+        items:
+          type: string
+        type: array
+      minServices:
+        type: integer
+      minSignals:
+        type: integer
+      notifyEnd:
+        type: boolean
+      notifyOpen:
+        type: boolean
+      projectId:
+        type: string
+      severity:
+        type: string
+      updatedAt:
+        type: string
+    type: object
   alerting.Labels:
     additionalProperties:
       type: string
@@ -704,6 +785,47 @@ definitions:
         type: boolean
       value:
         type: string
+    type: object
+  alerting.MessageTemplate:
+    properties:
+      body:
+        type: string
+      subject:
+        type: string
+    type: object
+  alerting.MessageTemplateView:
+    properties:
+      body:
+        type: string
+      defaultBody:
+        type: string
+      defaultSubject:
+        type: string
+      isDefault:
+        description: 'IsDefault: nothing stored, the built-in template applies.'
+        type: boolean
+      kind:
+        type: string
+      lastError:
+        description: |-
+          LastError is the last send-time render failure (the built-in template
+          was sent instead), on the deployment that sends.
+        type: string
+      lastErrorAt:
+        type: string
+      subject:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  alerting.MessageTemplatesView:
+    properties:
+      managed:
+        type: boolean
+      templates:
+        items:
+          $ref: '#/definitions/alerting.MessageTemplateView'
+        type: array
     type: object
   alerting.NotificationChannel:
     properties:
@@ -730,8 +852,27 @@ definitions:
           Target is a non-secret description of where it sends (a URL's host,
           a key's last characters, the recipients).
         type: string
+      templateBody:
+        type: string
+      templateError:
+        description: |-
+          TemplateError is the last render failure of its template at send time
+          (the built-in default was sent instead); cleared by the next success.
+        type: string
+      templateErrorAt:
+        type: string
+      templateOverride:
+        description: |-
+          TemplateOverride: its own template (TemplateSubject/TemplateBody)
+          instead of the organisation default for its kind.
+        type: boolean
+      templateSubject:
+        type: string
       updatedAt:
         type: string
+      useEmoji:
+        description: 'UseEmoji: .Emoji is empty in its messages when false.'
+        type: boolean
     type: object
   alerting.PreviewSeries:
     properties:
@@ -741,6 +882,41 @@ definitions:
         $ref: '#/definitions/alerting.Labels'
       value:
         type: number
+    type: object
+  alerting.RuleActivity:
+    properties:
+      fired:
+        items:
+          type: integer
+        type: array
+      firedTotal:
+        type: integer
+      notifications:
+        items:
+          type: integer
+        type: array
+      notificationsTotal:
+        type: integer
+      ruleId:
+        type: string
+    type: object
+  alerting.RuleActivityResponse:
+    properties:
+      days:
+        description: Days are the UTC days counted, oldest first; the last is today
+          so far.
+        items:
+          type: string
+        type: array
+      rules:
+        items:
+          $ref: '#/definitions/alerting.RuleActivity'
+        type: array
+      trackedSince:
+        description: |-
+          TrackedSince is when this Site started counting (day precision); earlier days are
+          unknown, as are days before a rule was created. Nil when it can't be told.
+        type: string
     type: object
   alerting.RuleQuery:
     properties:
@@ -788,6 +964,10 @@ definitions:
         type: array
       comparison:
         type: string
+      description:
+        description: Description is the rule's runbook text (.Rule.Description in
+          templates).
+        type: string
       enabled:
         type: boolean
       forSeconds:
@@ -802,6 +982,11 @@ definitions:
         $ref: '#/definitions/alerting.RuleQuery'
       repeatSeconds:
         type: integer
+      severity:
+        description: |-
+          Severity is critical, high, medium or low; empty takes it from the
+          severity label, else medium.
+        type: string
       source:
         type: string
       summary:
@@ -831,8 +1016,24 @@ definitions:
         type: string
       target:
         type: string
+      templateBody:
+        type: string
+      templateError:
+        description: |-
+          TemplateError is the last send-time render failure of its template
+          (on the deployment that sends: a Site or a standalone install).
+        type: string
+      templateErrorAt:
+        type: string
+      templateOverride:
+        type: boolean
+      templateSubject:
+        type: string
       updatedAt:
         type: string
+      useEmoji:
+        description: 'UseEmoji and the template override: see ChannelTemplateRequest.'
+        type: boolean
       usedBy:
         type: integer
     type: object
@@ -874,6 +1075,12 @@ definitions:
         items:
           $ref: '#/definitions/alerting.Matcher'
         type: array
+      mcpClient:
+        description: |-
+          MCPClient names the AI assistant (OAuth app or access token) that
+          created it through MCP; empty when created in the UI. A label only:
+          CreatedBy and the audit log say who made it.
+        type: string
       projectId:
         type: string
       startsAt:
@@ -889,8 +1096,80 @@ definitions:
         items:
           $ref: '#/definitions/alerting.Matcher'
         type: array
+      mcpClient:
+        type: string
       startsAt:
         type: string
+    type: object
+  alerting.TemplateError:
+    properties:
+      field:
+        type: string
+      line:
+        type: integer
+      message:
+        type: string
+    type: object
+  alerting.TemplatePreviewRequest:
+    properties:
+      body:
+        type: string
+      kind:
+        type: string
+      subject:
+        type: string
+      useEmoji:
+        description: UseEmoji defaults to on.
+        type: boolean
+    type: object
+  alerting.TemplatePreviewResponse:
+    properties:
+      errors:
+        items:
+          $ref: '#/definitions/alerting.TemplateError'
+        type: array
+      samples:
+        items:
+          $ref: '#/definitions/alerting.TemplatePreviewSample'
+        type: array
+    type: object
+  alerting.TemplatePreviewSample:
+    properties:
+      body:
+        description: Body is a webhook's JSON, indented.
+        type: string
+      color:
+        type: string
+      emoji:
+        type: string
+      error:
+        type: string
+      key:
+        type: string
+      label:
+        type: string
+      severity:
+        type: string
+      status:
+        type: string
+      subject:
+        type: string
+      text:
+        type: string
+    type: object
+  alerting.TemplateTestRequest:
+    properties:
+      body:
+        type: string
+      channelId:
+        type: string
+      kind:
+        type: string
+      subject:
+        type: string
+      useEmoji:
+        description: UseEmoji defaults to on.
+        type: boolean
     type: object
   api_keys.ApiKey:
     properties:
@@ -1276,6 +1555,11 @@ definitions:
         type: number
       lastMonth:
         type: number
+      lastMonthFinal:
+        description: |-
+          LastMonthFinal: no day of last month is estimated any more and every source that
+          delivered it has finalised it, so it won't change.
+        type: boolean
       lastMonthSameDays:
         type: number
       monthToDate:
@@ -1755,6 +2039,17 @@ definitions:
       timestamp:
         type: string
     type: object
+  correlation_core.ServiceImpactDTO:
+    properties:
+      errorLogs:
+        type: integer
+      errorSpans:
+        type: integer
+      serviceName:
+        type: string
+      total:
+        type: integer
+    type: object
   correlation_core.SessionDetailDTO:
     properties:
       session:
@@ -1763,6 +2058,19 @@ definitions:
         items:
           $ref: '#/definitions/correlation_core.SignalDetailDTO'
         type: array
+    type: object
+  correlation_core.SessionImpactDTO:
+    properties:
+      services:
+        items:
+          $ref: '#/definitions/correlation_core.ServiceImpactDTO'
+        type: array
+      sessionId:
+        type: string
+      windowEnd:
+        type: string
+      windowStart:
+        type: string
     type: object
   correlation_core.SessionSummaryDTO:
     properties:
@@ -1819,6 +2127,22 @@ definitions:
       statusCode:
         type: string
       traceId:
+        type: string
+    type: object
+  dashboards_dto.AppendPanelRequestDTO:
+    properties:
+      panel:
+        $ref: '#/definitions/dashboards_models.Panel'
+      tabId:
+        type: string
+    type: object
+  dashboards_dto.AppendPanelResponseDTO:
+    properties:
+      dashboard:
+        $ref: '#/definitions/dashboards_models.Dashboard'
+      panel:
+        $ref: '#/definitions/dashboards_models.Panel'
+      tabId:
         type: string
     type: object
   dashboards_dto.CreateDashboardRequestDTO:
@@ -2038,17 +2362,32 @@ definitions:
         type: integer
       gridPos:
         $ref: '#/definitions/dashboards_models.GridPos'
+      groupBands:
+        type: string
       groupField:
         description: |-
           GroupField is any log field for a logs panel, a spans_core.GroupField
           for a spans panel.
         type: string
+      higherIs:
+        $ref: '#/definitions/dashboards_models.PanelHigherIs'
       id:
         type: string
       limit:
         type: integer
+      max:
+        type: number
+      measure:
+        $ref: '#/definitions/logs_core.AggregationMeasure'
+      measureField:
+        type: string
       metric:
         type: string
+      min:
+        description: |-
+          Display settings of the v2 kinds; like Unit they never affect the
+          query. Min/Max bound a gauge's arc.
+        type: number
       operationName:
         type: string
       promQuery:
@@ -2059,7 +2398,10 @@ definitions:
       query:
         allOf:
         - $ref: '#/definitions/logs_core.QueryNode'
-        description: Logs-source only.
+        description: |-
+          Logs-source only. Measure ("" counts lines) reads MeasureField;
+          TopGroups keeps a time series' N largest groups; GroupBands groups a
+          numeric GroupField into log bands (previews only, never saved).
       rootSpansOnly:
         type: boolean
       serviceName:
@@ -2069,13 +2411,27 @@ definitions:
         type: string
       source:
         $ref: '#/definitions/dashboards_models.PanelSource'
+      thresholds:
+        $ref: '#/definitions/dashboards_models.PanelThresholds'
       title:
         type: string
+      topGroups:
+        type: integer
       type:
         $ref: '#/definitions/dashboards_models.PanelType'
       unit:
         $ref: '#/definitions/dashboards_models.PanelUnit'
     type: object
+  dashboards_models.PanelHigherIs:
+    enum:
+    - ""
+    - good
+    - bad
+    type: string
+    x-enum-varnames:
+    - PanelHigherIsUnset
+    - PanelHigherIsGood
+    - PanelHigherIsBad
   dashboards_models.PanelSource:
     enum:
     - logs
@@ -2086,6 +2442,13 @@ definitions:
     - PanelSourceLogs
     - PanelSourceSpans
     - PanelSourceMetrics
+  dashboards_models.PanelThresholds:
+    properties:
+      critical:
+        type: number
+      warn:
+        type: number
+    type: object
   dashboards_models.PanelType:
     enum:
     - line
@@ -2093,6 +2456,12 @@ definitions:
     - pie
     - stat
     - table
+    - statTrend
+    - rankedList
+    - donut
+    - gauge
+    - stackedBar
+    - statusStrip
     type: string
     x-enum-varnames:
     - PanelTypeLine
@@ -2100,6 +2469,12 @@ definitions:
     - PanelTypePie
     - PanelTypeStat
     - PanelTypeTable
+    - PanelTypeStatTrend
+    - PanelTypeRankedList
+    - PanelTypeDonut
+    - PanelTypeGauge
+    - PanelTypeStackedBar
+    - PanelTypeStatusStrip
   dashboards_models.PanelUnit:
     enum:
     - ""
@@ -2180,6 +2555,95 @@ definitions:
     x-enum-varnames:
     - PlatformLinux
     - PlatformWindows
+  ingestion.IngestionStatusDTO:
+    properties:
+      generatedAt:
+        type: string
+      quietAfterMinutes:
+        description: 'QuietAfterMinutes: a signal with nothing for this long is quiet.'
+        type: integer
+      rateWindowMinutes:
+        description: 'RateWindowMinutes: PerMinute averages over this window.'
+        type: integer
+      sources:
+        items:
+          $ref: '#/definitions/ingestion.SourceStatusDTO'
+        type: array
+      stoppedAfterHours:
+        description: 'StoppedAfterHours: a signal with nothing for this long is stopped.'
+        type: integer
+      truncated:
+        description: 'Truncated: more sources than the response holds; the quietest
+          are left out.'
+        type: boolean
+    type: object
+  ingestion.SignalStatusDTO:
+    properties:
+      firstSeen:
+        type: string
+      health:
+        type: string
+      lastSeen:
+        type: string
+      perMinute:
+        description: 'PerMinute: RecentCount per minute over the window, or since
+          first seen when later.'
+        type: number
+      recentCount:
+        description: 'RecentCount: records (logs, spans, metric data points) accepted
+          in the rate window.'
+        type: integer
+      signal:
+        description: 'Signal: logs, traces or metrics.'
+        type: string
+    type: object
+  ingestion.SourceLocationDTO:
+    properties:
+      cluster:
+        type: string
+      host:
+        type: string
+      namespace:
+        type: string
+      sdkLanguage:
+        type: string
+      serviceName:
+        type: string
+      serviceNamespace:
+        type: string
+      workload:
+        type: string
+      workloadKind:
+        type: string
+    type: object
+  ingestion.SourceStatusDTO:
+    properties:
+      dataSource:
+        description: 'DataSource: the Data Sources catalog id it most likely is, ""
+          when unknown.'
+        type: string
+      firstSeen:
+        type: string
+      health:
+        type: string
+      id:
+        description: ID is stable for the same source.
+        type: string
+      identifiedBy:
+        description: 'IdentifiedBy: obzly_source, k8s_workload, service, k8s_cluster,
+          host or unidentified.'
+        type: string
+      lastSeen:
+        type: string
+      location:
+        $ref: '#/definitions/ingestion.SourceLocationDTO'
+      name:
+        type: string
+      signals:
+        items:
+          $ref: '#/definitions/ingestion.SignalStatusDTO'
+        type: array
+    type: object
   inventory.AssetDTO:
     properties:
       attributes:
@@ -2326,6 +2790,34 @@ definitions:
       to:
         type: string
     type: object
+  inventory.HistoryDTO:
+    properties:
+      hours:
+        description: Hours with counts over the last 7 days, oldest first.
+        items:
+          type: string
+        type: array
+      kinds:
+        additionalProperties:
+          items:
+            format: int64
+            type: integer
+          type: array
+        description: 'Kinds: each kind''s assets (every health) at each of Hours.'
+        type: object
+      previous:
+        additionalProperties:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        type: object
+      previousAt:
+        description: |-
+          PreviousAt is the newest hour at least 24 h old (absent when none is from the 2 hours
+          before that); Previous counts its assets by kind, then health.
+        type: string
+    type: object
   inventory.Metrics:
     properties:
       available:
@@ -2376,6 +2868,10 @@ definitions:
           format: int64
           type: integer
         type: object
+      history:
+        allOf:
+        - $ref: '#/definitions/inventory.HistoryDTO'
+        description: 'History: only with history=true.'
       kinds:
         additionalProperties:
           additionalProperties:
@@ -2396,6 +2892,28 @@ definitions:
       total:
         type: integer
     type: object
+  logs_core.AggregationMeasure:
+    enum:
+    - count
+    - distinct
+    - sum
+    - avg
+    - min
+    - max
+    - p50
+    - p95
+    - p99
+    type: string
+    x-enum-varnames:
+    - AggregationMeasureCount
+    - AggregationMeasureDistinct
+    - AggregationMeasureSum
+    - AggregationMeasureAvg
+    - AggregationMeasureMin
+    - AggregationMeasureMax
+    - AggregationMeasureP50
+    - AggregationMeasureP95
+    - AggregationMeasureP99
   logs_core.ConditionNode:
     properties:
       field:
@@ -2468,6 +2986,48 @@ definitions:
     required:
     - sql
     type: object
+  logs_core.ExplainFieldDTO:
+    properties:
+      baseline:
+        type: integer
+      baselineShare:
+        type: number
+      current:
+        type: integer
+      currentShare:
+        type: number
+      field:
+        type: string
+      value:
+        type: string
+    type: object
+  logs_core.ExplainRequestDTO:
+    properties:
+      baseline:
+        $ref: '#/definitions/logs_core.TimeRangeDTO'
+      current:
+        $ref: '#/definitions/logs_core.TimeRangeDTO'
+      minCount:
+        description: 'MinCount: fewest lines in Current for a value to be listed;
+          0 means 20.'
+        type: integer
+      query:
+        $ref: '#/definitions/logs_core.QueryNode'
+    type: object
+  logs_core.ExplainResponseDTO:
+    properties:
+      baselineTotal:
+        type: integer
+      currentTotal:
+        type: integer
+      fields:
+        description: 'Fields: values whose share grew most, largest gain first.'
+        items:
+          $ref: '#/definitions/logs_core.ExplainFieldDTO'
+        type: array
+      partial:
+        type: boolean
+    type: object
   logs_core.FieldValueDTO:
     properties:
       count:
@@ -2537,6 +3097,55 @@ definitions:
         items:
           $ref: '#/definitions/logs_core.QueryableField'
         type: array
+    type: object
+  logs_core.HealthGroupDTO:
+    properties:
+      name:
+        type: string
+      tiles:
+        items:
+          $ref: '#/definitions/logs_core.HealthTileDTO'
+        type: array
+      total:
+        type: integer
+    type: object
+  logs_core.HealthMapRequestDTO:
+    properties:
+      groupBy:
+        description: 'GroupBy: k8s (namespace and workload), host (host and service)
+          or service.'
+        type: string
+      query:
+        $ref: '#/definitions/logs_core.QueryNode'
+      timeRange:
+        $ref: '#/definitions/logs_core.TimeRangeDTO'
+    type: object
+  logs_core.HealthMapResponseDTO:
+    properties:
+      groupBy:
+        type: string
+      groups:
+        items:
+          $ref: '#/definitions/logs_core.HealthGroupDTO'
+        type: array
+      hiddenTiles:
+        description: 'HiddenTiles: smaller tiles left out to keep the map readable.'
+        type: integer
+      partial:
+        type: boolean
+    type: object
+  logs_core.HealthTileDTO:
+    properties:
+      errors:
+        type: integer
+      name:
+        type: string
+      previous:
+        type: integer
+      total:
+        type: integer
+      warnings:
+        type: integer
     type: object
   logs_core.LogContextAnchorDTO:
     properties:
@@ -2757,6 +3366,11 @@ definitions:
     properties:
       newestLogTime:
         type: string
+      objectStorageSizeMb:
+        description: |-
+          ObjectStorageSizeMB: the part of TotalSizeMB already in object storage
+          (0 without object storage); the rest is fresh segments on local disk.
+        type: number
       oldestLogTime:
         type: string
       rawSizeMb:
@@ -2769,6 +3383,24 @@ definitions:
       totalSizeMb:
         description: TotalSizeMB is the compressed on-disk Parquet size.
         type: number
+    type: object
+  logs_core.NoisyPatternDTO:
+    properties:
+      count:
+        type: integer
+      hash:
+        type: string
+      level:
+        type: string
+      pattern:
+        type: string
+      perDay:
+        description: 'PerDay: Count over the days of the 7 that had logs.'
+        type: number
+      sample:
+        type: string
+      service:
+        type: string
     type: object
   logs_core.PatternChangeDTO:
     properties:
@@ -2793,6 +3425,13 @@ definitions:
     properties:
       baseline:
         $ref: '#/definitions/logs_core.TimeRangeDTO'
+      countOnly:
+        description: |-
+          CountOnly: only NewCount, SpikeCount and DropCount, for the Anomalies button. Answered
+          only when the query filters on per-minute count dimensions (level, service, namespace,
+          container, pod, pattern), so it reads logs_1m rather than raw logs; otherwise Counted
+          is false. The ranges are cut to whole minutes and the answer is cached briefly.
+        type: boolean
       current:
         $ref: '#/definitions/logs_core.TimeRangeDTO'
       limit:
@@ -2817,7 +3456,99 @@ definitions:
         items:
           $ref: '#/definitions/logs_core.PatternChangeDTO'
         type: array
+      counted:
+        description: Counted is false when a CountOnly request wasn't answered (its
+          query needs raw logs).
+        type: boolean
       currentTotal:
+        type: integer
+      dropCount:
+        type: integer
+      newCount:
+        description: 'NewCount, SpikeCount, DropCount: how many patterns changed each
+          way, before Limit.'
+        type: integer
+      spikeCount:
+        type: integer
+    type: object
+  logs_core.PatternTrendDTO:
+    properties:
+      change:
+        type: string
+      count:
+        type: integer
+      hash:
+        type: string
+      level:
+        description: 'Level: the level most of its lines have.'
+        type: string
+      pattern:
+        type: string
+      previousWeek:
+        description: 'PreviousWeek: lines in the 7 days before the range.'
+        type: integer
+      sample:
+        type: string
+      series:
+        description: 'Series: lines per bucket, one per PatternTrendsResponseDTO.Buckets.'
+        items:
+          type: integer
+        type: array
+      services:
+        description: 'Services: the services logging it, most lines first (at most
+          5).'
+        items:
+          type: string
+        type: array
+      yesterday:
+        description: 'Yesterday: lines in the same window 24 h earlier.'
+        type: integer
+    type: object
+  logs_core.PatternTrendsRequestDTO:
+    properties:
+      bucketMs:
+        description: 'BucketMs: whole minutes; 0 picks one giving at most 60 buckets.'
+        type: integer
+      limit:
+        description: 'Limit: the biggest patterns listed (changed ones are listed
+          too); 0 means 30, at most 50.'
+        type: integer
+      query:
+        $ref: '#/definitions/logs_core.QueryNode'
+      timeRange:
+        $ref: '#/definitions/logs_core.TimeRangeDTO'
+    type: object
+  logs_core.PatternTrendsResponseDTO:
+    properties:
+      bucketMs:
+        type: integer
+      buckets:
+        items:
+          type: string
+        type: array
+      distinct:
+        type: integer
+      dropCount:
+        type: integer
+      newCount:
+        type: integer
+      other:
+        description: 'Other: lines per bucket of the patterns not listed.'
+        items:
+          type: integer
+        type: array
+      partial:
+        description: 'Partial: more patterns than one query counts; the smallest are
+          left out.'
+        type: boolean
+      patterns:
+        items:
+          $ref: '#/definitions/logs_core.PatternTrendDTO'
+        type: array
+      spikeCount:
+        type: integer
+      total:
+        description: 'Total: lines in the range; Distinct: patterns among them.'
         type: integer
     type: object
   logs_core.PatternsRequestDTO:
@@ -2977,6 +3708,69 @@ definitions:
       to:
         type: string
     type: object
+  logs_core.VolumeCountDTO:
+    properties:
+      count:
+        type: integer
+      name:
+        type: string
+    type: object
+  logs_core.VolumeRequestDTO:
+    properties:
+      days:
+        description: 'Days: 0 means 14, at most 31.'
+        type: integer
+    type: object
+  logs_core.VolumeResponseDTO:
+    properties:
+      bytesPerLine:
+        description: |-
+          BytesPerLine / RawBytesPerLine: the project's stored (compressed) and
+          ingested bytes per line; 0 when it has no logs.
+        type: number
+      days:
+        items:
+          type: string
+        type: array
+      levels:
+        description: 'Levels: lines per level over the last 7 days.'
+        items:
+          $ref: '#/definitions/logs_core.VolumeCountDTO'
+        type: array
+      noisy:
+        items:
+          $ref: '#/definitions/logs_core.NoisyPatternDTO'
+        type: array
+      partial:
+        type: boolean
+      rawBytesPerLine:
+        type: number
+      services:
+        items:
+          $ref: '#/definitions/logs_core.VolumeSeriesDTO'
+        type: array
+      storedBytes:
+        type: integer
+      today:
+        description: 'Today: lines since 00:00 UTC; YesterdaySoFar: lines yesterday
+          up to the same time.'
+        type: integer
+      yesterdaySoFar:
+        type: integer
+    type: object
+  logs_core.VolumeSeriesDTO:
+    properties:
+      counts:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+      other:
+        type: boolean
+      total:
+        type: integer
+    type: object
   logs_livetail.TailRequestDTO:
     properties:
       query:
@@ -3126,6 +3920,11 @@ definitions:
     properties:
       newestSampleTime:
         type: string
+      objectStorageSizeMb:
+        description: |-
+          ObjectStorageSizeMB: the part of TotalSizeMB already in object storage
+          (0 without object storage); the rest is fresh segments on local disk.
+        type: number
       oldestSampleTime:
         type: string
       rawSizeMb:
@@ -3293,6 +4092,39 @@ definitions:
         type: string
       verifiedIdentity:
         type: boolean
+      writeNeedsMfa:
+        description: |-
+          WriteNeedsMFA: write was requested but the signed-in session hasn't
+          passed MFA, so it can't be granted (set by the controller).
+        type: boolean
+      writeRequested:
+        description: |-
+          WriteRequested: the client asked for mcp:write. It is granted only when
+          the user also ticks the consent page's write toggle.
+        type: boolean
+    type: object
+  oauth.DecisionRequest:
+    properties:
+      allowWrite:
+        type: boolean
+      approve:
+        type: boolean
+      client_id:
+        type: string
+      code_challenge:
+        type: string
+      code_challenge_method:
+        type: string
+      redirect_uri:
+        type: string
+      resource:
+        type: string
+      response_type:
+        type: string
+      scope:
+        type: string
+      state:
+        type: string
     type: object
   oauth.RegisterRequest:
     properties:
@@ -3411,6 +4243,11 @@ definitions:
         type: string
       suspended:
         type: boolean
+      teams:
+        description: 'Teams: names of the organization''s teams the member is in.'
+        items:
+          type: string
+        type: array
       userId:
         type: string
     type: object
@@ -3494,6 +4331,15 @@ definitions:
       scimType:
         type: string
       status:
+        type: string
+    type: object
+  organizations.SCIMEvent:
+    properties:
+      createdAt:
+        type: string
+      id:
+        type: string
+      message:
         type: string
     type: object
   organizations.SCIMGroup:
@@ -4113,6 +4959,11 @@ definitions:
         type: integer
       percent:
         type: number
+      reason:
+        description: |-
+          Reason explains Sources from the scopes' latest reads, e.g. "Security Hub in every scanned
+          region" (Summary only).
+        type: string
       sources:
         items:
           type: string
@@ -4305,6 +5156,13 @@ definitions:
   projects_models.LogSampleRule:
     properties:
       level:
+        type: string
+      pattern:
+        description: |-
+          Pattern: a message pattern's pattern_hash; PatternText its template,
+          only shown in settings.
+        type: string
+      patternText:
         type: string
       rate:
         type: number
@@ -4502,6 +5360,14 @@ definitions:
     properties:
       deployment:
         type: string
+      errorRate:
+        type: number
+      errors:
+        type: integer
+      health:
+        description: Health is ok, degraded or failing (see healthOf); omitted with
+          no requests.
+        type: string
       name:
         type: string
       namespace:
@@ -4509,10 +5375,23 @@ definitions:
         type: string
       node:
         type: string
+      p95LatencyMs:
+        type: number
+      requests:
+        description: |-
+          RED over the window: a service's entry spans, or the client spans
+          calling an untraced peer. Omitted for network-only nodes. P95LatencyMs
+          and ErrorRate are omitted with no requests (and P95 on "other").
+        type: integer
       sources:
         items:
           type: string
         type: array
+      type:
+        description: |-
+          Type is service, database, cache, messaging or external; omitted when
+          unknown (a network-only node, or the "other" bucket).
+        type: string
     type: object
   servicemap.ServiceMapResponseDTO:
     properties:
@@ -4524,6 +5403,10 @@ definitions:
         items:
           $ref: '#/definitions/servicemap.ServiceMapNodeDTO'
         type: array
+      windowSeconds:
+        description: WindowSeconds is the window after clamping, to turn counts into
+          rates.
+        type: number
     type: object
   sharedconfig.AcceptKeyRequest:
     properties:
@@ -4763,6 +5646,11 @@ definitions:
     properties:
       newestSpanTime:
         type: string
+      objectStorageSizeMb:
+        description: |-
+          ObjectStorageSizeMB: the part of TotalSizeMB already in object storage
+          (0 without object storage); the rest is fresh segments on local disk.
+        type: number
       oldestSpanTime:
         type: string
       rawSizeMb:
@@ -6365,6 +7253,23 @@ definitions:
       stream:
         type: string
     type: object
+  system_upgradestatus.LatestReleaseDTO:
+    properties:
+      checkedAt:
+        type: string
+      error:
+        description: Error says why the check failed (unknown only).
+        type: string
+      publishedAt:
+        type: string
+      status:
+        type: string
+      url:
+        type: string
+      version:
+        description: Version without the leading v, e.g. "1.2.0".
+        type: string
+    type: object
   system_upgradestatus.Response:
     properties:
       checkedAt:
@@ -6491,6 +7396,9 @@ definitions:
         items:
           $ref: '#/definitions/system_usage.Hour'
         type: array
+      projects:
+        description: Projects is how many projects the Site has (Organizations → Sites).
+        type: integer
       storage:
         items:
           $ref: '#/definitions/system_usage.Storage'
@@ -6507,6 +7415,228 @@ definitions:
         type: integer
       signal:
         type: string
+    type: object
+  traces_querying.ServiceErrorsDTO:
+    properties:
+      errors:
+        type: integer
+      previousErrors:
+        type: integer
+      previousRequests:
+        type: integer
+      requests:
+        type: integer
+      serviceName:
+        type: string
+    type: object
+  traces_querying.ServiceErrorsRequestDTO:
+    properties:
+      limit:
+        description: Limit is how many services to return (default 10, at most 50).
+        type: integer
+      timeRange:
+        $ref: '#/definitions/spans_core.TimeRangeDTO'
+    type: object
+  traces_querying.ServiceErrorsResponseDTO:
+    properties:
+      clamped:
+        type: boolean
+      from:
+        type: string
+      previousFrom:
+        type: string
+      services:
+        items:
+          $ref: '#/definitions/traces_querying.ServiceErrorsDTO'
+        type: array
+      to:
+        type: string
+    type: object
+  traces_querying.TraceSummaryRequestDTO:
+    properties:
+      countOnly:
+        description: |-
+          CountOnly returns only the matching-traces count (the summary tiles
+          are hidden), skipping the tiles query.
+        type: boolean
+      errorsOnly:
+        type: boolean
+      maxDurationMs:
+        type: number
+      minDurationMs:
+        type: number
+      operationName:
+        type: string
+      serviceName:
+        type: string
+      timeRange:
+        $ref: '#/definitions/spans_core.TimeRangeDTO'
+    type: object
+  traces_querying.TraceSummaryResponseDTO:
+    properties:
+      countTrend:
+        items:
+          type: number
+        type: array
+      current:
+        $ref: '#/definitions/traces_querying.TraceSummaryTotalsDTO'
+      errorRateTrend:
+        items:
+          type: number
+        type: array
+      matchingTraces:
+        description: |-
+          MatchingTraces counts traces whose root span starts in the range and
+          that match the filters; past MatchingTracesCap it stops counting, says
+          MatchingTracesCapped and holds the cap.
+        type: integer
+      matchingTracesCap:
+        type: integer
+      matchingTracesCapped:
+        type: boolean
+      p50Trend:
+        items:
+          type: number
+        type: array
+      p95Trend:
+        items:
+          type: number
+        type: array
+      previous:
+        $ref: '#/definitions/traces_querying.TraceSummaryTotalsDTO'
+      rootSpansOnly:
+        type: boolean
+      stepMs:
+        type: integer
+      windowMinutes:
+        type: number
+    type: object
+  traces_querying.TraceSummaryTotalsDTO:
+    properties:
+      count:
+        type: integer
+      errors:
+        type: integer
+      p50Ms:
+        type: number
+      p95Ms:
+        type: number
+    type: object
+  useraccess.LocalProjectRole:
+    properties:
+      org:
+        type: string
+      projectId:
+        type: string
+      projectName:
+        type: string
+      role:
+        type: string
+      team:
+        type: string
+      via:
+        type: string
+    type: object
+  useraccess.OrgMembership:
+    properties:
+      name:
+        type: string
+      orgId:
+        type: string
+      role:
+        type: string
+      suspended:
+        type: boolean
+      teams:
+        items:
+          type: string
+        type: array
+    type: object
+  useraccess.OrgRef:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  useraccess.SignInMethod:
+    properties:
+      kind:
+        type: string
+      name:
+        type: string
+    type: object
+  useraccess.SiteAccess:
+    properties:
+      org:
+        type: string
+      projectId:
+        type: string
+      role:
+        type: string
+      siteId:
+        type: string
+      siteName:
+        type: string
+      team:
+        type: string
+      via:
+        type: string
+    type: object
+  useraccess.UserDetail:
+    properties:
+      createdAt:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      isActive:
+        type: boolean
+      isRootAdmin:
+        type: boolean
+      lastActiveAt:
+        type: string
+      lastLoginAt:
+        type: string
+      mfaEnabled:
+        type: boolean
+      mfaRequired:
+        type: boolean
+      name:
+        type: string
+      organizations:
+        items:
+          $ref: '#/definitions/useraccess.OrgMembership'
+        type: array
+      projectRoles:
+        items:
+          $ref: '#/definitions/useraccess.LocalProjectRole'
+        type: array
+      projectRolesOnSites:
+        description: |-
+          ProjectRolesOnSites: on a control plane, roles given on a Site itself
+          (its project settings) aren't known here; SiteAccess is what the
+          control plane grants.
+        type: boolean
+      provisionedBy:
+        allOf:
+        - $ref: '#/definitions/useraccess.OrgRef'
+        description: ProvisionedBy is the organization whose SCIM created the account.
+      role:
+        $ref: '#/definitions/users_enums.UserRole'
+      signInMethods:
+        description: SignInMethods are the ways the account can sign in (not which
+          it used last).
+        items:
+          $ref: '#/definitions/useraccess.SignInMethod'
+        type: array
+      siteAccess:
+        items:
+          $ref: '#/definitions/useraccess.SiteAccess'
+        type: array
+      status:
+        $ref: '#/definitions/users_enums.UserStatus'
     type: object
   users_dto.ChangePasswordRequestDTO:
     properties:
@@ -6730,6 +7860,13 @@ definitions:
       warningText:
         type: string
     type: object
+  users_dto.UpdateUIPreferencesRequestDTO:
+    properties:
+      theme:
+        $ref: '#/definitions/users_models.ThemePreferences'
+    required:
+    - theme
+    type: object
   users_dto.UpdateUserInfoRequestDTO:
     properties:
       currentPassword:
@@ -6745,6 +7882,25 @@ definitions:
         type: string
       name:
         type: string
+    type: object
+  users_dto.UpdateUsersSettingsRequestDTO:
+    properties:
+      defaultDarkTheme:
+        type: string
+      defaultLightTheme:
+        type: string
+      defaultThemeMode:
+        type: string
+      isAllowExternalRegistrations:
+        type: boolean
+      isAllowMemberInvitations:
+        type: boolean
+      isMemberAllowedToCreateProjects:
+        type: boolean
+      isMfaRequiredForEveryone:
+        type: boolean
+      isUserThemeChoiceAllowed:
+        type: boolean
     type: object
   users_dto.UserProfileResponseDTO:
     properties:
@@ -6773,6 +7929,39 @@ definitions:
         type: string
       role:
         $ref: '#/definitions/users_enums.UserRole'
+      uiPreferences:
+        allOf:
+        - $ref: '#/definitions/users_models.UIPreferences'
+        description: UIPreferences is omitted until the user saves one (the theme
+          menu does).
+    type: object
+  users_dto.UsersSummaryResponseDTO:
+    properties:
+      activeAccounts:
+        description: 'Accounts by status: ACTIVE, INVITED (sign-up pending), INACTIVE
+          (deactivated).'
+        type: integer
+      activeLast7Days:
+        description: 'ActiveLast7Days: active accounts with a sign-in or request in
+          the last 7 days.'
+        type: integer
+      admins:
+        type: integer
+      adminsWithoutMfa:
+        type: integer
+      deactivated:
+        type: integer
+      inactive:
+        description: Inactive matches the activity=inactive filter.
+        type: integer
+      invited:
+        type: integer
+      mfaEnabled:
+        description: MFAEnabled counts active accounts with an authenticator, out
+          of ActiveAccounts.
+        type: integer
+      total:
+        type: integer
     type: object
   users_enums.ProjectRole:
     enum:
@@ -6802,6 +7991,32 @@ definitions:
     x-enum-varnames:
     - UserRoleAdmin
     - UserRoleMember
+  users_enums.UserStatus:
+    enum:
+    - INVITED
+    - ACTIVE
+    - INACTIVE
+    type: string
+    x-enum-varnames:
+    - UserStatusInvited
+    - UserStatusActive
+    - UserStatusInactive
+  users_models.ThemePreferences:
+    properties:
+      colorBlindCharts:
+        type: boolean
+      dark:
+        type: string
+      light:
+        type: string
+      mode:
+        type: string
+    type: object
+  users_models.UIPreferences:
+    properties:
+      theme:
+        $ref: '#/definitions/users_models.ThemePreferences'
+    type: object
   users_models.UserPlan:
     properties:
       allowedProjectsCount:
@@ -6832,6 +8047,14 @@ definitions:
     type: object
   users_models.UsersSettings:
     properties:
+      defaultDarkTheme:
+        type: string
+      defaultLightTheme:
+        type: string
+      defaultThemeMode:
+        description: Theme defaults for users who never picked one (light, dark or
+          system).
+        type: string
       id:
         type: string
       isAllowExternalRegistrations:
@@ -6846,6 +8069,386 @@ definitions:
       isMfaRequiredForEveryone:
         description: every user, not only admins, must set up MFA at their next sign-in
         type: boolean
+      isUserThemeChoiceAllowed:
+        description: 'Off: everyone sees the default themes; users still pick light/dark/system
+          mode.'
+        type: boolean
+    type: object
+  webanalytics.AttributeDTO:
+    properties:
+      name:
+        type: string
+      value:
+        type: string
+    type: object
+  webanalytics.BucketDTO:
+    properties:
+      bytes:
+        type: integer
+      live:
+        type: boolean
+      other:
+        type: integer
+      requests:
+        type: integer
+      start:
+        type: string
+      status2xx:
+        type: integer
+      status3xx:
+        type: integer
+      status4xx:
+        type: integer
+      status5xx:
+        type: integer
+      visitors:
+        type: integer
+    type: object
+  webanalytics.BuildDTO:
+    properties:
+      builtAt:
+        type: string
+      durationMs:
+        type: integer
+      hour:
+        type: string
+      rowsRead:
+        type: integer
+    type: object
+  webanalytics.GeoDTO:
+    properties:
+      attribution:
+        type: string
+      available:
+        type: boolean
+      databaseType:
+        type: string
+      enabled:
+        type: boolean
+      error:
+        type: string
+    type: object
+  webanalytics.HostDTO:
+    properties:
+      host:
+        type: string
+      requests:
+        type: integer
+    type: object
+  webanalytics.HourCountDTO:
+    properties:
+      hour:
+        type: string
+      requests:
+        type: integer
+    type: object
+  webanalytics.LiveInfoDTO:
+    properties:
+      cached:
+        type: boolean
+      durationMs:
+        type: integer
+      from:
+        type: string
+      rows:
+        type: integer
+      to:
+        type: string
+    type: object
+  webanalytics.PanelsDTO:
+    properties:
+      browsers:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      countries:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      devices:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      ips:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      methods:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      notFound:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      pages:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      protocols:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      referrers:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      static:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      status:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      systems:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      tls:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+      vhosts:
+        items:
+          $ref: '#/definitions/webanalytics.RowDTO'
+        type: array
+    type: object
+  webanalytics.ReportDTO:
+    properties:
+      bucketSeconds:
+        description: BucketSeconds is the width of a Series bucket.
+        type: integer
+      excludeBots:
+        type: boolean
+      from:
+        type: string
+      geo:
+        $ref: '#/definitions/webanalytics.GeoDTO'
+      heatmap:
+        items:
+          $ref: '#/definitions/webanalytics.HourCountDTO'
+        type: array
+      hosts:
+        items:
+          $ref: '#/definitions/webanalytics.HostDTO'
+        type: array
+      ipMode:
+        type: string
+      live:
+        $ref: '#/definitions/webanalytics.LiveInfoDTO'
+      panels:
+        $ref: '#/definitions/webanalytics.PanelsDTO'
+      previous:
+        $ref: '#/definitions/webanalytics.TotalsDTO'
+      rollups:
+        $ref: '#/definitions/webanalytics.RollupInfoDTO'
+      selected:
+        items:
+          type: string
+        type: array
+      series:
+        items:
+          $ref: '#/definitions/webanalytics.BucketDTO'
+        type: array
+      sources:
+        items:
+          $ref: '#/definitions/webanalytics.SourceDTO'
+        type: array
+      to:
+        type: string
+      totals:
+        $ref: '#/definitions/webanalytics.TotalsDTO'
+    type: object
+  webanalytics.RollupInfoDTO:
+    properties:
+      from:
+        type: string
+      hours:
+        type: integer
+      lastBuiltAt:
+        description: LastBuiltAt is the newest build among the hours used.
+        type: string
+      missing:
+        description: |-
+          Missing hours in the range are not summarised yet (the worker is
+          backfilling) and not in the report.
+        type: integer
+      to:
+        type: string
+      used:
+        description: Used is false for ranges under 2 hours, read entirely from raw
+          logs.
+        type: boolean
+    type: object
+  webanalytics.RowDTO:
+    properties:
+      bytes:
+        type: integer
+      country:
+        type: string
+      errors5xx:
+        type: integer
+      hits:
+        type: integer
+      key:
+        type: string
+      lastSeen:
+        type: string
+      tag:
+        type: string
+      visitors:
+        type: integer
+    type: object
+  webanalytics.SchemaFieldDTO:
+    properties:
+      aliases:
+        items:
+          type: string
+        type: array
+      label:
+        type: string
+      name:
+        type: string
+    type: object
+  webanalytics.SettingsDTO:
+    properties:
+      build:
+        $ref: '#/definitions/webanalytics.BuildDTO'
+      buildDelayMinutes:
+        type: integer
+      canManage:
+        type: boolean
+      excludeBots:
+        type: boolean
+      geo:
+        $ref: '#/definitions/webanalytics.GeoDTO'
+      geoEnabled:
+        type: boolean
+      ipMode:
+        type: string
+      logRetentionDays:
+        type: integer
+      retentionDays:
+        type: integer
+      schema:
+        items:
+          $ref: '#/definitions/webanalytics.SchemaFieldDTO'
+        type: array
+      sources:
+        items:
+          $ref: '#/definitions/webanalytics.SourceDTO'
+        type: array
+      staticExtensions:
+        type: string
+      storage:
+        $ref: '#/definitions/webanalytics.StorageDTO'
+    type: object
+  webanalytics.SourceDTO:
+    properties:
+      defaultName:
+        type: string
+      fields:
+        additionalProperties:
+          type: string
+        type: object
+      firstSeen:
+        type: string
+      format:
+        type: string
+      hasDuration:
+        type: boolean
+      hasReferrer:
+        type: boolean
+      hasTls:
+        type: boolean
+      hasUserAgent:
+        type: boolean
+      hosts:
+        items:
+          type: string
+        type: array
+      identifiedBy:
+        type: string
+      identity:
+        items:
+          $ref: '#/definitions/webanalytics.AttributeDTO'
+        type: array
+      key:
+        type: string
+      kind:
+        type: string
+      lastSeen:
+        type: string
+      mergedFrom:
+        description: MergedFrom lists the keys of sources merged into this one.
+        items:
+          type: string
+        type: array
+      mergedInto:
+        type: string
+      name:
+        type: string
+      requests:
+        type: integer
+      share:
+        type: number
+      where:
+        type: string
+    type: object
+  webanalytics.StorageDTO:
+    properties:
+      bytes:
+        type: integer
+      hours:
+        type: integer
+    type: object
+  webanalytics.TotalsDTO:
+    properties:
+      botRequests:
+        type: integer
+      bytes:
+        type: integer
+      durationSources:
+        items:
+          type: string
+        type: array
+      failed:
+        type: integer
+      notFound:
+        type: integer
+      p95Ms:
+        type: number
+      requests:
+        type: integer
+      visitors:
+        type: integer
+    type: object
+  webanalytics.UpdateSettingsDTO:
+    properties:
+      excludeBots:
+        type: boolean
+      geoEnabled:
+        type: boolean
+      ipMode:
+        type: string
+      retentionDays:
+        type: integer
+      sources:
+        items:
+          $ref: '#/definitions/webanalytics.UpdateSourceDTO'
+        type: array
+      staticExtensions:
+        type: string
+    type: object
+  webanalytics.UpdateSourceDTO:
+    properties:
+      key:
+        type: string
+      mergedInto:
+        type: string
+      name:
+        type: string
     type: object
 host: localhost:4005
 info:
@@ -6928,9 +8531,10 @@ paths:
       consumes:
       - application/json
       description: The full token is returned once. Requires the MFA code when MFA
-        is enabled.
+        is enabled. write=true adds the mcp:write scope (MCP write tools) and needs
+        a session that passed MFA.
       parameters:
-      - description: Token name, lifetime and MFA code
+      - description: Token name, lifetime, MFA code and write access
         in: body
         name: request
         required: true
@@ -7164,6 +8768,11 @@ paths:
         in: query
         name: bucketSeconds
         type: integer
+      - description: 'previous: add the summary of the equally long window before
+          the range'
+        in: query
+        name: compare
+        type: string
       produces:
       - application/json
       responses:
@@ -7233,6 +8842,11 @@ paths:
       - description: 'Timeseries split: model (default) or user'
         in: query
         name: groupBy
+        type: string
+      - description: 'previous: add the summary of the equally long window before
+          the range'
+        in: query
+        name: compare
         type: string
       produces:
       - application/json
@@ -8783,6 +10397,57 @@ paths:
       summary: Get one incident session's re-hydrated detail
       tags:
       - correlation
+  /correlation/sessions/{projectId}/{sessionId}/impact:
+    get:
+      description: Error logs and error spans per service within the session window,
+        for the session's services, most first
+      parameters:
+      - description: Project ID
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/correlation_core.SessionImpactDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get an incident session's impact by service
+      tags:
+      - correlation
   /disk/usage:
     get:
       description: Returns information about disk space usage
@@ -8937,6 +10602,11 @@ paths:
         in: query
         name: projectId
         type: string
+      - description: Add the last 7 days' hourly counts by kind and those of 24 h
+          ago
+        in: query
+        name: history
+        type: boolean
       produces:
       - application/json
       responses:
@@ -8962,7 +10632,9 @@ paths:
       description: 'Each message pattern''s count in current against baseline, scaled
         to current''s length: patterns new in current, spiking (at least twice their
         baseline) or dropping (at most half), with each one''s template and newest
-        log. Counts read per-minute counts where segments have them.'
+        log. Counts read per-minute counts where segments have them. With countOnly,
+        only newCount/spikeCount/dropCount over whole minutes (cached briefly; counted
+        is false when the query needs raw logs, e.g. a message search).'
       parameters:
       - description: Project ID (UUID format)
         in: path
@@ -9236,6 +10908,62 @@ paths:
       summary: Execute log query
       tags:
       - logs-query
+  /logs/query/explain/{projectId}:
+    post:
+      consumes:
+      - application/json
+      description: Field values (service, namespace, container, pod, ReplicaSet, level)
+        whose share of the lines matching query grew most from baseline to current
+        (both with from and to, at most 31 days), read from per-minute counts. Values
+        with fewer than minCount lines in current (default 20) are left out.
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Explain request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/logs_core.ExplainRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/logs_core.ExplainResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Explain a range of logs ("Explain this spike")
+      tags:
+      - logs-query
   /logs/query/field-values/{projectId}:
     post:
       consumes:
@@ -9340,6 +11068,129 @@ paths:
       security:
       - BearerAuth: []
       summary: Get available queryable fields
+      tags:
+      - logs-query
+  /logs/query/health-map/{projectId}:
+    post:
+      consumes:
+      - application/json
+      description: Lines, error lines and warning lines per workload grouped by namespace
+        (groupBy k8s; a workload is a pod name without its generated parts), per service
+        grouped by host (host; reads raw logs, host_name is not a per-minute dimension)
+        or per service (service) over timeRange (from and to, at most 31 days), with
+        each tile's lines 24 h earlier. At most 150 tiles, biggest first. Cached for
+        a minute.
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Health map request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/logs_core.HealthMapRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/logs_core.HealthMapResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Log health map (Logs › Health map)
+      tags:
+      - logs-query
+  /logs/query/pattern-trends/{projectId}:
+    post:
+      consumes:
+      - application/json
+      description: 'Lines per pattern per bucket over timeRange (from and to required,
+        at most 31 days; cut to whole minutes), read from per-minute counts: the biggest
+        patterns plus every new, spiking or dropping one, each with its template,
+        newest log, main level, services, and lines in the same window 24 h earlier
+        and in the 7 days before. New: not seen in those; spike: at least twice its
+        count 24 h earlier; drop: at most half. Other is the rest per bucket. Cached
+        for a minute.'
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Pattern trends request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/logs_core.PatternTrendsRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/logs_core.PatternTrendsResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Message patterns over time (Logs › Patterns)
       tags:
       - logs-query
   /logs/query/patterns/{projectId}:
@@ -9555,6 +11406,63 @@ paths:
       security:
       - BearerAuth: []
       summary: Get system-wide log statistics (ADMIN only)
+      tags:
+      - logs-query
+  /logs/query/volume/{projectId}:
+    post:
+      consumes:
+      - application/json
+      description: Lines per UTC day by service over the last days (default 14, at
+        most 31), lines per level over 7 days, today so far against yesterday at the
+        same time, the project's stored and ingested bytes per line, and the 10 biggest
+        patterns per service and level over 7 days with their template - all from
+        per-minute counts. Cached for a minute.
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Volume request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/logs_core.VolumeRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/logs_core.VolumeResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Log volume and noise (Logs › Volume & noise)
       tags:
       - logs-query
   /logs/receiving/{projectId}:
@@ -9888,6 +11796,15 @@ paths:
     post:
       consumes:
       - application/json
+      description: allowWrite grants mcp:write only when the client requested it and
+        the session passed MFA; otherwise the grant is read-only.
+      parameters:
+      - description: Authorization request parameters, decision and write toggle
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/oauth.DecisionRequest'
       produces:
       - application/json
       responses:
@@ -10502,6 +12419,53 @@ paths:
       security:
       - BearerAuth: []
       summary: Set an organization's plan
+      tags:
+      - organizations
+  /orgs/{orgId}/scim-events:
+    get:
+      description: 'Owners and global admins: the latest provisioning changes SCIM
+        made (users created, updated, deactivated or removed, teams changed), newest
+        first, from the audit log'
+      parameters:
+      - description: orgId
+        in: path
+        name: orgId
+        required: true
+        type: string
+      - description: At most this many (default 20, max 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/organizations.SCIMEvent'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: An organization's recent SCIM changes
       tags:
       - organizations
   /orgs/{orgId}/scim-tokens:
@@ -12463,6 +14427,47 @@ paths:
       summary: Update an alert rule
       tags:
       - alerting
+  /projects/{id}/alert-rules/activity:
+    get:
+      description: Each rule's firings (series going from pending to firing) and delivered
+        notifications per UTC day over the last 7 days, today included (any member).
+        Days before trackedSince, or before a rule was created, are unknown.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.RuleActivityResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Alert rule activity
+      tags:
+      - alerting
   /projects/{id}/alert-rules/preview:
     post:
       consumes:
@@ -12564,6 +14569,46 @@ paths:
       security:
       - BearerAuth: []
       summary: List alerts
+      tags:
+      - alerting
+  /projects/{id}/alerts/summary:
+    get:
+      description: 'Alerts firing and pending now, rules, and current or upcoming
+        silences (any member): the Alerts page header'
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.AlertsSummary'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Alerts summary
       tags:
       - alerting
   /projects/{id}/audit-logs:
@@ -12842,6 +14887,140 @@ paths:
       summary: Update a cost budget
       tags:
       - cloud-cost
+  /projects/{id}/incident-notifications:
+    get:
+      description: A project's "Notify when an incident opens/ends" settings, or the
+        defaults (off); any member
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.IncidentNotificationSettings'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get incident notification settings
+      tags:
+      - alerting
+    put:
+      consumes:
+      - application/json
+      description: 'Project owners and admins. Thresholds: an incident notifies once
+        it holds minSignals error signals or minServices services'
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Settings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/alerting.IncidentNotificationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.IncidentNotificationSettings'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update incident notification settings
+      tags:
+      - alerting
+  /projects/{id}/ingestion-status:
+    get:
+      description: Each source (identified by obzly_source, else Kubernetes workload,
+        else service and host) with its signals, last seen, recent rate and health.
+        Sources seen in the last 7 days; refreshed about every 30 seconds.
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ingestion.IngestionStatusDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List the sources sending to a project
+      tags:
+      - ingestion
   /projects/{id}/notification-channels:
     get:
       description: Channels this project may use (any member); where they send is
@@ -13284,7 +15463,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Members who can write to the project
+      description: Members who can write to the project. mcpClient labels a silence
+        the MCP create_silence tool made.
       parameters:
       - description: Project ID
         in: path
@@ -13392,6 +15572,227 @@ paths:
       summary: Delete a silence
       tags:
       - alerting
+  /projects/{id}/silences/{silenceId}/expire:
+    post:
+      description: Members who can write to the project. Ends a current or upcoming
+        silence and keeps it on record (the MCP expire_silence tool uses it). A maintenance
+        window's silence (managedBy set) or one already over is refused with 409
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ID
+        in: path
+        name: silenceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.Silence'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: End a silence now
+      tags:
+      - alerting
+  /projects/{id}/web-analytics/report:
+    get:
+      description: 'Requests, visitors, status codes and top lists for a range: closed
+        hours from hourly rollups (built a few minutes after each hour) merged with
+        the current hour read from raw logs. Ranges under 2 hours are read from raw
+        logs. The first report of a project starts its rollups (the last 7 days are
+        backfilled).'
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Range start (RFC 3339, default 24 hours before to)
+        in: query
+        name: from
+        type: string
+      - description: Range end (RFC 3339, default now)
+        in: query
+        name: to
+        type: string
+      - description: Comma-separated source keys (default all)
+        in: query
+        name: sources
+        type: string
+      - description: Only this virtual host
+        in: query
+        name: host
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/webanalytics.ReportDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Web analytics report from a project's access logs
+      tags:
+      - web-analytics
+  /projects/{id}/web-analytics/settings:
+    get:
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/webanalytics.SettingsDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Web analytics settings, sources and rollup status
+      tags:
+      - web-analytics
+    put:
+      consumes:
+      - application/json
+      description: Project admins only. Visitor IPs (truncate, hash or full), crawlers
+        and static extensions apply to hours summarised afterwards. Sources can be
+        renamed or merged into another. Every change is audit-logged.
+      parameters:
+      - description: Project ID (UUID format)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Settings to change
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/webanalytics.UpdateSettingsDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/webanalytics.SettingsDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Change Web analytics settings and source names
+      tags:
+      - web-analytics
   /projects/api-keys/{projectId}:
     get:
       description: Get list of API keys for the project
@@ -13934,6 +16335,66 @@ paths:
       security:
       - BearerAuth: []
       summary: 'Move a dashboard into a folder, or un-file it (folderId: null)'
+      tags:
+      - dashboards
+  /projects/dashboards/{projectId}/{dashboardId}/panels:
+    post:
+      consumes:
+      - application/json
+      description: Project members who can write. tabId empty means the first tab;
+        the panel is validated like a full save and gets a new ID. The MCP add_dashboard_panel
+        tool uses it.
+      parameters:
+      - description: Project ID
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Dashboard ID
+        in: path
+        name: dashboardId
+        required: true
+        type: string
+      - description: Tab and panel
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dashboards_dto.AppendPanelRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dashboards_dto.AppendPanelResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Add one panel to the bottom of a dashboard tab
       tags:
       - dashboards
   /projects/dashboards/{projectId}/{dashboardId}/pin:
@@ -15412,6 +17873,59 @@ paths:
       summary: Update a notification channel
       tags:
       - alerting
+  /settings/channels/{channelId}/template:
+    put:
+      consumes:
+      - application/json
+      description: Admins; the organisation default, or the channel's own template
+        (validated). On a Site enrolled in a control plane, refused (managed there)
+      parameters:
+      - description: Channel ID
+        in: path
+        name: channelId
+        required: true
+        type: string
+      - description: Template
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/alerting.ChannelTemplateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.SettingsChannel'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Set a channel's message template and emoji switch
+      tags:
+      - alerting
   /settings/channels/{channelId}/test:
     post:
       parameters:
@@ -15477,6 +17991,195 @@ paths:
         plane
       tags:
       - settings
+  /settings/message-templates:
+    get:
+      description: Admins. Each channel kind's organisation default (stored, or the
+        built-in one) with its last send-time render error
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.MessageTemplatesView'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List the organisation's message templates
+      tags:
+      - alerting
+  /settings/message-templates/{kind}:
+    delete:
+      description: Admins; audit-logged
+      parameters:
+      - description: email, slack, pagerduty or webhook
+        in: path
+        name: kind
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.MessageTemplatesView'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Reset a channel kind's message template to the built-in one
+      tags:
+      - alerting
+    put:
+      consumes:
+      - application/json
+      description: Admins; validated (syntax, size, renders every sample, webhook
+        JSON). Audit-logged. On a Site enrolled in a control plane, refused (managed
+        there)
+      parameters:
+      - description: email, slack, pagerduty or webhook
+        in: path
+        name: kind
+        required: true
+        type: string
+      - description: Template
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/alerting.MessageTemplate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.MessageTemplatesView'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Save a channel kind's message template
+      tags:
+      - alerting
+  /settings/message-templates/preview:
+    post:
+      consumes:
+      - application/json
+      description: Admins. Renders an unsaved template against sample firing (each
+        severity), resolved, test and incident notifications; errors carry line numbers
+      parameters:
+      - description: Template
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/alerting.TemplatePreviewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/alerting.TemplatePreviewResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Preview a message template
+      tags:
+      - alerting
+  /settings/message-templates/test:
+    post:
+      consumes:
+      - application/json
+      description: Admins. Sends a test notification rendered with the given (unsaved)
+        template through a channel of the same kind
+      parameters:
+      - description: Template and channel
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/alerting.TemplateTestRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Send a test rendered with a message template
+      tags:
+      - alerting
   /settings/smtp:
     delete:
       produces:
@@ -17370,6 +20073,35 @@ paths:
       summary: Check system health
       tags:
       - system/health
+  /system/latest-release:
+    get:
+      description: The newest release on GitHub (version, date, link), asked server-side
+        with an anonymous request and cached for 6 hours. status is known, unknown
+        (the check failed) or disabled (UPDATE_CHECK=false); neither of the last two
+        means up to date.
+      parameters:
+      - description: Ask GitHub again if the answer is over a minute old
+        in: query
+        name: refresh
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/system_upgradestatus.LatestReleaseDTO'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: The latest Obzly release (admin)
+      tags:
+      - system
   /system/live:
     get:
       description: 'Kubernetes liveness probe: 200 while the HTTP server answers.
@@ -17429,10 +20161,11 @@ paths:
       - system
   /system/usage:
     get:
-      description: 'For Settings → Overview: uncompressed bytes and rows that arrived
-        in each of the last 24 hours (by the hour of each segment''s newest row, so
-        approximate after compaction), and compressed and uncompressed bytes kept
-        with the oldest row, for logs, metrics and traces. Cached for a minute.'
+      description: 'For Settings → Overview and Organizations → Sites: the Site''s
+        project count, and uncompressed bytes and rows that arrived in each of the
+        last 24 hours (by the hour of each segment''s newest row, so approximate after
+        compaction), and compressed and uncompressed bytes kept with the oldest row,
+        for logs, metrics and traces. Cached for a minute.'
       produces:
       - application/json
       responses:
@@ -17613,6 +20346,67 @@ paths:
       summary: List operation names for one service
       tags:
       - traces-query
+  /traces/query/service-errors/{projectId}:
+    post:
+      consumes:
+      - application/json
+      description: Each service's entry spans (SERVER/CONSUMER spans and trace roots)
+        and failed ones in the range and the same-length range before it, most errors
+        first. Ranges over 7 days are clamped to the last 7 days.
+      parameters:
+      - description: Project ID
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Range and limit
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/traces_querying.ServiceErrorsRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/traces_querying.ServiceErrorsResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get the services with the most errors
+      tags:
+      - traces-query
   /traces/query/services/{projectId}:
     get:
       parameters:
@@ -17693,6 +20487,67 @@ paths:
       summary: Get project trace/span statistics
       tags:
       - traces-query
+  /traces/query/summary/{projectId}:
+    post:
+      consumes:
+      - application/json
+      description: Requests (root spans, or the picked service's spans), error rate,
+        p50 and p95 for the range and the same-length range before it, bucketed trends,
+        and a capped count of traces matching the filters
+      parameters:
+      - description: Project ID
+        in: path
+        name: projectId
+        required: true
+        type: string
+      - description: Search filters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/traces_querying.TraceSummaryRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/traces_querying.TraceSummaryResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get the trace search summary
+      tags:
+      - traces-query
   /users:
     get:
       description: Get list of users (admin only)
@@ -17716,6 +20571,23 @@ paths:
         in: query
         name: query
         type: string
+      - description: ADMIN or MEMBER
+        in: query
+        name: role
+        type: string
+      - description: on or off
+        in: query
+        name: mfa
+        type: string
+      - description: 'Account status: ACTIVE, INVITED or INACTIVE'
+        in: query
+        name: status
+        type: string
+      - description: 'inactive: not ACTIVE, or no sign-in or request for 30 days;
+          active: the rest'
+        in: query
+        name: activity
+        type: string
       produces:
       - application/json
       responses:
@@ -17723,6 +20595,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/users_dto.ListUsersResponseDTO'
+        "400":
+          description: Invalid filter
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "401":
           description: Unauthorized
           schema:
@@ -17910,6 +20788,62 @@ paths:
       security:
       - BearerAuth: []
       summary: Deactivate user
+      tags:
+      - user-management
+  /users/{id}/detail:
+    get:
+      description: 'For the Users page''s side panel: the ways the account can sign
+        in (password, SSO connectors, GitHub, Google), the organization whose SCIM
+        created it, its organizations and teams, its control-plane Site grants (own,
+        SSO-synced and through teams; project names live on the Site) and its roles
+        on this instance''s own projects. On a control plane, roles given on a Site
+        itself aren''t known (projectRolesOnSites).'
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/useraccess.UserDetail'
+        "400":
+          description: Invalid user ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: User not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: A user's sign-in methods and access (admin only)
       tags:
       - user-management
   /users/{id}/reset-mfa:
@@ -18260,6 +21194,49 @@ paths:
       summary: Update current user information
       tags:
       - users
+  /users/me/preferences:
+    put:
+      consumes:
+      - application/json
+      description: Saves the caller's own theme choice (mode, light and dark theme,
+        colour-blind charts) so it
+      parameters:
+      - description: Preferences
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/users_dto.UpdateUIPreferencesRequestDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/users_models.UIPreferences'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Save the current user's UI preferences
+      tags:
+      - users
   /users/mfa/disable:
     post:
       consumes:
@@ -18434,14 +21411,15 @@ paths:
     put:
       consumes:
       - application/json
-      description: Update global users settings (admin only)
+      description: Update global users settings (admin only). Theme defaults are validated
+        against the
       parameters:
       - description: Settings update data
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/users_models.UsersSettings'
+          $ref: '#/definitions/users_dto.UpdateUsersSettingsRequestDTO'
       produces:
       - application/json
       responses:
@@ -18530,6 +21508,42 @@ paths:
       summary: Register a new user
       tags:
       - users
+  /users/summary:
+    get:
+      description: 'Headline counts for the Users page: accounts by status, active
+        in the last 7 days, inactive (not ACTIVE, or no sign-in or request for 30
+        days), MFA on among active accounts, and admins. No seat limit: only organization
+        plans cap members.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/users_dto.UsersSummaryResponseDTO'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Users summary (admin only)
+      tags:
+      - user-management
   /v1/cloud/advice:
     post:
       consumes:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	logs_core "obzly/internal/features/logs/core"
@@ -29,11 +30,16 @@ var rollupFields = map[string]bool{
 
 // rollupsApply reports whether request can be answered from logs_1m.
 func (q *LogQuerier) rollupsApply(request *logs_core.AggregationRequestDTO) bool {
-	if q.stream != logs_core.StreamLogs || request.BucketMs <= 0 || request.BucketMs%time.Minute.Milliseconds() != 0 {
+	if q.stream != logs_core.StreamLogs || request.BucketMs <= 0 || request.BucketMs%time.Minute.Milliseconds() != 0 ||
+		!request.UsesCountsOnly() {
 		return false
 	}
-	if request.GroupField != "" && !rollupFields[attrnames.Normalize(request.GroupField)] {
-		return false
+	if request.GroupField != "" {
+		for _, field := range strings.Split(request.GroupField, logs_core.GroupFieldsSeparator) {
+			if !rollupFields[attrnames.Normalize(field)] {
+				return false
+			}
+		}
 	}
 	return onRollupFields(request.Query)
 }

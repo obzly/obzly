@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, LoadingOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   App,
   Button,
@@ -11,7 +11,6 @@ import {
   Progress,
   Segmented,
   Select,
-  Spin,
   Table,
   Tooltip,
 } from 'antd';
@@ -28,13 +27,16 @@ import {
 } from '../../../entity/cost';
 import { projectApi, splitSystemProject } from '../../../entity/projects';
 import type { ProjectResponse } from '../../../entity/projects';
-import { Panel } from '../../synthetics';
+import { useTheme } from '../../../shared/theme';
+import { Card } from '../../../shared/ui/v2';
+import { type CloudMatch, dimensionIcon, guessProvider } from '../lib/cloudIcons';
 import { type BaseDimension, DIMENSION_LABEL, valueLabel } from '../lib/explorer';
 import { formatMoney } from '../lib/format';
 import { type CostSite, mergeFacets } from '../lib/merge';
 import { addDays, resolveRange } from '../lib/ranges';
 import { fanOut } from '../lib/sites';
-import { SiteErrors } from './parts';
+import { CloudMark, IconLabel, ServiceIcon } from './CloudIcon';
+import { Loading, SiteErrors } from './parts';
 
 interface Props {
   sites: CostSite[];
@@ -44,15 +46,16 @@ interface Props {
 type SiteAnomaly = CostAnomaly & CostSite;
 
 const BUDGET_DIMENSIONS: BaseDimension[] = ['provider', 'account', 'region', 'service'];
-const STATUS_COLOR: Record<CostBudget['status'], string> = {
-  ok: '#009966',
-  near: '#d97706',
-  over: '#dc2626',
-};
 const today = () => new Date().toISOString().slice(0, 10);
 
 export const BudgetsTab = ({ sites, refresh }: Props) => {
   const { message } = App.useApp();
+  const { status: statusColors } = useTheme();
+  const statusColor: Record<CostBudget['status'], string> = {
+    ok: statusColors.ok,
+    near: statusColors.warn,
+    over: statusColors.bad,
+  };
   const [siteId, setSiteId] = useState(sites[0]?.siteId ?? '');
   const [projects, setProjects] = useState<ProjectResponse[]>();
   const [projectId, setProjectId] = useState<string>();
@@ -205,6 +208,7 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
             <Select
               size="small"
               className="w-44"
+              aria-label="Site"
               value={siteId}
               onChange={setSiteId}
               options={sites.map((site) => ({ value: site.siteId, label: site.siteName }))}
@@ -215,6 +219,7 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
         <Select
           size="small"
           className="w-56"
+          aria-label="Project"
           loading={!projects}
           value={projectId}
           onChange={setProjectId}
@@ -227,12 +232,12 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
       </div>
 
       {error && (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+        <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           {error}
         </div>
       )}
 
-      <Panel
+      <Card
         title="Budgets"
         subtitle="This month's effective cost against each budget; alerts go out when the projection crosses the threshold"
         extra={
@@ -248,9 +253,7 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
         }
       >
         {!budgets && projectId ? (
-          <div className="flex justify-center py-8">
-            <Spin indicator={<LoadingOutlined spin />} />
-          </div>
+          <Loading className="py-8" />
         ) : (budgets ?? []).length === 0 ? (
           <Empty className="py-6" description="No budgets yet" />
         ) : (
@@ -264,7 +267,11 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
               { title: 'Name', dataIndex: 'name' },
               {
                 title: 'Scope',
-                render: (_, budget) => budgetScope(budget) || 'All cost of the project',
+                render: (_, budget) => (
+                  <IconLabel icon={<CloudMark match={scopeIcon(budget)} />}>
+                    {budgetScope(budget) || 'All cost of the project'}
+                  </IconLabel>
+                ),
               },
               {
                 title: 'Spent',
@@ -273,7 +280,7 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
                     <Progress
                       size="small"
                       percent={Math.min(100, Math.round((budget.spent / budget.amount) * 100))}
-                      strokeColor={STATUS_COLOR[budget.status]}
+                      strokeColor={statusColor[budget.status]}
                       format={() => formatMoney(budget.spent, budget.currency)}
                     />
                   </div>
@@ -289,7 +296,7 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
                         : 'This month so far plus the last days’ average for the rest'
                     }
                   >
-                    <span style={{ color: STATUS_COLOR[budget.status] }} className="tabular-nums">
+                    <span style={{ color: statusColor[budget.status] }} className="tabular-nums">
                       {formatMoney(budget.projected, budget.currency)} ({Math.round(budget.percent)}
                       %)
                     </span>
@@ -316,7 +323,7 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
                       )
                       .join(', ')
                   ) : (
-                    <span className="text-gray-400">No channel</span>
+                    <span className="text-gray-400 dark:text-gray-500">No channel</span>
                   ),
               },
               {
@@ -354,9 +361,9 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
             ]}
           />
         )}
-      </Panel>
+      </Card>
 
-      <Panel
+      <Card
         title="Anomalies"
         subtitle="A day far from the same weekday's last 8 weeks, per account and service; last 90 days"
         extra={
@@ -402,7 +409,18 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
               title: 'Where',
               render: (_, anomaly) => (
                 <div>
-                  <div>{anomaly.service || 'Whole account'}</div>
+                  <IconLabel
+                    icon={
+                      <ServiceIcon
+                        text={anomaly.service || undefined}
+                        provider={
+                          guessProvider(anomaly.service) ?? guessProvider(anomaly.subAccount)
+                        }
+                      />
+                    }
+                  >
+                    {anomaly.service || 'Whole account'}
+                  </IconLabel>
                   <div className="text-xs text-gray-500 dark:text-gray-400">
                     {valueLabel('account', anomaly.subAccount, anomaly.subAccountName)} ·{' '}
                     {anomaly.connectionName}
@@ -466,7 +484,7 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
             },
           ]}
         />
-      </Panel>
+      </Card>
 
       <Modal
         open={!!ack}
@@ -501,6 +519,18 @@ export const BudgetsTab = ({ sites, refresh }: Props) => {
       )}
     </div>
   );
+};
+
+/** The icon of the narrowest single value a budget is scoped to: a service, else its cloud. */
+const scopeIcon = (budget: CostBudget): CloudMatch => {
+  for (const dimension of ['service', 'account', 'region', 'provider'] as const) {
+    const values = budget.filters[dimension] ?? [];
+    if (values.length === 1) {
+      const match = dimensionIcon(dimension, values[0]);
+      if (match.provider || match.icon) return match;
+    }
+  }
+  return {};
 };
 
 const budgetScope = (budget: CostBudget): string =>

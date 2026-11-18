@@ -219,13 +219,36 @@ func Test_ExecuteSQLQuery_WithMemoryLimit_RunsInACappedSandbox(t *testing.T) {
 	t.Cleanup(func() { _ = q.Close() })
 	from, to := now.Add(-time.Hour), now.Add(time.Hour)
 
-	response, err := q.ExecuteSQLQuery(projectID, &logs_core.ExecuteSQLQueryRequestDTO{
-		SQL:       "SELECT current_setting('memory_limit') AS mem, count(*) AS n FROM logs",
-		TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to},
-	})
-
+	// current_setting is refused in user SQL (segments.ValidateSingleStatementSelect),
+	// so the sandbox is checked directly.
+	sandbox, err := q.openLogsSandbox(context.Background(), projectID, from, to, tableShape{}, 0)
 	require.NoError(t, err)
-	require.Len(t, response.Rows, 1)
-	require.Equal(t, "488.2 MiB", response.Rows[0][0])
-	require.EqualValues(t, 180, response.Rows[0][1])
+	t.Cleanup(sandbox.close)
+	var memory string
+	var rows int64
+	require.NoError(t, sandbox.db.QueryRow("SELECT current_setting('memory_limit'), count(*) FROM logs").
+		Scan(&memory, &rows))
+
+	require.Equal(t, "488.2 MiB", memory)
+	require.EqualValues(t, 180, rows)
+}
+
+// Defense in depth below the SQL guard: a file-reading function that got
+// past it still fails, and the configuration can't be changed back.
+func Test_LogsSandbox_ExternalAccessDisabledAndConfigurationLocked(t *testing.T) {
+	q, err := NewLogQuerier(WithQueryDir(filepath.Join(t.TempDir(), "query")))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = q.Close() })
+	now := time.Now().UTC()
+	sandbox, err := q.openLogsSandbox(context.Background(), uuid.New(), now.Add(-time.Hour), now, tableShape{}, 0)
+	require.NoError(t, err)
+	t.Cleanup(sandbox.close)
+
+	_, err = sandbox.db.Exec("SELECT * FROM read_csv_auto('/etc/passwd')")
+	require.ErrorContains(t, err, "Permission Error")
+	var locked bool
+	require.NoError(t, sandbox.db.QueryRow("SELECT current_setting('lock_configuration')").Scan(&locked))
+	require.True(t, locked)
+	_, err = sandbox.db.Exec("SET enable_external_access = true")
+	require.Error(t, err)
 }

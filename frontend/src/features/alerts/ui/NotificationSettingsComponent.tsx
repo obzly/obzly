@@ -4,6 +4,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExportOutlined,
+  FileTextOutlined,
   LoadingOutlined,
   PlusOutlined,
   SendOutlined,
@@ -17,10 +18,10 @@ import {
   Modal,
   Popconfirm,
   Radio,
+  Segmented,
   Select,
   Spin,
   Table,
-  Tag,
   Tooltip,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -36,6 +37,11 @@ import {
 } from '../../../entity/alerting';
 import { projectApi } from '../../../entity/projects/api/projectApi';
 import { useSite } from '../../../shared/site';
+import { Card } from '../../../shared/ui/v2';
+import { ChannelTemplateModal } from './ChannelTemplateModal';
+import { KindIcon } from './KindIcon';
+import { MessageTemplatesComponent } from './MessageTemplatesComponent';
+import { Pill } from './bits';
 import { type Draft, KINDS, configOf, emptyDraft } from './channelDraft';
 import { errorMessage } from './lib';
 
@@ -66,6 +72,7 @@ export const NotificationSettingsComponent = () => {
   const [channels, setChannels] = useState<SettingsChannel[]>([]);
   const [sync, setSync] = useState<SettingsSync>();
   const [draft, setDraft] = useState<ChannelDraft | null>(null);
+  const [templateChannel, setTemplateChannel] = useState<SettingsChannel | null>(null);
   const [projectOptions, setProjectOptions] = useState<{ value: string; label: string }[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -201,18 +208,22 @@ export const NotificationSettingsComponent = () => {
   const editing = !!draft?.id;
 
   return (
-    <div className="flex flex-col gap-8">
-      <section>
-        <h2 className="mb-1 text-xl font-bold">Email</h2>
-        <p className="mb-3 max-w-2xl text-sm text-gray-500 dark:text-gray-300">
-          The SMTP relay Obzly sends alert emails and invites through.
-          {IS_CONTROL_PLANE && ' Every Site uses it too; they pick changes up within 5 minutes.'}
-        </p>
+    <div className="flex flex-col gap-5">
+      <Card
+        title="Email"
+        subtitle={
+          <>
+            The SMTP relay Obzly sends alert emails and invites through.
+            {IS_CONTROL_PLANE && ' Every Site uses it too; they pick changes up within 5 minutes.'}
+          </>
+        }
+        bodyClassName="flex flex-col gap-4"
+      >
         {managed && (
           <Alert
             type="info"
             showIcon
-            className="mb-3 max-w-2xl"
+            className="max-w-2xl"
             title={
               smtp?.configured
                 ? `Managed on the control plane (${smtp.host})`
@@ -221,7 +232,7 @@ export const NotificationSettingsComponent = () => {
           />
         )}
         {!managed && (
-          <div className="grid max-w-2xl gap-3 sm:grid-cols-2">
+          <div className="grid max-w-3xl gap-3 sm:grid-cols-2">
             <Labelled label="SMTP host">
               <Input
                 value={smtpDraft.host}
@@ -240,7 +251,8 @@ export const NotificationSettingsComponent = () => {
                 />
               </Labelled>
               <Labelled label="TLS">
-                <Select
+                <Segmented<SMTPRequest['tls']>
+                  className="self-start"
                   value={smtpDraft.tls}
                   options={[
                     { value: 'starttls', label: 'STARTTLS' },
@@ -302,8 +314,9 @@ export const NotificationSettingsComponent = () => {
           </div>
         )}
         {smtp?.configured && (
-          <div className="mt-3 flex max-w-2xl gap-2">
+          <div className="flex max-w-3xl flex-wrap gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
             <Input
+              className="min-w-[200px] flex-1"
               placeholder="Send a test to (default: you)"
               value={testTo}
               onChange={(event) => setTestTo(event.target.value)}
@@ -319,12 +332,19 @@ export const NotificationSettingsComponent = () => {
             </Button>
           </div>
         )}
-      </section>
+      </Card>
 
-      <section>
-        <div className="mb-1 flex items-center justify-between gap-3">
-          <h2 className="m-0 text-xl font-bold">Notification channels</h2>
-          {!managed && (
+      <Card
+        title="Notification channels"
+        subtitle={
+          <>
+            Define each Slack, webhook, PagerDuty or email destination once; alert rules, Synthetics
+            and Infrastructure alerts pick from these.
+            {managed && ' This Site gets them from its control plane.'}
+          </>
+        }
+        extra={
+          !managed && (
             <Button
               type="primary"
               icon={<PlusOutlined />}
@@ -332,28 +352,46 @@ export const NotificationSettingsComponent = () => {
             >
               New channel
             </Button>
-          )}
-        </div>
-        <p className="mb-3 max-w-2xl text-sm text-gray-500 dark:text-gray-300">
-          Define each Slack, webhook, PagerDuty or email destination once; alert rules, Synthetics
-          and Infrastructure alerts pick from these.
-          {managed && ' This Site gets them from its control plane.'}
-        </p>
+          )
+        }
+      >
         <Table<SettingsChannel>
           rowKey="id"
           size="middle"
           dataSource={channels}
           pagination={false}
+          scroll={{ x: 'max-content' }}
           locale={{ emptyText: 'No channels yet' }}
           columns={[
-            { title: 'Name', dataIndex: 'name' },
+            {
+              title: 'Name',
+              dataIndex: 'name',
+              render: (name: string, channel) => (
+                <span className="flex flex-wrap items-center gap-2 font-medium text-gray-900 dark:text-gray-50">
+                  <KindIcon kind={channel.kind} />
+                  {name}
+                  {channel.templateOverride && <Pill tone="muted">own template</Pill>}
+                  {channel.templateError && (
+                    <Tooltip title={channel.templateError}>
+                      <Pill tone="warn" tabIndex={0}>
+                        template error
+                      </Pill>
+                    </Tooltip>
+                  )}
+                </span>
+              ),
+            },
             {
               title: 'Kind',
               dataIndex: 'kind',
               width: 110,
-              render: (kind: string) => <Tag>{kind}</Tag>,
+              render: (kind: string) => <Pill tone="muted">{kind}</Pill>,
             },
-            { title: 'Sends to', dataIndex: 'target' },
+            {
+              title: 'Sends to',
+              dataIndex: 'target',
+              render: (target: string) => <span className="font-mono text-xs">{target}</span>,
+            },
             { title: 'Available to', key: 'scope', render: (_, channel) => scopeText(channel) },
             ...(IS_CONTROL_PLANE
               ? []
@@ -380,9 +418,18 @@ export const NotificationSettingsComponent = () => {
             {
               title: '',
               key: 'actions',
-              width: 120,
+              width: 150,
               render: (_, channel) => (
                 <span className="inline-flex gap-0.5">
+                  <Tooltip title="Message template and emoji">
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label="Message template"
+                      icon={<FileTextOutlined />}
+                      onClick={() => setTemplateChannel(channel)}
+                    />
+                  </Tooltip>
                   <Tooltip title="Send test">
                     <Button
                       type="text"
@@ -439,20 +486,52 @@ export const NotificationSettingsComponent = () => {
             },
           ]}
         />
-      </section>
+        {sync?.mode === 'site' && (
+          <div className="mt-3 border-t border-gray-200 pt-3 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+            {sync.applied
+              ? `Last updated from the control plane ${new Date(sync.applied.fetchedAt).toLocaleString()} (version ${sync.applied.version}).`
+              : 'Not updated from the control plane yet.'}
+            {sync.keyFingerprint && (
+              <div>
+                This Site&apos;s key:{' '}
+                <span className="font-mono break-all">{sync.keyFingerprint}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <MessageTemplatesComponent channels={channels} />
+
+      {templateChannel && (
+        <ChannelTemplateModal
+          channel={templateChannel}
+          managed={managed}
+          onClose={() => setTemplateChannel(null)}
+          onSaved={() => {
+            setTemplateChannel(null);
+            void load();
+          }}
+        />
+      )}
 
       {sync?.mode === 'control-plane' && (
-        <section>
-          <h2 className="mb-1 text-xl font-bold">Sites</h2>
-          <p className="mb-3 max-w-2xl text-sm text-gray-500 dark:text-gray-300">
-            Each Site fetches these settings every 5 minutes and keeps the last copy if the control
-            plane is unreachable. &quot;Move here&quot; takes over a Site&apos;s own channels (same
-            ids, so its rules keep working) and its email relay if none is set here.
-          </p>
+        <Card
+          title="Sites"
+          subtitle={
+            <>
+              Each Site fetches these settings every 5 minutes and keeps the last copy if the
+              control plane is unreachable. &quot;Move here&quot; takes over a Site&apos;s own
+              channels (same ids, so its rules keep working) and its email relay if none is set
+              here.
+            </>
+          }
+        >
           <Table
             rowKey="siteId"
             size="small"
             pagination={false}
+            scroll={{ x: 'max-content' }}
             dataSource={sync.sites ?? []}
             columns={[
               {
@@ -478,10 +557,12 @@ export const NotificationSettingsComponent = () => {
                           : undefined
                       }
                     >
-                      <Tag color="success">up to date</Tag>
+                      <Pill tone="ok" tabIndex={0}>
+                        up to date
+                      </Pill>
                     </Tooltip>
                   ) : (
-                    <Tag color="warning">update pending</Tag>
+                    <Pill tone="warn">update pending</Pill>
                   ),
               },
               {
@@ -559,20 +640,7 @@ export const NotificationSettingsComponent = () => {
               },
             ]}
           />
-        </section>
-      )}
-      {sync?.mode === 'site' && (
-        <div className="text-sm text-gray-500 dark:text-gray-300">
-          {sync.applied
-            ? `Last updated from the control plane ${new Date(sync.applied.fetchedAt).toLocaleString()} (version ${sync.applied.version}).`
-            : 'Not updated from the control plane yet.'}
-          {sync.keyFingerprint && (
-            <div>
-              This Site&apos;s key:{' '}
-              <span className="font-mono break-all">{sync.keyFingerprint}</span>
-            </div>
-          )}
-        </div>
+        </Card>
       )}
 
       <Modal
@@ -590,10 +658,12 @@ export const NotificationSettingsComponent = () => {
           <div className="flex flex-col gap-3">
             <Input
               placeholder="Name"
+              aria-label="Name"
               value={draft.name}
               onChange={(event) => set({ name: event.target.value })}
             />
-            <Select
+            <Segmented
+              className="self-start"
               value={draft.kind}
               disabled={editing}
               onChange={(kind) => set({ kind })}
@@ -636,21 +706,23 @@ export const NotificationSettingsComponent = () => {
                 onChange={(event) => set({ to: event.target.value })}
               />
             )}
-            <div className="text-xs font-medium text-gray-600 dark:text-gray-300">Available to</div>
+            <div className="border-t border-gray-200 pt-3 text-[13px] font-medium text-gray-700 dark:border-gray-700 dark:text-gray-200">
+              Available to
+            </div>
             <Radio.Group
               value={draft.scopeMode}
               onChange={(event) => set({ scopeMode: event.target.value })}
             >
               <Radio value="all">
-                {IS_CONTROL_PLANE ? 'Every project on every Site' : 'Every project'}
+                {IS_CONTROL_PLANE ? 'All projects on all Sites' : 'All projects'}
               </Radio>
-              {IS_CONTROL_PLANE && <Radio value="sites">Every project on some Sites</Radio>}
-              <Radio value="projects">Some projects</Radio>
+              {IS_CONTROL_PLANE && <Radio value="sites">All projects on selected Sites</Radio>}
+              <Radio value="projects">Selected projects</Radio>
             </Radio.Group>
             {draft.scopeMode === 'sites' && (
               <Select
                 mode="multiple"
-                placeholder="Sites"
+                placeholder="Choose Sites"
                 value={draft.sites}
                 options={sites.map((site) => ({
                   value: site.id,
@@ -662,7 +734,7 @@ export const NotificationSettingsComponent = () => {
             {draft.scopeMode === 'projects' && (
               <Select
                 mode="multiple"
-                placeholder="Projects"
+                placeholder="Choose projects"
                 value={draft.projects}
                 options={projectOptions}
                 onChange={(next: string[]) => set({ projects: next })}
@@ -694,18 +766,23 @@ const scopeOf = (draft: ChannelDraft): ChannelScope => {
 
 const scopeText = (channel: SettingsChannel): string => {
   if (channel.scope) {
-    if (channel.scope.allSites) return 'Every Site';
+    if (channel.scope.allSites) return 'All projects on all Sites';
     const parts = [];
     if (channel.scope.sites?.length) parts.push(`Sites: ${channel.scope.sites.join(', ')}`);
-    if (channel.scope.projects?.length) parts.push(`${channel.scope.projects.length} project(s)`);
+    if (channel.scope.projects?.length)
+      parts.push(
+        `${channel.scope.projects.length} selected project${channel.scope.projects.length === 1 ? '' : 's'}`,
+      );
     return parts.join('; ');
   }
-  return channel.allProjects ? 'Every project' : `${channel.projectIds.length} project(s)`;
+  return channel.allProjects
+    ? 'All projects'
+    : `${channel.projectIds.length} selected project${channel.projectIds.length === 1 ? '' : 's'}`;
 };
 
 const Labelled = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <div className="flex flex-col gap-1">
-    <span className="text-xs font-medium text-gray-600 dark:text-gray-300">{label}</span>
+    <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200">{label}</span>
     {children}
   </div>
 );

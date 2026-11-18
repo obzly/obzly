@@ -45,7 +45,9 @@ type SpanQuerier struct {
 	coordinator *query.Coordinator
 	queryDir    string
 	memoryLimit string
-	spillDir    string
+	// threads caps the querier's DuckDB threads (0: DuckDB's default).
+	threads  int
+	spillDir string
 }
 
 type QuerierOption func(*SpanQuerier)
@@ -68,6 +70,14 @@ func WithObjectStore(store *segments.ObjectStore, cacheDir string) QuerierOption
 func WithMemoryLimit(limit string) QuerierOption {
 	return func(q *SpanQuerier) {
 		q.memoryLimit = limit
+	}
+}
+
+// WithThreads caps the querier's DuckDB (and SQL sandboxes') threads; DuckDB
+// otherwise starts one per core of the node, each with its own read buffers.
+func WithThreads(threads int) QuerierOption {
+	return func(q *SpanQuerier) {
+		q.threads = threads
 	}
 }
 
@@ -96,8 +106,14 @@ func NewSpanQuerier(opts ...QuerierOption) (*SpanQuerier, error) {
 		opt(querier)
 	}
 	querier.spillDir, err = segments.ConfigureMemory(db, querier.memoryLimit, filepath.Join(querier.queryDir, "spill"))
+	if err == nil {
+		err = segments.SetHandleLimits(db, "", querier.threads)
+	}
 	if err != nil {
 		_ = db.Close()
+		if querier.spillDir != "" {
+			_ = os.RemoveAll(querier.spillDir)
+		}
 		return nil, err
 	}
 	local := query.NewLocalExecutor("local", db, querier.objectStore, querier.cacheDir)
@@ -113,7 +129,7 @@ func NewSpanQuerier(opts ...QuerierOption) (*SpanQuerier, error) {
 		_ = os.RemoveAll(querier.spillDir)
 		return nil, err
 	}
-	telemetry.RegisterDuckDB("querier_spans", db)
+	telemetry.RegisterDuckDB("querier_spans", db, segments.MemoryLimitBytes(querier.memoryLimit))
 
 	return querier, nil
 }

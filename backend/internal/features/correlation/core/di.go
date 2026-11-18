@@ -30,6 +30,9 @@ func GetUnavailableIncidentSessionRepository() IncidentSessionRepository {
 
 var errRepositoryUnavailable = errors.New("correlation storage is unavailable")
 
+// ErrSessionNotFound: the project has no session with that id.
+var ErrSessionNotFound = errors.New("incident session not found")
+
 type unavailableRepository struct{}
 
 func (unavailableRepository) CreateSession(*IncidentSession, []*IncidentSessionSignal) error {
@@ -45,6 +48,13 @@ func (unavailableRepository) ListSessions(
 
 func (unavailableRepository) GetSessionDetail(uuid.UUID, uuid.UUID) (*SessionDetailDTO, error) {
 	return nil, errRepositoryUnavailable
+}
+
+func (unavailableRepository) GetSessionSignals(
+	uuid.UUID,
+	uuid.UUID,
+) (*IncidentSession, []*IncidentSessionSignal, error) {
+	return nil, nil, errRepositoryUnavailable
 }
 
 func (unavailableRepository) GetWatermark(uuid.UUID) (time.Time, error) {

@@ -48,6 +48,7 @@ func Test_ApplyManagedRules_CreatesUpdatesRemoves_AndTheAPIRefusesEdits(t *testi
 	require.Equal(t, "synthetics:test-1:down", rule.ManagedBy)
 	require.Equal(t, []uuid.UUID{channel}, rule.ChannelIDs)
 	require.Equal(t, "critical", rule.Labels["severity"])
+	require.Equal(t, alerting.SeverityCritical, rule.Severity, "Synthetics' down alerts are critical")
 
 	ruleURL := "/api/v1/projects/" + project.ID.String() + "/alert-rules/" + rule.ID.String()
 	test_utils.MakeDeleteRequest(t, router, ruleURL, "Bearer "+owner.Token, http.StatusConflict)

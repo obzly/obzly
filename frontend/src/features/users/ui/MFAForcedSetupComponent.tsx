@@ -113,7 +113,7 @@ export function MFAForcedSetupComponent({ onEnabled }: Props): JSX.Element {
               userApi.logout();
               window.location.reload();
             }}
-            className="cursor-pointer font-medium text-emerald-600 hover:text-emerald-700"
+            className="text-accent-600 hover:text-accent-700 cursor-pointer font-medium"
           >
             Sign out
           </button>

@@ -31,6 +31,30 @@ export const OTLP_REMOTE_FIELD: DataSourceField = {
     'trusted networks.',
 };
 
+// Names this source (the obzly_source resource attribute): Web analytics and
+// the ingestion status group its logs under this name instead of guessing
+// one from the service and host.
+export const SOURCE_NAME_FIELD: DataSourceField = {
+  key: 'sourceName',
+  label: 'Source name (optional)',
+  defaultValue: '',
+  placeholder: 'e.g. edge-proxy',
+  helpText:
+    'Set as the obzly_source resource attribute. Web analytics and the ingestion status show this ' +
+    'source under this name; without it they identify it by Kubernetes workload, else service and host.',
+};
+
+/** The resource processor line that sets obzly_source, or "" without a name. */
+export function sourceNameAttributeYaml(fieldValues: Record<string, string>): string {
+  const name = (fieldValues.sourceName ?? '').trim();
+  if (!name) return '';
+  const quoted = JSON.stringify(name);
+  return `
+      - key: obzly_source
+        value: ${quoted}
+        action: upsert`;
+}
+
 export function otlpReceiverYaml(fieldValues: Record<string, string>): string {
   const host = fieldValues.otlpRemote === 'yes' ? '0.0.0.0' : '127.0.0.1';
   return `  otlp:

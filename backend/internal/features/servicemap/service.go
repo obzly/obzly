@@ -65,7 +65,19 @@ func (s *ServiceMapService) GetServiceMap(
 		return nil, fmt.Errorf("failed to load span-derived service k8s metadata: %w", err)
 	}
 
-	return mergeServiceMap(spanEdges, netEdges, mergeK8sMetadata(spanK8sMetadata, netK8sMetadata)), nil
+	nodeStats, err := spans_core.GetSpanCoreRepository().ServiceNodeStats(projectID, timeRange)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load service node stats: %w", err)
+	}
+
+	response := mergeServiceMap(
+		append(spanEdges, peerCallEdges(nodeStats)...),
+		netEdges,
+		mergeK8sMetadata(spanK8sMetadata, netK8sMetadata),
+		buildNodeStats(nodeStats),
+	)
+	response.WindowSeconds = resolvedTo.Sub(resolvedFrom).Seconds()
+	return response, nil
 }
 
 // mergeK8sMetadata prefers spans' values field by field; network metrics
@@ -138,6 +150,7 @@ func mergeServiceMap(
 	spanEdges []spans_core.ServiceCallEdge,
 	netEdges []NetworkEdge,
 	k8sMetadata map[string]k8sInfo,
+	nodeStats map[string]nodeStat,
 ) *ServiceMapResponseDTO {
 	edges := make(map[[2]string]*edgeAccumulator)
 
@@ -163,9 +176,10 @@ func mergeServiceMap(
 
 	finalEdges := collapseEdges(edges, keep)
 	finalNodeSources := collapseNodeSources(nodeSources, keep)
+	finalNodeStats := collapseNodeStats(nodeStats, nodeSources, keep)
 
 	return &ServiceMapResponseDTO{
-		Nodes: buildNodeDTOs(finalNodeSources, k8sMetadata),
+		Nodes: buildNodeDTOs(finalNodeSources, k8sMetadata, finalNodeStats),
 		Edges: buildEdgeDTOs(finalEdges),
 	}
 }
@@ -287,6 +301,7 @@ func collapseEdges(edges map[[2]string]*edgeAccumulator, keep map[string]bool) m
 func buildNodeDTOs(
 	sources map[string]map[string]bool,
 	k8sMetadata map[string]k8sInfo,
+	nodeStats map[string]nodeStat,
 ) []ServiceMapNodeDTO {
 	names := make([]string, 0, len(sources))
 	for name := range sources {
@@ -304,6 +319,9 @@ func buildNodeDTOs(
 				dto.Deployment = info.Deployment
 				dto.Node = info.Node
 			}
+		}
+		if stat, ok := nodeStats[name]; ok {
+			applyNodeStat(&dto, stat)
 		}
 		nodes = append(nodes, dto)
 	}

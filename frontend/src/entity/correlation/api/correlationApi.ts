@@ -3,6 +3,7 @@ import RequestOptions from '../../../shared/api/RequestOptions';
 import { apiHelper } from '../../../shared/api/apiHelper';
 import type { ListSessionsResponse } from '../model/Session';
 import type { SessionDetail } from '../model/SessionDetail';
+import type { SessionImpact } from '../model/SessionImpact';
 
 const baseUrl = () => `${getApiBase()}/correlation/sessions`;
 
@@ -24,5 +25,12 @@ export const correlationApi = {
 
   async getSessionDetail(projectId: string, sessionId: string): Promise<SessionDetail> {
     return apiHelper.fetchGetJson(`${baseUrl()}/${projectId}/${sessionId}`, new RequestOptions());
+  },
+
+  async getSessionImpact(projectId: string, sessionId: string): Promise<SessionImpact> {
+    return apiHelper.fetchGetJson(
+      `${baseUrl()}/${projectId}/${sessionId}/impact`,
+      new RequestOptions(),
+    );
   },
 };

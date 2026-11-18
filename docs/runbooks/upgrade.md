@@ -348,6 +348,44 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
     running container (they used to exit because the server already held the metrics port). SSO
     connectors that share an identity provider discover it once. Incidents' service tags are
     readable.
+- **v1.2.0** (UI v2, themes, Overview, Web analytics, log insights - see
+  [the release notes](../releases/v1.2.0.md)). Upgrade the Sites, the control plane, then the
+  probes.
+  - **Migrations:** eight, all additive (alert rule activity, ingestion sources, audit log org,
+    hourly inventory counts, theme preferences, web analytics, silence MCP client, notification
+    templates). Rolling back to v1.1.0 works.
+  - **Notifications:** alert rules gain a severity, set from each rule's `severity` label (critical
+    → Critical; high or error → High; warning or medium → Medium; info or low → Low; none →
+    Medium); check rules that relied on a missing label. Messages now start with a severity emoji
+    and Slack messages use a coloured attachment; PagerDuty events carry the mapped severity
+    instead of always `error`, and webhooks gain `kind`, `severity`, `description` and `link`
+    fields. Turn emoji off per channel (Message template action) or edit the templates under
+    Notifications & alerting › Message templates. Set `PUBLIC_URL` on standalone installs so
+    messages link back to Obzly (enrolled Sites link through the control plane). Incident
+    notifications are off until a project turns them on (Incidents › gear icon).
+  - **MCP:** existing tokens and connected apps stay read-only. Write tools appear only for a token
+    created with "Also allow changes" or an app granted `mcp:write` on the consent page, both from
+    an MFA session. Tool results are now JSON objects with `structuredContent`; clients that read
+    `truncated` on paged lists should use `nextCursor`.
+  - **SQL mode:** queries using DuckDB introspection or file functions (`duckdb_*`, `pragma_*`,
+    `current_setting`, `read_*`, `glob`, `query()`, ...) are now refused, in the Logs SQL mode too.
+  - **Outbound call:** Settings › Updates asks `api.github.com` for the latest release (anonymous,
+    cached 6 hours). Set `UPDATE_CHECK=false` on air-gapped deployments.
+  - **Memory:** workers cap every DuckDB handle and log a "DuckDB memory budget" line at startup
+    (a Warn if the caps exceed the container limit; workers below 4 GiB still warn). The
+    `obzly_duckdb_memory_bytes` writer series are now one `handle="writer"`, and there's a new
+    `obzly_duckdb_memory_limit_bytes`.
+  - **Queriers:** API pods and queriers can run mixed versions during the roll: queriers advertise
+    the new file-shipping capability, and older ones are simply not sent files.
+  - **Web analytics** builds rollups for a project only after someone opens it, and reads the
+    bundled DB-IP Lite country database (override with `WEB_ANALYTICS_GEOIP_DB`). Image builds
+    download it (`GEOIP_MONTH` pins the month, `GEOIP_OPTIONAL=true` builds without it). The
+    data-source modal gains an optional "Source name"; existing collector configs need no change.
+  - **Dashboard imports:** Grafana gauge, bar gauge and donut panels and OpenObserve donut panels
+    now import as the new gauge, ranked list and donut kinds; existing dashboards are unchanged.
+  - **Verify:** worker working set stays under its limit, and
+    `sum(increase(obzly_leader_task_runs_total{task="inventory-build",result="ok"}[1h]))` is about
+    12 across all workers.
 
 ## Order
 

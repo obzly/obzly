@@ -29,6 +29,13 @@ type SCIMToken struct {
 	LastUsedAt *time.Time `json:"lastUsedAt" gorm:"column:last_used_at"`
 }
 
+// SCIMEvent is one SCIM provisioning change to an organization (audit log).
+type SCIMEvent struct {
+	ID        uuid.UUID `json:"id"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 // NewSCIMToken is a just-created token, with its secret.
 type NewSCIMToken struct {
 	SCIMToken
@@ -40,6 +47,8 @@ const (
 	scimPrefixLength  = 12
 	maxSCIMTokensOrg  = 10
 	scimTouchInterval = time.Minute
+	defaultSCIMEvents = 20
+	maxSCIMEvents     = 100
 )
 
 var errSCIMUnauthorized = errors.New("invalid SCIM token")
@@ -109,6 +118,26 @@ func (s *Service) DeleteSCIMToken(orgID, tokenID uuid.UUID, user *users_models.U
 	}
 	s.audit.WriteAuditLog("SCIM token revoked: "+token.Name+" for organization "+orgID.String(), &user.ID, nil)
 	return nil
+}
+
+// ListSCIMEvents is the organization's latest SCIM changes, newest first
+// (owners and global admins, like the tokens).
+func (s *Service) ListSCIMEvents(orgID uuid.UUID, limit int, user *users_models.User) ([]SCIMEvent, error) {
+	if err := s.ownerAccess(orgID, user); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > maxSCIMEvents {
+		limit = defaultSCIMEvents
+	}
+	logs, err := s.audit.RecentOrgAuditLogs(orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]SCIMEvent, 0, len(logs))
+	for _, log := range logs {
+		events = append(events, SCIMEvent{ID: log.ID, Message: log.Message, CreatedAt: log.CreatedAt})
+	}
+	return events, nil
 }
 
 // authenticateSCIM checks an Authorization header against the stored

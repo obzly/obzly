@@ -135,7 +135,7 @@ export const SearchBarComponent = ({
             icon={isExecuting ? <LoadingOutlined spin /> : <PlayCircleOutlined />}
             onClick={onRun}
             disabled={mode === 'simple' && !!syntaxError}
-            className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+            className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
           >
             Run
           </Button>
@@ -177,7 +177,7 @@ export const SearchBarComponent = ({
             popupRender={
               recentQueries.length === 0
                 ? () => (
-                    <div className="rounded-md border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                    <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
                       <Empty
                         description="No recent queries yet"
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -198,12 +198,12 @@ export const SearchBarComponent = ({
             trigger={['click']}
             placement="bottomRight"
             popupRender={() => (
-              <div className="w-80 rounded-md border border-gray-200 bg-white p-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+              <div className="w-80 rounded-xl border border-gray-200 bg-white p-1.5 shadow-lg dark:border-gray-700 dark:bg-gray-800">
                 <button
                   type="button"
                   disabled={!currentText.trim()}
                   onClick={() => setSaveName('')}
-                  className="w-full rounded px-2 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-emerald-400 dark:hover:bg-emerald-900/30"
+                  className="text-accent-700 hover:bg-accent-50 dark:text-accent-400 dark:hover:bg-accent-900/30 w-full cursor-pointer rounded-lg px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent"
                 >
                   Save current {mode === 'sql' ? 'SQL' : 'search'}…
                 </button>
@@ -215,12 +215,12 @@ export const SearchBarComponent = ({
                     {savedSearches.map((saved) => (
                       <li
                         key={saved.name}
-                        className="group flex items-center gap-1 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
+                        className="group flex items-center gap-1 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
                       >
                         <button
                           type="button"
                           onClick={() => onSelectSavedSearch(saved)}
-                          className="min-w-0 flex-1 px-2 py-1 text-left"
+                          className="min-w-0 flex-1 cursor-pointer px-2 py-1 text-left"
                         >
                           <div className="truncate text-sm">
                             {saved.name}
@@ -238,7 +238,7 @@ export const SearchBarComponent = ({
                           danger
                           icon={<DeleteOutlined />}
                           aria-label={`Delete saved search ${saved.name}`}
-                          className="opacity-0 group-hover:opacity-100"
+                          className="opacity-40 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
                           onClick={() => onDeleteSavedSearch(saved.name)}
                         />
                       </li>
@@ -278,14 +278,16 @@ export const SearchBarComponent = ({
           }}
           maxLength={80}
         />
-        <div className="mt-2 truncate font-mono text-xs text-gray-500">{currentText}</div>
+        <div className="mt-2 truncate font-mono text-xs text-gray-500 dark:text-gray-400">
+          {currentText}
+        </div>
         <div className="mt-1 text-xs text-gray-400">
           Saving with an existing name replaces it. Saved in this browser.
         </div>
       </Modal>
 
       {mode === 'simple' && syntaxError && (
-        <div className="pl-1 text-xs text-red-500">{syntaxError}</div>
+        <div className="pl-1 text-xs text-red-500 dark:text-red-400">{syntaxError}</div>
       )}
       {mode === 'sql' && (
         <div className="pl-1 text-xs text-gray-500 dark:text-gray-300">

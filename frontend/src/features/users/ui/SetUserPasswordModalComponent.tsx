@@ -69,7 +69,7 @@ export const SetUserPasswordModalComponent = ({ user, onClose, onPasswordSet }: 
           type="primary"
           onClick={handleSetPassword}
           disabled={isSubmitting || password.length < 8}
-          className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
         >
           {isSubmitting ? (
             <Spin indicator={<LoadingOutlined spin />} size="small" />
@@ -79,7 +79,7 @@ export const SetUserPasswordModalComponent = ({ user, onClose, onPasswordSet }: 
         </Button>,
       ]}
     >
-      <p className="mb-3 text-sm text-gray-500 dark:text-gray-300">
+      <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">
         This immediately sets the user&apos;s password - if they haven&apos;t completed their invite
         yet, this also activates their account. There&apos;s no email sender configured, so copy
         this and send it to them yourself.
@@ -90,6 +90,7 @@ export const SetUserPasswordModalComponent = ({ user, onClose, onPasswordSet }: 
           onChange={(e) => setPassword(e.target.value)}
           disabled={isSubmitting}
           autoFocus
+          className="!font-mono"
         />
         <Button icon={<CopyOutlined />} onClick={handleCopy} disabled={isSubmitting} />
         <Button
@@ -100,7 +101,7 @@ export const SetUserPasswordModalComponent = ({ user, onClose, onPasswordSet }: 
         />
       </div>
       {password.length > 0 && password.length < 8 && (
-        <p className="text-xs text-red-500">Password must be at least 8 characters.</p>
+        <p className="text-xs text-[var(--v2-red)]">Password must be at least 8 characters.</p>
       )}
     </Modal>
   );

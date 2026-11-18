@@ -32,7 +32,8 @@ const (
 	codeTTL           = 60 * time.Second
 	refreshPrefix     = "obz_ort_"
 	codeKeyPrefix     = "oauth_code:"
-	supportedScope    = access_tokens.ScopeMCPRead
+	readScope         = access_tokens.ScopeMCPRead
+	writeScope        = access_tokens.ScopeMCPWrite
 	registeredIDBytes = 16
 )
 
@@ -78,6 +79,17 @@ type ConsentInfo struct {
 	RedirectHost     string `json:"redirectHost"`
 	Scope            string `json:"scope"`
 	VerifiedIdentity bool   `json:"verifiedIdentity"`
+	// WriteRequested: the client asked for mcp:write. It is granted only when
+	// the user also ticks the consent page's write toggle.
+	WriteRequested bool `json:"writeRequested"`
+	// WriteNeedsMFA: write was requested but the signed-in session hasn't
+	// passed MFA, so it can't be granted (set by the controller).
+	WriteNeedsMFA bool `json:"writeNeedsMfa"`
+}
+
+// ErrWriteNeedsMFA: write access was approved by a session that hasn't passed MFA.
+var errWriteNeedsMFA = &AuthorizeError{
+	"access_denied", "write access needs two-factor authentication: turn it on in your profile first", true,
 }
 
 // ValidateAuthorize checks an authorization request for the consent page.
@@ -103,24 +115,29 @@ func (s *OAuthService) ValidateAuthorize(
 	case request.Resource != "" && !strings.EqualFold(strings.TrimRight(request.Resource, "/"), resource):
 		return nil, c, &AuthorizeError{"invalid_target", "resource must be " + resource, false}
 	}
-	if _, ok := normalizeScope(request.Scope); !ok {
-		return nil, c, &AuthorizeError{"invalid_scope", "the only supported scope is " + supportedScope, false}
+	scope, ok := normalizeScope(request.Scope)
+	if !ok {
+		return nil, c, &AuthorizeError{
+			"invalid_scope", "supported scopes are " + readScope + " and " + writeScope, false,
+		}
 	}
 
 	redirect, _ := url.Parse(request.RedirectURI)
 	return &ConsentInfo{
 		ClientID: c.ID, ClientName: c.Name, ClientURI: c.URI, RedirectHost: redirect.Host,
-		Scope: supportedScope, VerifiedIdentity: c.MetadataDocument,
+		Scope: scope, VerifiedIdentity: c.MetadataDocument, WriteRequested: scope != readScope,
 	}, c, nil
 }
 
 // Decide records the decision; sessionSatisfiesMFA is whether the approving
 // session passed MFA elsewhere (see access_tokens.AccessToken.MFASatisfied).
+// mcp:write is granted only when the client requested it and the user ticked
+// allowWrite; otherwise the grant is read-only.
 func (s *OAuthService) Decide(
-	ctx context.Context, user *users_models.User, request *AuthorizeRequest, approve bool, issuer, resource string,
-	sessionSatisfiesMFA bool,
+	ctx context.Context, user *users_models.User, request *AuthorizeRequest, approve, allowWrite bool,
+	issuer, resource string, sessionSatisfiesMFA bool,
 ) (string, *AuthorizeError) {
-	_, c, authErr := s.ValidateAuthorize(ctx, request, issuer, resource)
+	info, c, authErr := s.ValidateAuthorize(ctx, request, issuer, resource)
 	if authErr != nil {
 		if authErr.Fatal {
 			return "", authErr
@@ -130,6 +147,14 @@ func (s *OAuthService) Decide(
 	if !approve {
 		return errorRedirect(request, issuer, "access_denied", "the user denied access"), nil
 	}
+	mfaSatisfied := user.MFAEnabled || sessionSatisfiesMFA
+	scope := readScope
+	if info.WriteRequested && allowWrite {
+		if !mfaSatisfied {
+			return "", errWriteNeedsMFA
+		}
+		scope = readScope + " " + writeScope
+	}
 
 	code, err := randomToken(32)
 	if err != nil {
@@ -137,15 +162,19 @@ func (s *OAuthService) Decide(
 	}
 	payload, _ := json.Marshal(authorizationCode{
 		UserID: user.ID, ClientID: c.ID, ClientName: c.Name, RedirectURI: request.RedirectURI,
-		CodeChallenge: request.CodeChallenge, Scope: supportedScope, Resource: resource,
-		MFASatisfied: user.MFAEnabled || sessionSatisfiesMFA,
+		CodeChallenge: request.CodeChallenge, Scope: scope, Resource: resource,
+		MFASatisfied: mfaSatisfied,
 	})
 	if err := s.valkey.Do(ctx, s.valkey.B().Set().Key(codeKeyPrefix+hashValue(code)).
 		Value(string(payload)).Ex(codeTTL).Build()).Error(); err != nil {
 		return "", &AuthorizeError{"server_error", "failed to store code", true}
 	}
 
-	s.auditLogService.WriteAuditLog(fmt.Sprintf("OAuth app authorized for MCP: %s", c.Name), &user.ID, nil)
+	access := "read-only"
+	if scope != readScope {
+		access = "read and write"
+	}
+	s.auditLogService.WriteAuditLog(fmt.Sprintf("OAuth app authorized for MCP: %s, %s", c.Name, access), &user.ID, nil)
 
 	query := url.Values{"code": {code}, "iss": {issuer}}
 	if request.State != "" {
@@ -313,6 +342,7 @@ type ConnectedAppDTO struct {
 	ClientID   string    `json:"clientId"`
 	LastUsedAt time.Time `json:"lastUsedAt"`
 	ExpiresAt  time.Time `json:"expiresAt"`
+	Scopes     []string  `json:"scopes"`
 }
 
 func (s *OAuthService) ListConnectedApps(user *users_models.User) ([]ConnectedAppDTO, error) {
@@ -324,7 +354,7 @@ func (s *OAuthService) ListConnectedApps(user *users_models.User) ([]ConnectedAp
 	for _, t := range tokens {
 		apps = append(apps, ConnectedAppDTO{
 			ID: t.FamilyID, ClientName: t.ClientName, ClientID: t.ClientID,
-			LastUsedAt: t.CreatedAt, ExpiresAt: t.FamilyExpiresAt,
+			LastUsedAt: t.CreatedAt, ExpiresAt: t.FamilyExpiresAt, Scopes: strings.Fields(t.Scopes),
 		})
 	}
 	return apps, nil
@@ -417,18 +447,24 @@ func (s *OAuthService) resolveClient(ctx context.Context, clientID string) (*cli
 	return c, nil
 }
 
-// normalizeScope accepts an empty scope or one that is exactly mcp:read.
+// normalizeScope is the requested scope: mcp:read (also for an empty scope),
+// or "mcp:read mcp:write" when mcp:write is asked for - write always comes
+// with read. Any other scope is refused.
 func normalizeScope(scope string) (string, bool) {
-	fields := strings.Fields(scope)
-	if len(fields) == 0 {
-		return supportedScope, true
-	}
-	for _, field := range fields {
-		if field != supportedScope {
+	write := false
+	for _, field := range strings.Fields(scope) {
+		switch field {
+		case readScope:
+		case writeScope:
+			write = true
+		default:
 			return "", false
 		}
 	}
-	return supportedScope, true
+	if write {
+		return readScope + " " + writeScope, true
+	}
+	return readScope, true
 }
 
 func errorRedirect(request *AuthorizeRequest, issuer, code, description string) string {

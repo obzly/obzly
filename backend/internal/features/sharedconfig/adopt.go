@@ -34,12 +34,16 @@ var ErrChannelIDTaken = errors.New("a channel can't be moved")
 
 // localChannel is a Site's own channel row.
 type localChannel struct {
-	ID              uuid.UUID `gorm:"column:id;primaryKey"`
-	Name            string    `gorm:"column:name"`
-	Kind            string    `gorm:"column:kind"`
-	ConfigEncrypted string    `gorm:"column:config_encrypted"`
-	AllProjects     bool      `gorm:"column:all_projects"`
-	ProjectIDs      string    `gorm:"column:project_ids"`
+	ID               uuid.UUID `gorm:"column:id;primaryKey"`
+	Name             string    `gorm:"column:name"`
+	Kind             string    `gorm:"column:kind"`
+	ConfigEncrypted  string    `gorm:"column:config_encrypted"`
+	AllProjects      bool      `gorm:"column:all_projects"`
+	ProjectIDs       string    `gorm:"column:project_ids"`
+	UseEmoji         bool      `gorm:"column:use_emoji"`
+	TemplateOverride bool      `gorm:"column:template_override"`
+	TemplateSubject  string    `gorm:"column:template_subject"`
+	TemplateBody     string    `gorm:"column:template_body"`
 }
 
 func (localChannel) TableName() string { return "notification_channels" }
@@ -68,9 +72,12 @@ func ExportLocal(ctx context.Context) (string, error) {
 		}
 		var projectIDs []string
 		_ = json.Unmarshal([]byte(row.ProjectIDs), &projectIDs)
+		useEmoji := row.UseEmoji
 		content.Channels = append(content.Channels, SyncedChannel{
 			ID: row.ID, Name: row.Name, Kind: row.Kind, Config: json.RawMessage(plain),
-			AllProjects: row.AllProjects, ProjectIDs: projectIDs,
+			AllProjects: row.AllProjects, ProjectIDs: projectIDs, UseEmoji: &useEmoji,
+			TemplateOverride: row.TemplateOverride, TemplateSubject: row.TemplateSubject,
+			TemplateBody: row.TemplateBody,
 		})
 	}
 	if stored, err := StoredSMTP(SourceLocal); err != nil {
@@ -155,7 +162,9 @@ func Adopt(siteID, sealed string, createdBy uuid.UUID) (*AdoptResult, error) {
 			}
 			adopted := SharedChannel{
 				ID: channel.ID, Name: name, Kind: channel.Kind, ConfigEncrypted: encrypted, Scope: scope,
-				CreatedBy: &createdBy, CreatedAt: now, UpdatedAt: now,
+				CreatedBy: &createdBy, CreatedAt: now, UpdatedAt: now, UseEmoji: channel.EmojiOn(),
+				TemplateOverride: channel.TemplateOverride, TemplateSubject: channel.TemplateSubject,
+				TemplateBody: channel.TemplateBody,
 			}
 			if found {
 				adopted.CreatedAt, adopted.CreatedBy = existing.CreatedAt, existing.CreatedBy

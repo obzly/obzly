@@ -10,6 +10,7 @@ import { App, Button, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
+import type { RuleRequest } from '../../../entity/alerting';
 import type { Project } from '../../../entity/projects';
 import { projectApi } from '../../../entity/projects';
 import {
@@ -25,7 +26,10 @@ import {
   queryApi,
 } from '../../../entity/query';
 import type { UserProfile } from '../../../entity/users/model/UserProfile';
+import { Card, PageHeader } from '../../../shared/ui/v2';
 import { withHiddenLevels } from '../lib/logLevels';
+import { useLogsViewSettings } from '../lib/logsViewSettings';
+import { LOGS_SEARCH_VIEW } from '../lib/logsViews';
 import { type PushLiveTailHandle, startPushLiveTail } from '../lib/pushLiveTail';
 import { type ValueSuggestion, clearValueSuggestions } from '../lib/queryEditor/searchLanguage';
 import { getRecentQueries, recordRecentQuery } from '../lib/recentQueriesStorage';
@@ -45,7 +49,14 @@ import { FilterChipsComponent } from './FilterChipsComponent';
 import { FloatingTopButtonComponent } from './FloatingTopButtonComponent';
 import { HowToSendLogsFromCodeComponent } from './HowToSendLogsFromCodeComponent';
 import { LogAnomaliesComponent } from './LogAnomaliesComponent';
+import {
+  type ExplainRange,
+  LogExplainPanelComponent,
+  LogExplainSelectionBar,
+} from './LogExplainPanelComponent';
 import { LogHistogramComponent } from './LogHistogramComponent';
+import { LogsInsightViewComponent } from './LogsInsightViewComponent';
+import { LogsViewTabs } from './LogsViewTabs';
 import { OnboardingTooltipComponent } from './OnboardingTooltipComponent';
 import { QueryBuilderComponent } from './QueryBuilderComponent';
 import { QueryResultsComponent } from './QueryResultsComponent';
@@ -58,6 +69,11 @@ import {
   TimeRangePickerComponent,
   type TimeRangeSelection,
 } from './TimeRangePickerComponent';
+import { ToggleGroupComponent } from './ToggleGroupComponent';
+import { LogsChartViewComponent } from './charts/LogsChartViewComponent';
+import type { ChartFilter } from './charts/LogsHeatmapComponent';
+import { SQLResultsChartComponent } from './charts/SQLResultsChartComponent';
+import { useAnomalyCount } from './useAnomalyCount';
 
 interface Props {
   projectId: string;
@@ -65,7 +81,22 @@ interface Props {
   user?: UserProfile;
   /** Show a log's trace on the Traces page. */
   onOpenTrace?: (traceId: string, timestamp: string) => void;
+  /** Opens Alerts › New rule prefilled from a chart; omit to hide "Create alert". */
+  onCreateAlert?: (draft: Partial<RuleRequest>) => void;
+  /** Open the Infrastructure page (from the Health map). */
+  onOpenInfrastructure?: () => void;
 }
+
+type ResultsView = 'lines' | 'chart';
+const RESULTS_VIEW_KEY = 'obzly-logs-results-view';
+
+const readResultsView = (key: string): ResultsView => {
+  try {
+    return localStorage.getItem(key) === 'chart' ? 'chart' : 'lines';
+  } catch {
+    return 'lines';
+  }
+};
 
 /**
  * The logs page. "Search" mode parses free text client-side into the same
@@ -83,8 +114,10 @@ const PATTERN_HASH_FIELD = 'pattern_hash';
 const LIVE_TAIL_QUICK_LEVELS = ['error', 'warn', 'info', 'debug'] as const;
 // A recent value's widened range starts this long before its last sighting.
 const RECENT_VALUE_MARGIN_MINUTES = 15;
+// Out of the flow and invisible, but still sized, so the chart keeps working.
+const HIDDEN_CHART_CLASS = 'invisible absolute inset-x-0 top-0 h-0 overflow-hidden';
 const LIVE_TAIL_LEVEL_CHIP_ACTIVE_CLASS =
-  'border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700';
+  'border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700';
 
 interface SavedQuery {
   mode: SearchMode;
@@ -99,6 +132,8 @@ export const QueryComponentComponent = ({
   contentHeight,
   user,
   onOpenTrace,
+  onCreateAlert,
+  onOpenInfrastructure,
 }: Props): React.JSX.Element => {
   const [isShowHowToSendLogsFromCode, setIsShowHowToSendLogsFromCode] = useState(false);
   const [queryableFields, setQueryableFields] = useState<QueryableField[]>([]);
@@ -150,6 +185,14 @@ export const QueryComponentComponent = ({
   const [liveTailEnabled, setLiveTailEnabled] = useState(false);
   // null until known; 'poll' when no push path works (e.g. a buffering proxy).
   const [liveTailMode, setLiveTailMode] = useState<'push' | 'poll' | null>(null);
+  // The Anomalies button's count, for the chart's search window.
+  const anomalyCount = useAnomalyCount(
+    projectId,
+    executedQueries.base,
+    executedQueries.timeRange,
+    mode === 'simple' && hasExecuted && !liveTailEnabled,
+    histogramRefreshToken,
+  );
   // Pause freezes the list but keeps the connection; new logs buffer in
   // liveTailBufferRef until Resume.
   const [liveTailPaused, setLiveTailPaused] = useState(false);
@@ -157,6 +200,21 @@ export const QueryComponentComponent = ({
   const [liveTailGapMessage, setLiveTailGapMessage] = useState<string | null>(null);
   // Persistent rather than a toast so the user can glance back at it.
   const [resultSummary, setResultSummary] = useState<string | null>(null);
+  // Lines or Chart, for search results and (separately) SQL results.
+  const [resultsView, setResultsView] = useState<ResultsView>(() =>
+    readResultsView(RESULTS_VIEW_KEY),
+  );
+  const [sqlView, setSqlView] = useState<ResultsView>(() =>
+    readResultsView(`${RESULTS_VIEW_KEY}-sql`),
+  );
+  // The header's view tab (LogsViewTabs); Search is the page below it.
+  const [logsView, setLogsView] = useState<string>(LOGS_SEARCH_VIEW);
+  // A range dragged on the histogram to explain, kept with the run it was picked on.
+  const [explain, setExplain] = useState<{
+    run: typeof executedQueries;
+    range: ExplainRange;
+    open: boolean;
+  } | null>(null);
 
   const timeRangeRef = useRef<() => TimeRange | null>(null);
   // The Advanced builder's query while it owns the search; currentQuery lags
@@ -194,6 +252,11 @@ export const QueryComponentComponent = ({
   const searchAbortRef = useRef<AbortController | null>(null);
 
   const { message } = App.useApp();
+  const {
+    settings: viewSettings,
+    update: updateViewSettings,
+    reset: resetViewSettings,
+  } = useLogsViewSettings();
 
   const isUserNewlyRegistered = (user: UserProfile): boolean => {
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
@@ -974,6 +1037,43 @@ export const QueryComponentComponent = ({
     }
   };
 
+  // A chart cell: narrow the range (undone with Zoom out), add its clauses
+  // and show the lines.
+  const handleApplyChartFilter = ({ from, to, clauses }: ChartFilter) => {
+    const helpers = timeRangeHelpersRef.current;
+    if (!helpers) return;
+    setZoomStack((stack) => [...stack, helpers.getSelection()]);
+    helpers.applyCustomRange({ from: dayjs(from), to: dayjs(to) });
+    if (clauses?.length) {
+      setSearchText((prev) => {
+        const trimmed = prev.trim();
+        const existing = splitTopLevelAndClauses(trimmed);
+        const added = clauses.filter((c) => !existing?.includes(c));
+        if (added.length === 0) return prev;
+        return [trimmed, ...added].filter(Boolean).join(' AND ');
+      });
+    }
+    changeResultsView('lines');
+    requestRun();
+  };
+
+  const handleSetChartRange = (from: number, to: number) => {
+    const helpers = timeRangeHelpersRef.current;
+    if (!helpers) return;
+    setZoomStack((stack) => [...stack, helpers.getSelection()]);
+    helpers.applyCustomRange({ from: dayjs(from), to: dayjs(to) });
+    requestRun();
+  };
+
+  const changeResultsView = (view: ResultsView, sql = false) => {
+    (sql ? setSqlView : setResultsView)(view);
+    try {
+      localStorage.setItem(sql ? `${RESULTS_VIEW_KEY}-sql` : RESULTS_VIEW_KEY, view);
+    } catch {
+      // A per-browser convenience only.
+    }
+  };
+
   const handleZoomOut = () => {
     const helpers = timeRangeHelpersRef.current;
     const previous = zoomStack[zoomStack.length - 1];
@@ -1134,48 +1234,190 @@ export const QueryComponentComponent = ({
     }
   }, [isInitialLoad, user]);
 
+  const sortControl =
+    mode === 'simple' ? (
+      <Tooltip
+        title={
+          sortOrder === 'desc'
+            ? 'Newest first - click for oldest first'
+            : 'Oldest first - click for newest first'
+        }
+      >
+        <Button
+          icon={sortOrder === 'desc' ? <SortDescendingOutlined /> : <SortAscendingOutlined />}
+          disabled={liveTailEnabled}
+          aria-label="Toggle sort order"
+          onClick={() => {
+            setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'));
+            setHasSearched(false);
+            // In the results toolbar the order should follow at once.
+            requestRun();
+          }}
+        >
+          {sortOrder === 'desc' ? 'Newest' : 'Oldest'}
+        </Button>
+      </Tooltip>
+    ) : null;
+
+  const liveControls =
+    mode === 'simple' ? (
+      <>
+        {liveTailEnabled && (
+          <Tooltip
+            title={
+              liveTailMode === 'poll'
+                ? 'Streaming isn’t reaching this browser (likely a proxy buffering the connection) - refreshing every 2s instead. See the deployment docs’ Live Tail section.'
+                : 'Streaming new logs in real time'
+            }
+          >
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/10 px-2.5 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+              LIVE{liveTailMode === 'poll' ? ' (polling)' : ''}
+            </span>
+          </Tooltip>
+        )}
+        {liveTailEnabled && liveTailGapMessage && (
+          <span className="text-xs text-gray-500 dark:text-gray-400">{liveTailGapMessage}</span>
+        )}
+        {liveTailEnabled && (
+          <Tooltip
+            title={
+              liveTailPaused
+                ? `Resume - ${liveTailPausedCount} new log${liveTailPausedCount === 1 ? '' : 's'} waiting`
+                : 'Pause - freeze the view without stopping the connection'
+            }
+          >
+            <Button
+              icon={liveTailPaused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+              onClick={liveTailPaused ? handleResumeLiveTail : handlePauseLiveTail}
+            >
+              {liveTailPaused ? `Resume (${liveTailPausedCount})` : 'Pause'}
+            </Button>
+          </Tooltip>
+        )}
+        {liveTailEnabled && (
+          <Tooltip title="Clear the displayed logs without stopping live tail">
+            <Button onClick={handleClearLiveTail}>Clear</Button>
+          </Tooltip>
+        )}
+        <Tooltip
+          title={
+            liveTailEnabled
+              ? 'Stop live tail'
+              : canEnableLiveTail
+                ? 'Live tail - stream new matching logs as they arrive'
+                : 'Enter a search filter first to enable live tail'
+          }
+        >
+          <Button
+            danger={liveTailEnabled}
+            icon={liveTailEnabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+            disabled={!liveTailEnabled && !canEnableLiveTail}
+            onClick={() => handleToggleLiveTail(!liveTailEnabled)}
+          >
+            Live
+          </Button>
+        </Tooltip>
+      </>
+    ) : null;
+
+  const pageSubtitle = isExecuting ? (
+    'Running query…'
+  ) : resultSummary ? (
+    <>
+      {resultSummary}
+      {mode === 'simple' && executedQueries.timeRange && (
+        <span className="ml-1 text-gray-400 dark:text-gray-500">
+          · {executedQueries.timeRange.from.format('MMM D, HH:mm:ss')} →{' '}
+          {executedQueries.timeRange.to.format('MMM D, HH:mm:ss')}
+        </span>
+      )}
+    </>
+  ) : (
+    'Search, filter and live-tail this project’s logs'
+  );
+
+  const showFieldsPanel = viewSettings.showFields && queryableFields.length > 0;
+
+  // Live tail streams lines only.
+  const showChart =
+    resultsView === 'chart' && !liveTailEnabled && hasExecuted && !!executedQueries.timeRange;
+  const viewSwitchFor = (view: ResultsView, sql: boolean) => (
+    <ToggleGroupComponent
+      label="Show as"
+      options={[
+        { value: 'lines' as const, label: 'Lines', pressed: view === 'lines' },
+        {
+          value: 'chart' as const,
+          label: 'Chart',
+          pressed: view === 'chart',
+          hint: sql
+            ? 'Draw the result: a time column and numbers, or a label and a number'
+            : 'Draw this search as a time series, top values, a table, a donut, a heatmap or a comparison',
+        },
+      ]}
+      onToggle={(next) => changeResultsView(next, sql)}
+    />
+  );
+  const isSearchView = logsView === LOGS_SEARCH_VIEW;
+  const activeExplain = explain?.run === executedQueries ? explain : null;
+  // Back to Search from another view, over that view's range (undone with Zoom out).
+  const showInSearch = (range: TimeRange) => {
+    setLogsView(LOGS_SEARCH_VIEW);
+    const helpers = timeRangeHelpersRef.current;
+    if (helpers && !liveTailEnabled) {
+      setZoomStack((stack) => [...stack, helpers.getSelection()]);
+      helpers.applyCustomRange(range);
+    }
+  };
+
   return (
     <div
       ref={containerRef}
-      className="ml-3 w-full space-y-3 overflow-y-auto"
+      className="ml-3 w-full space-y-4 overflow-y-auto pr-1 pb-4"
       style={{ height: contentHeight }}
     >
       <FloatingTopButtonComponent containerRef={containerRef} />
 
-      <div
-        ref={queryBuilderRef}
-        className="w-full space-y-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800"
-      >
-        <SearchBarComponent
-          mode={mode}
-          onModeChange={(newMode) => {
-            setMode(newMode);
-            setHasSearched(false);
-          }}
-          simpleText={simpleText}
-          onSimpleTextChange={(text) => {
-            setSearchText(text);
-            setHasSearched(false);
-          }}
-          sqlText={sqlText}
-          onSqlTextChange={(text) => {
-            setSqlText(text);
-            setHasSearched(false);
-          }}
-          isExecuting={isExecuting}
-          onRun={handleExecuteOrRefresh}
-          onStop={handleStop}
-          onReset={handleReset}
-          recentQueries={recentQueries}
-          onSelectRecentQuery={handleSelectRecentQuery}
-          savedSearches={savedSearches}
-          onSaveSearch={handleSaveSearch}
-          onSelectSavedSearch={handleSelectSavedSearch}
-          onDeleteSavedSearch={handleDeleteSavedSearch}
-          fields={queryableFields}
-          loadFieldValues={loadFieldValues}
-          controls={
-            <>
+      <div className="pt-1">
+        <PageHeader
+          title="Logs"
+          subtitle={pageSubtitle}
+          actions={<LogsViewTabs value={logsView} onChange={setLogsView} />}
+        />
+      </div>
+
+      <div ref={queryBuilderRef} className={isSearchView ? undefined : 'hidden'}>
+        <Card className="!gap-2 !p-4" bodyClassName="space-y-2">
+          <SearchBarComponent
+            mode={mode}
+            onModeChange={(newMode) => {
+              setMode(newMode);
+              setHasSearched(false);
+            }}
+            simpleText={simpleText}
+            onSimpleTextChange={(text) => {
+              setSearchText(text);
+              setHasSearched(false);
+            }}
+            sqlText={sqlText}
+            onSqlTextChange={(text) => {
+              setSqlText(text);
+              setHasSearched(false);
+            }}
+            isExecuting={isExecuting}
+            onRun={handleExecuteOrRefresh}
+            onStop={handleStop}
+            onReset={handleReset}
+            recentQueries={recentQueries}
+            onSelectRecentQuery={handleSelectRecentQuery}
+            savedSearches={savedSearches}
+            onSaveSearch={handleSaveSearch}
+            onSelectSavedSearch={handleSelectSavedSearch}
+            onDeleteSavedSearch={handleDeleteSavedSearch}
+            fields={queryableFields}
+            loadFieldValues={loadFieldValues}
+            controls={
               <div className={liveTailEnabled ? 'pointer-events-none opacity-50' : undefined}>
                 <TimeRangePickerComponent
                   compact
@@ -1192,211 +1434,94 @@ export const QueryComponentComponent = ({
                   }}
                 />
               </div>
-              {mode === 'simple' && (
-                <Tooltip
-                  title={
-                    sortOrder === 'desc'
-                      ? 'Newest first - click for oldest first'
-                      : 'Oldest first - click for newest first'
-                  }
-                >
-                  <Button
-                    icon={
-                      sortOrder === 'desc' ? <SortDescendingOutlined /> : <SortAscendingOutlined />
-                    }
-                    disabled={liveTailEnabled}
-                    aria-label="Toggle sort order"
-                    onClick={() => {
-                      setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'));
-                      setHasSearched(false);
-                    }}
-                  />
-                </Tooltip>
-              )}
-              {mode === 'simple' && (
-                <Tooltip
-                  title={
-                    liveTailEnabled
-                      ? 'Stop live tail'
-                      : canEnableLiveTail
-                        ? 'Live tail - stream new matching logs as they arrive'
-                        : 'Enter a search filter first to enable live tail'
-                  }
-                >
-                  <Button
-                    danger={liveTailEnabled}
-                    icon={liveTailEnabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-                    disabled={!liveTailEnabled && !canEnableLiveTail}
-                    onClick={() => handleToggleLiveTail(!liveTailEnabled)}
-                  >
-                    Live
-                  </Button>
-                </Tooltip>
-              )}
-            </>
-          }
-        />
-
-        {project?.plan?.warningText && (
-          <div className="text-xs text-orange-600 opacity-80">{project.plan.warningText}</div>
-        )}
-
-        <div className="flex min-h-[22px] flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            {mode === 'simple' && (
-              <FilterChipsComponent
-                clauses={splitTopLevelAndClauses(simpleText.trim())}
-                hiddenLevels={hiddenLevels}
-                onRemoveClause={handleRemoveClause}
-                onShowLevel={(level) => handleToggleLevel(level, true)}
-                onClearAll={handleClearAllFilters}
-              />
-            )}
-            {mode === 'simple' && liveTailEnabled && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                {liveTailEnabled && (
-                  <Tooltip
-                    title={
-                      liveTailMode === 'poll'
-                        ? 'Streaming isn’t reaching this browser (likely a proxy buffering the connection) - refreshing every 2s instead. See the deployment docs’ Live Tail section.'
-                        : 'Streaming new logs in real time'
-                    }
-                  >
-                    <span className="flex items-center gap-1 text-xs font-semibold text-red-500">
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
-                      LIVE{liveTailMode === 'poll' ? ' (polling)' : ''}
-                    </span>
-                  </Tooltip>
-                )}
-                {liveTailEnabled && (
-                  <Tooltip
-                    title={
-                      liveTailPaused
-                        ? `Resume - ${liveTailPausedCount} new log${liveTailPausedCount === 1 ? '' : 's'} waiting`
-                        : 'Pause - freeze the view without stopping the connection'
-                    }
-                  >
-                    <Button
-                      size="small"
-                      icon={liveTailPaused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
-                      onClick={liveTailPaused ? handleResumeLiveTail : handlePauseLiveTail}
-                    >
-                      {liveTailPaused ? `Resume (${liveTailPausedCount})` : 'Pause'}
-                    </Button>
-                  </Tooltip>
-                )}
-                {liveTailEnabled && (
-                  <Tooltip title="Clear the displayed logs without stopping live tail">
-                    <Button size="small" onClick={handleClearLiveTail}>
-                      Clear
-                    </Button>
-                  </Tooltip>
-                )}
-                {liveTailEnabled && liveTailGapMessage && (
-                  <span className="text-xs text-gray-500 dark:text-gray-300">
-                    {liveTailGapMessage}
-                  </span>
-                )}
-
-                <span className="text-xs text-gray-500 dark:text-gray-300">Quick filter:</span>
-                {LIVE_TAIL_QUICK_LEVELS.map((level) => {
-                  const isActive = simpleText.includes(`level:${level}`);
-                  return (
-                    <Button
-                      key={level}
-                      size="small"
-                      type={isActive ? 'primary' : 'default'}
-                      className={isActive ? LIVE_TAIL_LEVEL_CHIP_ACTIVE_CLASS : undefined}
-                      onClick={() => handleAddFilter('level', level)}
-                    >
-                      {level}
-                    </Button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="ml-auto flex items-center gap-3">
-            <span className="text-gray-500 dark:text-gray-300">
-              {isExecuting ? (
-                'Running query…'
-              ) : (
-                <>
-                  {resultSummary}
-                  {resultSummary && mode === 'simple' && executedQueries.timeRange && (
-                    <span className="ml-1 text-gray-400">
-                      · {executedQueries.timeRange.from.format('MMM D, HH:mm:ss')} →{' '}
-                      {executedQueries.timeRange.to.format('MMM D, HH:mm:ss')}
-                    </span>
-                  )}
-                </>
-              )}
-            </span>
-
-            {mode === 'simple' && (
-              <Button
-                type="link"
-                size="small"
-                className="!px-0 text-xs"
-                icon={showAdvancedBuilder ? <DownOutlined /> : <RightOutlined />}
-                onClick={() => setShowAdvancedBuilder((v) => !v)}
-              >
-                Advanced filters
-              </Button>
-            )}
-
-            {SHOW_HOW_TO_SEND_LOGS_FROM_CODE && (
-              <div ref={howToSendLogsButtonRef}>
-                <Button
-                  type="primary"
-                  size="small"
-                  onClick={handleHowToSendLogsClick}
-                  ghost
-                  className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                >
-                  How to send logs from code?
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {mode === 'simple' && showAdvancedBuilder && (
-          <div className="rounded border border-gray-100 bg-gray-50 p-4 dark:bg-gray-900">
-            <QueryBuilderComponent
-              fields={queryableFields}
-              query={currentQuery}
-              onChange={(query) => {
-                // One-way: the search text isn't regenerated from the tree.
-                builderQueryRef.current = query;
-                setSimpleText('');
-                setCurrentQuery(query);
-                setHasSearched(false);
-              }}
-              onFieldSearch={searchQueryableFields}
-            />
-          </div>
-        )}
-      </div>
-
-      {mode === 'simple' && hasExecuted && executedQueries.timeRange && !liveTailEnabled && (
-        <div className="h-48 w-full rounded-lg border border-gray-200 bg-white p-2 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <LogHistogramComponent
-            projectId={projectId}
-            query={executedQueries.base}
-            excludedLevels={executedQueries.hiddenLevels}
-            timeRange={executedQueries.timeRange}
-            refreshToken={histogramRefreshToken}
-            cursorTime={cursorTime}
-            onZoom={handleHistogramZoom}
-            onZoomOut={zoomStack.length > 0 ? handleZoomOut : undefined}
-            onTotal={handleHistogramTotal}
-            onLevelCounts={handleHistogramLevelCounts}
-            onAnomalies={() => setIsAnomaliesOpen(true)}
+            }
           />
-        </div>
-      )}
+
+          {project?.plan?.warningText && (
+            <div className="text-xs text-orange-600 opacity-80 dark:text-orange-400">
+              {project.plan.warningText}
+            </div>
+          )}
+
+          <div className="flex min-h-[22px] flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {mode === 'simple' && (
+                <FilterChipsComponent
+                  clauses={splitTopLevelAndClauses(simpleText.trim())}
+                  hiddenLevels={hiddenLevels}
+                  onRemoveClause={handleRemoveClause}
+                  onShowLevel={(level) => handleToggleLevel(level, true)}
+                  onClearAll={handleClearAllFilters}
+                />
+              )}
+              {mode === 'simple' && liveTailEnabled && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Quick filter:</span>
+                  {LIVE_TAIL_QUICK_LEVELS.map((level) => {
+                    const isActive = simpleText.includes(`level:${level}`);
+                    return (
+                      <Button
+                        key={level}
+                        size="small"
+                        type={isActive ? 'primary' : 'default'}
+                        className={isActive ? LIVE_TAIL_LEVEL_CHIP_ACTIVE_CLASS : undefined}
+                        onClick={() => handleAddFilter('level', level)}
+                      >
+                        {level}
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="ml-auto flex items-center gap-3">
+              {mode === 'simple' && (
+                <Button
+                  type="link"
+                  size="small"
+                  className="!px-0 text-xs"
+                  icon={showAdvancedBuilder ? <DownOutlined /> : <RightOutlined />}
+                  onClick={() => setShowAdvancedBuilder((v) => !v)}
+                >
+                  Advanced filters
+                </Button>
+              )}
+
+              {SHOW_HOW_TO_SEND_LOGS_FROM_CODE && (
+                <div ref={howToSendLogsButtonRef}>
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={handleHowToSendLogsClick}
+                    ghost
+                    className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
+                  >
+                    How to send logs from code?
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {mode === 'simple' && showAdvancedBuilder && (
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/60">
+              <QueryBuilderComponent
+                fields={queryableFields}
+                query={currentQuery}
+                onChange={(query) => {
+                  // One-way: the search text isn't regenerated from the tree.
+                  builderQueryRef.current = query;
+                  setSimpleText('');
+                  setCurrentQuery(query);
+                  setHasSearched(false);
+                }}
+                onFieldSearch={searchQueryableFields}
+              />
+            </div>
+          )}
+        </Card>
+      </div>
 
       <LogAnomaliesComponent
         projectId={projectId}
@@ -1410,9 +1535,34 @@ export const QueryComponentComponent = ({
         }}
       />
 
+      {!isSearchView && (
+        <LogsInsightViewComponent
+          view={logsView}
+          projectId={projectId}
+          query={mode === 'simple' ? executedQueries.effective : null}
+          searchText={mode === 'simple' && hasExecuted ? simpleText : ''}
+          onPatternFilter={(hash, exclude, range) => {
+            showInSearch(range);
+            (exclude ? handleExcludeFilter : handleAddFilter)(PATTERN_HASH_FIELD, hash);
+          }}
+          onOpenLogs={(clauses, range) => {
+            showInSearch(range);
+            setMode('simple');
+            setShowAdvancedBuilder(false);
+            setSearchText(clauses.join(' AND '));
+            requestRun();
+          }}
+          onFilter={(field, value, exclude, range) => {
+            showInSearch(range);
+            (exclude ? handleExcludeFilter : handleAddFilter)(field, value);
+          }}
+          onOpenInfrastructure={onOpenInfrastructure}
+        />
+      )}
+
       {mode === 'simple' ? (
-        <div className="flex w-full items-start gap-3">
-          {queryableFields.length > 0 && (
+        <div className={`flex w-full items-start gap-4 ${isSearchView ? '' : 'hidden'}`}>
+          {showFieldsPanel && (
             <FieldSidebarComponent
               projectId={projectId}
               fields={sidebarFields}
@@ -1426,29 +1576,126 @@ export const QueryComponentComponent = ({
               onShowOnlyLevel={handleShowOnlyLevel}
               onAddFilter={handleAddFilter}
               onAddRecentFilter={handleAddRecentFilter}
+              onHide={() => updateViewSettings({ showFields: false })}
             />
           )}
-          <div className="min-w-0 flex-1">
-            <QueryResultsComponent
-              queryResults={queryResults}
-              totalResults={totalResults}
-              hasExecuted={hasExecuted}
-              isExecuting={isExecuting}
-              hasMoreResults={!liveTailEnabled && hasMoreResults}
-              onLoadMore={handleLoadMore}
-              onAddFieldToQuery={handleAddFilter}
-              onExcludeFieldFromQuery={handleExcludeFilter}
-              onCursorTimeChange={setCursorTime}
-              onIncludePattern={(hash) => handleAddFilter(PATTERN_HASH_FIELD, hash)}
-              onExcludePattern={(hash) => handleExcludeFilter(PATTERN_HASH_FIELD, hash)}
-              projectId={projectId}
-              onOpenContextAsSearch={handleOpenContextAsSearch}
-              onOpenTrace={onOpenTrace}
-            />
+          <div className="relative min-w-0 flex-1 space-y-4">
+            {hasExecuted && executedQueries.timeRange && !liveTailEnabled && (
+              // Kept drawn, off the page, when the chart is off: it also
+              // supplies the total and the level counts.
+              <div className={viewSettings.showChart ? undefined : HIDDEN_CHART_CLASS}>
+                <Card className="!p-4" bodyClassName="h-44">
+                  <LogHistogramComponent
+                    projectId={projectId}
+                    query={executedQueries.base}
+                    excludedLevels={executedQueries.hiddenLevels}
+                    timeRange={executedQueries.timeRange}
+                    refreshToken={histogramRefreshToken}
+                    cursorTime={cursorTime}
+                    onZoom={handleHistogramZoom}
+                    onZoomOut={zoomStack.length > 0 ? handleZoomOut : undefined}
+                    onTotal={handleHistogramTotal}
+                    onLevelCounts={handleHistogramLevelCounts}
+                    onAnomalies={() => setIsAnomaliesOpen(true)}
+                    anomalyCount={anomalyCount}
+                    onSelectRange={(range) =>
+                      setExplain({ run: executedQueries, range, open: false })
+                    }
+                    selection={activeExplain?.range ?? null}
+                  />
+                </Card>
+              </div>
+            )}
+            {activeExplain && !liveTailEnabled && viewSettings.showChart && (
+              <LogExplainSelectionBar
+                range={activeExplain.range}
+                isExplaining={activeExplain.open}
+                onExplain={() => setExplain({ ...activeExplain, open: true })}
+                onZoom={() => {
+                  setExplain(null);
+                  handleHistogramZoom(activeExplain.range);
+                }}
+                onClear={() => setExplain(null)}
+              />
+            )}
+            {activeExplain?.open && !liveTailEnabled && viewSettings.showChart && (
+              <LogExplainPanelComponent
+                projectId={projectId}
+                query={executedQueries.effective}
+                range={activeExplain.range}
+                onFilter={(field, value, exclude) =>
+                  (exclude ? handleExcludeFilter : handleAddFilter)(field, value)
+                }
+                onClose={() => setExplain({ ...activeExplain, open: false })}
+              />
+            )}
+            {showChart && executedQueries.timeRange && (
+              <LogsChartViewComponent
+                projectId={projectId}
+                query={executedQueries.effective}
+                timeRange={executedQueries.timeRange}
+                refreshToken={histogramRefreshToken}
+                fields={sidebarFields}
+                viewSwitch={viewSwitchFor(resultsView, false)}
+                totalText={
+                  totalResults >= 0 ? `${totalResults.toLocaleString()} matching lines` : undefined
+                }
+                onApplyFilter={handleApplyChartFilter}
+                onSetRange={handleSetChartRange}
+                onFilterPattern={(hash) => {
+                  changeResultsView('lines');
+                  handleAddFilter(PATTERN_HASH_FIELD, hash);
+                }}
+                onCreateAlert={onCreateAlert}
+              />
+            )}
+            <div className={showChart ? 'hidden' : undefined}>
+              <QueryResultsComponent
+                queryResults={queryResults}
+                totalResults={totalResults}
+                hasExecuted={hasExecuted}
+                isExecuting={isExecuting}
+                hasMoreResults={!liveTailEnabled && hasMoreResults}
+                onLoadMore={handleLoadMore}
+                onAddFieldToQuery={handleAddFilter}
+                onExcludeFieldFromQuery={handleExcludeFilter}
+                onCursorTimeChange={setCursorTime}
+                onIncludePattern={(hash) => handleAddFilter(PATTERN_HASH_FIELD, hash)}
+                onExcludePattern={(hash) => handleExcludeFilter(PATTERN_HASH_FIELD, hash)}
+                projectId={projectId}
+                onOpenContextAsSearch={handleOpenContextAsSearch}
+                onOpenTrace={onOpenTrace}
+                view={viewSettings}
+                onViewChange={updateViewSettings}
+                onViewReset={resetViewSettings}
+                sortControl={sortControl}
+                liveControls={liveControls}
+                viewSwitch={liveTailEnabled ? undefined : viewSwitchFor(resultsView, false)}
+                onShowFields={
+                  !viewSettings.showFields && queryableFields.length > 0
+                    ? () => updateViewSettings({ showFields: true })
+                    : undefined
+                }
+                detailMaxHeight={contentHeight - 16}
+              />
+            </div>
           </div>
         </div>
       ) : (
-        hasExecuted && <SQLResultsTableComponent response={sqlResponse} isExecuting={isExecuting} />
+        hasExecuted &&
+        isSearchView && (
+          <Card
+            title="Results"
+            className="!p-4"
+            extra={sqlResponse && viewSwitchFor(sqlView, true)}
+          >
+            {sqlView === 'chart' && sqlResponse ? (
+              <SQLResultsChartComponent response={sqlResponse} />
+            ) : (
+              <SQLResultsTableComponent response={sqlResponse} isExecuting={isExecuting} />
+            )}
+          </Card>
+        )
       )}
 
       {isShowHowToSendLogsFromCode && (

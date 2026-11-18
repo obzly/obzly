@@ -5,10 +5,12 @@ import {
   MEMORY_LIMITER_PROCESSOR_YAML,
   OTLP_REMOTE_FIELD,
   RESOURCEDETECTION_PROCESSOR_YAML,
+  SOURCE_NAME_FIELD,
   extensionsYaml,
   otlpHttpExporterYaml,
   otlpReceiverYaml,
   serviceExtensionsYaml,
+  sourceNameAttributeYaml,
 } from './otelCollectorCommon';
 import type { DataSourceDefinition } from './types';
 
@@ -35,6 +37,7 @@ export const nginxDataSource: DataSourceDefinition = {
       helpText:
         'Requires an "nginx_status" location block with stub_status on; leave as-is and skip enabling it if you only want logs.',
     },
+    SOURCE_NAME_FIELD,
     OTLP_REMOTE_FIELD,
   ],
   build: ({ baseUrl, apiKey, fieldValues }) => {
@@ -107,7 +110,7 @@ ${RESOURCEDETECTION_PROCESSOR_YAML}
     attributes:
       - key: service.name
         value: nginx
-        action: upsert
+        action: upsert${sourceNameAttributeYaml(fieldValues)}
 
 ${extensionsYaml({ fileStorageDir: FILE_STORAGE_DIR })}
 

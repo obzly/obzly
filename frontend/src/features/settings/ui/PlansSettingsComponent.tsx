@@ -1,5 +1,5 @@
 import { LoadingOutlined } from '@ant-design/icons';
-import { App, Button, Checkbox, Input, InputNumber, Modal, Select, Spin, Table, Tag } from 'antd';
+import { App, Button, Checkbox, Input, InputNumber, Modal, Select, Spin, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 
@@ -8,6 +8,10 @@ import type { CreatePlanRequest } from '../../../entity/users/model/CreatePlanRe
 import type { UpdatePlanRequest } from '../../../entity/users/model/UpdatePlanRequest';
 import type { UserPlan } from '../../../entity/users/model/UserPlan';
 import { UserPlanType } from '../../../entity/users/model/UserPlanType';
+import { Card } from '../../../shared/ui/v2';
+
+const PILL = 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium';
+const PILL_NEUTRAL = `${PILL} bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300`;
 
 const { TextArea } = Input;
 
@@ -281,13 +285,22 @@ export const PlansSettingsComponent = () => {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      render: (name: string) => <span className="font-medium">{name}</span>,
     },
     {
       title: 'Type',
       dataIndex: 'type',
       key: 'type',
       render: (type: UserPlanType) => (
-        <Tag color={type === UserPlanType.EXTENDED ? 'blue' : 'default'}>{type}</Tag>
+        <span
+          className={
+            type === UserPlanType.EXTENDED
+              ? `${PILL} bg-blue-500/15 text-[var(--v2-blue)]`
+              : PILL_NEUTRAL
+          }
+        >
+          {type}
+        </span>
       ),
     },
     {
@@ -295,7 +308,13 @@ export const PlansSettingsComponent = () => {
       dataIndex: 'isPublic',
       key: 'isPublic',
       render: (isPublic: boolean) => (
-        <Tag color={isPublic ? 'green' : 'default'}>{isPublic ? 'Yes' : 'No'}</Tag>
+        <span
+          className={
+            isPublic ? `${PILL} bg-[var(--v2-ok-soft)] text-[var(--v2-accent)]` : PILL_NEUTRAL
+          }
+        >
+          {isPublic ? 'Yes' : 'No'}
+        </span>
       ),
     },
     {
@@ -307,7 +326,7 @@ export const PlansSettingsComponent = () => {
       title: 'Actions',
       key: 'actions',
       render: (_: unknown, record: UserPlan) => (
-        <div className="flex space-x-2">
+        <div className="flex gap-2">
           <Button size="small" onClick={() => handleEdit(record)}>
             Edit
           </Button>
@@ -322,18 +341,19 @@ export const PlansSettingsComponent = () => {
   const deletingPlan = plans.find((p) => p.id === deletingPlanId);
 
   return (
-    <div className="my-8 max-w-4xl">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Plans Management</h2>
+    <Card
+      title="Plans Management"
+      subtitle="Plans organizations can be put on"
+      extra={
         <Button
           type="primary"
           onClick={handleCreate}
-          className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
         >
           Create Plan
         </Button>
-      </div>
-
+      }
+    >
       {isLoading ? (
         <div className="flex items-center py-4">
           <Spin indicator={<LoadingOutlined spin />} />
@@ -352,8 +372,7 @@ export const PlansSettingsComponent = () => {
         width={650}
         okText={editingPlan ? (isUnsaved ? 'Update' : 'No Changes') : 'Create'}
         okButtonProps={{
-          className:
-            'border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700',
+          className: 'border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700',
           disabled: editingPlan ? !isUnsaved : false,
         }}
       >
@@ -438,7 +457,7 @@ export const PlansSettingsComponent = () => {
             />
           </div>
 
-          <div className="rounded border border-gray-200 p-3 dark:border-gray-700">
+          <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
             <h3 className="mb-2 text-sm font-semibold">Limits</h3>
 
             <div className="space-y-2 text-sm">
@@ -598,6 +617,6 @@ export const PlansSettingsComponent = () => {
           action cannot be undone.
         </p>
       </Modal>
-    </div>
+    </Card>
   );
 };

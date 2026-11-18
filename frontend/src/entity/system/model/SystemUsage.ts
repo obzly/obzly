@@ -19,4 +19,6 @@ export interface UsageStorage {
 export interface SystemUsage {
   hours: UsageHour[];
   storage: UsageStorage[];
+  /** How many projects the Site has; missing from older Sites. */
+  projects?: number;
 }

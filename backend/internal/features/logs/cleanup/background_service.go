@@ -27,7 +27,7 @@ type LogCleanupBackgroundService struct {
 	wg     sync.WaitGroup
 
 	// leaderLockClient backs a Valkey lease (util/leaderlock) taken before each
-	// pass, so only one replica runs a given pass at a time.
+	// pass, so one replica runs a given pass once per interval.
 	leaderLockClient valkey.Client
 }
 
@@ -119,13 +119,13 @@ func (s *LogCleanupBackgroundService) quotaEnforcerWorker() {
 			return
 
 		case <-ticker.C:
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "logs-quota-enforcement",
-				leaderLockTTL(quotaEnforcementInterval),
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "logs-quota-enforcement",
+				quotaEnforcementInterval, leaderLockTTL(quotaEnforcementInterval),
 				func(ctx context.Context) error { return s.enforceAllProjectQuotas() })
 			if err != nil {
 				s.logger.Error("Error during quota enforcement", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping quota enforcement pass - another replica holds the lock")
+				s.logger.Debug("Skipping quota enforcement pass - ran or is running on another replica this interval")
 			}
 		}
 	}
@@ -159,13 +159,13 @@ func (s *LogCleanupBackgroundService) retentionWorker() {
 			return
 
 		case <-ticker.C:
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "logs-retention-cleanup",
-				leaderLockTTL(retentionCleanupInterval),
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "logs-retention-cleanup",
+				retentionCleanupInterval, leaderLockTTL(retentionCleanupInterval),
 				func(ctx context.Context) error { return s.enforceAllProjectsRetention() })
 			if err != nil {
 				s.logger.Error("Error during retention cleanup", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping retention cleanup pass - another replica holds the lock")
+				s.logger.Debug("Skipping retention cleanup pass - ran or is running on another replica this interval")
 			}
 		}
 	}
@@ -209,13 +209,13 @@ func (s *LogCleanupBackgroundService) compactionWorker() {
 				s.uploadPendingSegments()
 				continue
 			}
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "logs-compaction",
-				leaderLockTTL(compactionInterval),
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "logs-compaction",
+				compactionInterval, leaderLockTTL(compactionInterval),
 				func(ctx context.Context) error { return s.compactAllProjects(nil) })
 			if err != nil {
 				s.logger.Error("Error during compaction", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping compaction pass - another replica holds the lock")
+				s.logger.Debug("Skipping compaction pass - ran or is running on another replica this interval")
 			}
 			s.uploadPendingSegments()
 		}
@@ -299,13 +299,13 @@ func (s *LogCleanupBackgroundService) reconciliationWorker() {
 			return
 
 		case <-ticker.C:
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "logs-reconciliation",
-				leaderLockTTL(reconciliationInterval),
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "logs-reconciliation",
+				reconciliationInterval, leaderLockTTL(reconciliationInterval),
 				func(ctx context.Context) error { return s.reconcileSegments() })
 			if err != nil {
 				s.logger.Error("Error during segment reconciliation", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping reconciliation pass - another replica holds the lock")
+				s.logger.Debug("Skipping reconciliation pass - ran or is running on another replica this interval")
 			}
 		}
 	}

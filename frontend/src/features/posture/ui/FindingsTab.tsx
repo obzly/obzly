@@ -9,7 +9,19 @@ import {
   type PostureFilters,
   postureApi,
 } from '../../../entity/posture';
-import { type CostSite, SiteErrors, type SiteOutcome, fanOut } from '../../cost';
+import { Card } from '../../../shared/ui/v2';
+import {
+  type CostSite,
+  IconLabel,
+  ProviderMark,
+  RegionMark,
+  ServiceIcon,
+  SiteErrors,
+  type SiteOutcome,
+  StandardMark,
+  fanOut,
+  guessProvider,
+} from '../../cost';
 import { regionLabel, shortResource } from '../lib/format';
 import { type SiteFinding, mergeFacets, mergeFindings } from '../lib/merge';
 import { FindingDrawer } from './FindingDrawer';
@@ -41,6 +53,22 @@ const VALUE_LABEL: Record<string, string> = {
   native: 'Native',
   baseline: 'Obzly baseline',
   global: 'Account-wide',
+};
+
+/** Provider marks beside the filter values that name a cloud, account, region or standard. */
+const facetIcon = (key: keyof PostureFilters, value: string, label: string) => {
+  switch (key) {
+    case 'provider':
+      return <ProviderMark provider={value} size={14} />;
+    case 'account':
+      return <ProviderMark provider={guessProvider(value)} size={14} />;
+    case 'region':
+      return <RegionMark region={value} size={14} />;
+    case 'standard':
+      return <StandardMark standard={value} name={label} size={14} />;
+    default:
+      return null;
+  }
 };
 
 export const FindingsTab = ({ sites, refresh, filters, onChange }: Props) => {
@@ -110,7 +138,13 @@ export const FindingsTab = ({ sites, refresh, filters, onChange }: Props) => {
         ellipsis: true,
         render: (_, finding) => (
           <Tooltip title={finding.resourceKey}>
-            <span className="font-mono text-xs">{shortResource(finding.resourceKey)}</span>
+            <span className="inline-flex items-center gap-1.5">
+              <ServiceIcon
+                text={finding.resourceType || finding.resourceKey}
+                provider={finding.provider}
+              />
+              <span className="font-mono text-xs">{shortResource(finding.resourceKey)}</span>
+            </span>
           </Tooltip>
         ),
       },
@@ -120,7 +154,9 @@ export const FindingsTab = ({ sites, refresh, filters, onChange }: Props) => {
         width: 200,
         render: (_, finding) => (
           <span className="text-xs">
-            {finding.account}
+            <IconLabel icon={<ProviderMark provider={finding.provider} size={14} />}>
+              {finding.account}
+            </IconLabel>
             <span className="block text-gray-500 dark:text-gray-400">
               {regionLabel(finding.region)}
               {sites.length > 1 && ` · ${finding.siteName}`}
@@ -149,80 +185,101 @@ export const FindingsTab = ({ sites, refresh, filters, onChange }: Props) => {
   );
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Segmented
-          size="small"
-          value={filters.status ?? 'open'}
-          onChange={(value) => set({ status: value as FindingStatusFilter })}
-          options={[
-            { value: 'open', label: 'Open' },
-            { value: 'suppressed', label: 'Suppressed' },
-            { value: 'resolved', label: 'Resolved' },
-            { value: 'all', label: 'All' },
-          ]}
-        />
-        <Input.Search
-          size="small"
-          allowClear
-          style={{ width: 280 }}
-          placeholder="Title, control or resource"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          onSearch={(value) => set({ search: value.trim() || undefined })}
-        />
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {DIMENSIONS.map((dimension) => {
-          const values = facets.dimensions[dimension.key] ?? [];
-          const selected = (filters[dimension.key] as string[] | undefined) ?? [];
-          return (
-            <Select
-              key={dimension.key}
-              size="small"
-              mode="multiple"
-              allowClear
-              maxTagCount={1}
-              className="min-w-36"
-              placeholder={dimension.label}
-              value={selected}
-              onChange={(next: string[]) =>
-                set({ [dimension.key]: next.length ? next : undefined })
-              }
-              options={[
-                ...values.map((value) => ({
-                  value: value.value,
-                  label: `${value.label || VALUE_LABEL[value.value] || value.value} (${value.count})`,
-                })),
-                ...selected
-                  .filter((value) => !values.some((item) => item.value === value))
-                  .map((value) => ({ value, label: VALUE_LABEL[value] || value })),
-              ]}
-              notFoundContent="No values with the other filters"
-            />
-          );
-        })}
-      </div>
+    <div className="flex flex-col gap-4">
+      <Card bodyClassName="flex flex-col gap-3">
+        <div
+          role="group"
+          aria-label="Findings filters"
+          className="flex flex-wrap items-center gap-2"
+        >
+          <Segmented
+            size="small"
+            aria-label="Status"
+            value={filters.status ?? 'open'}
+            onChange={(value) => set({ status: value as FindingStatusFilter })}
+            options={[
+              { value: 'open', label: 'Open' },
+              { value: 'suppressed', label: 'Suppressed' },
+              { value: 'resolved', label: 'Resolved' },
+              { value: 'all', label: 'All' },
+            ]}
+          />
+          <Input.Search
+            size="small"
+            allowClear
+            style={{ width: 280 }}
+            placeholder="Title, control or resource"
+            aria-label="Search findings"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            onSearch={(value) => set({ search: value.trim() || undefined })}
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {DIMENSIONS.map((dimension) => {
+            const values = facets.dimensions[dimension.key] ?? [];
+            const selected = (filters[dimension.key] as string[] | undefined) ?? [];
+            return (
+              <Select
+                key={dimension.key}
+                size="small"
+                mode="multiple"
+                allowClear
+                maxTagCount={1}
+                className="min-w-36"
+                placeholder={dimension.label}
+                value={selected}
+                onChange={(next: string[]) =>
+                  set({ [dimension.key]: next.length ? next : undefined })
+                }
+                options={[
+                  ...values.map((value) => ({
+                    value: value.value,
+                    label: `${value.label || VALUE_LABEL[value.value] || value.value} (${value.count})`,
+                  })),
+                  ...selected
+                    .filter((value) => !values.some((item) => item.value === value))
+                    .map((value) => ({ value, label: VALUE_LABEL[value] || value })),
+                ]}
+                notFoundContent="No values with the other filters"
+                aria-label={dimension.label}
+                optionRender={(option) => (
+                  <IconLabel
+                    icon={facetIcon(dimension.key, String(option.value), String(option.label))}
+                  >
+                    {option.label}
+                  </IconLabel>
+                )}
+              />
+            );
+          })}
+        </div>
+      </Card>
 
       {result && <SiteErrors outcomes={result.outcomes} />}
-      <Table<SiteFinding>
-        size="small"
-        loading={loading}
-        rowKey={(finding) => `${finding.siteId}/${finding.id}`}
-        dataSource={result?.findings ?? []}
-        columns={columns}
-        scroll={{ x: 'max-content' }}
-        locale={{ emptyText: 'No findings match' }}
-        pagination={{
-          current: page,
-          pageSize: PAGE,
-          total: result?.total ?? 0,
-          showSizeChanger: false,
-          onChange: setPage,
-          showTotal: (total) => `${total} findings`,
-        }}
-        onRow={(finding) => ({ onClick: () => setOpen(finding), className: 'cursor-pointer' })}
-      />
+      <Card
+        title="Findings"
+        subtitle={result ? `${result.total} findings, most severe first` : undefined}
+      >
+        <Table<SiteFinding>
+          size="small"
+          loading={loading}
+          rowKey={(finding) => `${finding.siteId}/${finding.id}`}
+          dataSource={result?.findings ?? []}
+          columns={columns}
+          scroll={{ x: 'max-content' }}
+          locale={{ emptyText: 'No findings match' }}
+          pagination={{
+            current: page,
+            pageSize: PAGE,
+            total: result?.total ?? 0,
+            showSizeChanger: false,
+            onChange: setPage,
+            showTotal: (total) => `${total} findings`,
+          }}
+          onRow={(finding) => ({ onClick: () => setOpen(finding), className: 'cursor-pointer' })}
+        />
+      </Card>
       {open && (
         <FindingDrawer
           siteId={open.siteId}

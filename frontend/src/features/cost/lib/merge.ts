@@ -178,6 +178,8 @@ export const mergeSummary = (
       monthToDate: sum((summary) => summary.monthToDate),
       lastMonth: sum((summary) => summary.lastMonth),
       lastMonthSameDays: sum((summary) => summary.lastMonthSameDays),
+      // Final only when every Site's part is: one still changing changes the total.
+      lastMonthFinal: list.every((summary) => summary.lastMonthFinal === true),
       // A forecast missing on one Site would understate the total, so there's none then.
       forecast: list.every((summary) => summary.forecast !== undefined)
         ? sum((summary) => summary.forecast ?? 0)

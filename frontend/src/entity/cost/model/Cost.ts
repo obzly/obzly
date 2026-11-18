@@ -78,6 +78,8 @@ export interface CurrencySummary {
   monthToDate: number;
   lastMonth: number;
   lastMonthSameDays: number;
+  /** No day of last month is estimated and every source has finalised it: it won't change. */
+  lastMonthFinal?: boolean;
   forecast?: number;
   daily: DailyPoint[];
 }

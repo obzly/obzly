@@ -6,6 +6,10 @@ export interface OAuthConsentInfo {
   scope: string;
   // True when the client proved its identity with an https metadata document.
   verifiedIdentity: boolean;
+  // The client asked for mcp:write; granted only if the user ticks the toggle.
+  writeRequested: boolean;
+  // Write was requested but this session hasn't passed MFA, so it can't be granted.
+  writeNeedsMfa: boolean;
 }
 
 export interface OAuthConnectedApp {
@@ -14,6 +18,7 @@ export interface OAuthConnectedApp {
   clientId: string;
   lastUsedAt: string;
   expiresAt: string;
+  scopes?: string[];
 }
 
 export type OAuthValidateResult =

@@ -133,7 +133,7 @@ describe('merging Sites', () => {
       { value: 'eu-west-1', amounts: { USD: 5, EUR: 1 } },
     ]);
 
-    const summary = (forecast?: number) => ({
+    const summary = (forecast?: number, lastMonthFinal = true) => ({
       today: '2026-11-10',
       currencies: [
         {
@@ -141,6 +141,7 @@ describe('merging Sites', () => {
           monthToDate: 100,
           lastMonth: 300,
           lastMonthSameDays: 90,
+          lastMonthFinal,
           forecast,
           daily: [{ day: '2026-11-09', amount: 10, estimated: true }],
         },
@@ -160,6 +161,12 @@ describe('merging Sites', () => {
       { site: site('b'), value: summary() },
     ]);
     expect(one.currencies[0].forecast).toBeUndefined();
+    expect(both.currencies[0].lastMonthFinal).toBe(true);
+    const settling = mergeSummary([
+      { site: site('a'), value: summary(310) },
+      { site: site('b'), value: summary(290, false) },
+    ]);
+    expect(settling.currencies[0].lastMonthFinal).toBe(false);
   });
 });
 

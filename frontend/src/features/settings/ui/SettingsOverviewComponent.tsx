@@ -1,7 +1,13 @@
 // On a control plane, a Site that doesn't answer shows as such instead of
 // failing the page.
-import { CopyOutlined, LoadingOutlined, RightOutlined } from '@ant-design/icons';
-import { App, Button, Progress, Spin, Table, Tooltip } from 'antd';
+import {
+  CloudSyncOutlined,
+  CopyOutlined,
+  ExclamationCircleOutlined,
+  LoadingOutlined,
+  RightOutlined,
+} from '@ant-design/icons';
+import { App, Button, Spin, Table, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import type { EChartsOption } from 'echarts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -23,7 +29,8 @@ import { userManagementApi } from '../../../entity/users/api/userManagementApi';
 import type { UserProfile } from '../../../entity/users/model/UserProfile';
 import { UserRole } from '../../../entity/users/model/UserRole';
 import { copyToClipboard, useVisibleInterval } from '../../../shared/lib';
-import { type ChartColors, EChart, Panel } from '../../synthetics';
+import { Card, KpiTile } from '../../../shared/ui/v2';
+import { type ChartColors, EChart } from '../../synthetics';
 import { type SettingsTab, TAB_LABEL } from '../lib/tabs';
 
 // Release builds are numbered; a local build says dev.
@@ -58,12 +65,6 @@ const USERS_LIMIT = 1000;
 // A Site fetches shared settings every 5 minutes; three missed fetches is stale.
 const SYNC_STALE_MS = 15 * 60_000;
 const SIGNALS: UsageSignal[] = ['logs', 'metrics', 'traces'];
-const SIGNAL_COLOR: Record<UsageSignal, string> = {
-  logs: '#059669',
-  metrics: '#0ea5e9',
-  traces: '#8b5cf6',
-};
-const SITE_COLORS = ['#059669', '#0ea5e9', '#8b5cf6', '#f97316', '#ec4899', '#84cc16', '#64748b'];
 const HEALTH_COLOR: Record<Health, string> = {
   up: '#10b981',
   degraded: '#f59e0b',
@@ -82,20 +83,51 @@ const formatBytes = (bytes?: number): string => {
 
 const percent = (used: number, total: number) => (total > 0 ? (used / total) * 100 : 0);
 
+const meterColor = (value: number) =>
+  value >= 90 ? 'var(--v2-red)' : value >= 75 ? 'var(--v2-orange)' : 'var(--v2-accent)';
+
 const meter = (value: number | undefined, label: string) =>
   value === undefined ? (
     '—'
   ) : (
     <Tooltip title={label}>
-      <div className="w-24">
-        <Progress
-          percent={Math.round(value)}
-          size="small"
-          strokeColor={value >= 90 ? '#dc2626' : value >= 75 ? '#d97706' : '#059669'}
-        />
-      </div>
+      <span className="flex w-24 items-center gap-2">
+        <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--v2-track)]">
+          <span
+            className="absolute inset-y-0 left-0 rounded-full"
+            style={{ width: `${Math.min(value, 100)}%`, background: meterColor(value) }}
+          />
+        </span>
+        <span className="text-xs text-gray-700 dark:text-gray-200">{Math.round(value)}%</span>
+      </span>
     </Tooltip>
   );
+
+const PILL = 'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium';
+const HEALTH_PILL: Record<Health, string> = {
+  up: 'bg-[var(--v2-ok-soft)] text-[var(--v2-accent)]',
+  degraded: 'bg-orange-500/15 text-[var(--v2-orange)]',
+  down: 'bg-red-500/15 text-[var(--v2-red)]',
+  unknown: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+};
+
+const healthPill = (item: Deployment) => (
+  <Tooltip title={item.message ?? item.health}>
+    <span className={`${PILL} ${HEALTH_PILL[item.health]}`}>
+      <span
+        className="inline-block h-2 w-2 rounded-full"
+        style={{ background: HEALTH_COLOR[item.health] }}
+      />
+      {item.health === 'down' ? 'Down' : item.health === 'degraded' ? 'Slow' : 'Up'}
+    </span>
+  </Tooltip>
+);
+
+// Ingested in the last 24 h for one deployment; undefined when its usage didn't load.
+const ingestedOf = (item: Deployment) =>
+  item.usage ? item.usage.hours.reduce((total, hour) => total + hour.rawBytes, 0) : undefined;
+const storedOf = (item: Deployment) =>
+  item.usage ? item.usage.storage.reduce((total, row) => total + row.bytes, 0) : undefined;
 
 export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
   const { message } = App.useApp();
@@ -297,7 +329,7 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
             type: 'bar',
             stack: 'ingest',
             barMaxWidth: 18,
-            itemStyle: { color: SITE_COLORS[index % SITE_COLORS.length] },
+            itemStyle: { color: colors.series[index % colors.series.length] },
             data: hours.map((hour) =>
               Number(
                 (
@@ -345,12 +377,12 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
           axisLine: { show: false },
           axisTick: { show: false },
         },
-        series: SIGNALS.map((signal) => ({
+        series: SIGNALS.map((signal, index) => ({
           name: signal,
           type: 'bar',
           stack: 'stored',
           barMaxWidth: 16,
-          itemStyle: { color: SIGNAL_COLOR[signal] },
+          itemStyle: { color: colors.series[index % colors.series.length] },
           data: withUsage.map(
             (item) =>
               (item.usage?.storage.find((row) => row.signal === signal)?.bytes ?? 0) / 1024 ** 3,
@@ -421,26 +453,105 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">
         {tiles.map((tile) => (
-          <div
+          <KpiTile
             key={tile.label}
-            className="min-w-0 rounded-lg border border-gray-200 p-3 dark:border-gray-700"
-          >
-            <div className="text-xs font-medium tracking-wide text-gray-500 uppercase dark:text-gray-400">
-              {tile.label}
-            </div>
-            <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">
-              {tile.value}
-            </div>
-            <Tooltip title={tile.note} placement="top">
-              <div className="truncate text-xs text-gray-500 dark:text-gray-400">{tile.note}</div>
-            </Tooltip>
-          </div>
+            label={tile.label}
+            value={tile.value}
+            note={
+              <Tooltip title={tile.note} placement="top">
+                <span className="block truncate">{tile.note}</span>
+              </Tooltip>
+            }
+          />
         ))}
       </div>
 
-      <Panel
+      {IS_CONTROL_PLANE && sites.length > 0 && (
+        <section aria-label="Sites" className="flex flex-col gap-3">
+          <div>
+            <h2 className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-50">
+              {TAB_LABEL.sites}
+            </h2>
+            <p className="m-0 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              Each Site stores its own data; the control plane only signs people in and routes them
+            </p>
+          </div>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-3">
+            {sites.map((item) => {
+              const dashboard = item.dashboard;
+              const bars: [string, number | undefined, string][] = [
+                ['CPU', dashboard?.cpuPercent, 'CPU'],
+                [
+                  'Memory',
+                  dashboard && percent(dashboard.memoryUsedBytes, dashboard.memoryTotalBytes),
+                  dashboard
+                    ? `${formatBytes(dashboard.memoryUsedBytes)} of ${formatBytes(dashboard.memoryTotalBytes)}`
+                    : 'Memory',
+                ],
+                [
+                  'Disk',
+                  dashboard && percent(dashboard.diskUsedBytes, dashboard.diskTotalBytes),
+                  dashboard
+                    ? `${formatBytes(dashboard.diskUsedBytes)} of ${formatBytes(dashboard.diskTotalBytes)}`
+                    : 'Disk',
+                ],
+              ];
+              return (
+                <button
+                  key={item.scope}
+                  type="button"
+                  onClick={() => onNavigate('sites', item.siteId)}
+                  className="hover:border-accent-500/60 flex cursor-pointer flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 text-left dark:border-gray-700 dark:bg-gray-800"
+                >
+                  <span className="flex items-start justify-between gap-2">
+                    <span className="flex min-w-0 flex-col">
+                      <strong className="truncate font-semibold text-gray-900 dark:text-gray-50">
+                        {item.name}
+                      </strong>
+                      <span className="font-mono text-xs text-gray-500 dark:text-gray-400">
+                        {item.version ?? 'version n/a'}
+                      </span>
+                    </span>
+                    {healthPill(item)}
+                  </span>
+                  <span className="flex flex-col gap-1.5">
+                    {bars.map(([label, value, tip]) => (
+                      <span key={label} className="flex items-center gap-2 text-xs">
+                        <span className="w-14 text-gray-500 dark:text-gray-400">{label}</span>
+                        {value === undefined ? (
+                          <span className="text-gray-500 dark:text-gray-400">no data</span>
+                        ) : (
+                          meter(value, tip)
+                        )}
+                      </span>
+                    ))}
+                  </span>
+                  <span className="flex gap-6 border-t border-gray-200 pt-2 dark:border-gray-700">
+                    <span className="flex flex-col">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        Ingested, 24 h
+                      </span>
+                      <b className="font-semibold text-gray-900 dark:text-gray-50">
+                        {ingestedOf(item) === undefined ? 'n/a' : formatBytes(ingestedOf(item))}
+                      </b>
+                    </span>
+                    <span className="flex flex-col">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Stored</span>
+                      <b className="font-semibold text-gray-900 dark:text-gray-50">
+                        {storedOf(item) === undefined ? 'n/a' : formatBytes(storedOf(item))}
+                      </b>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <Card
         title="System dashboard"
         subtitle={
           IS_CONTROL_PLANE
@@ -459,17 +570,7 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
               title: 'Status',
               key: 'health',
               width: 90,
-              render: (_, item) => (
-                <Tooltip title={item.message ?? item.health}>
-                  <span className="inline-flex items-center gap-1.5 text-xs">
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ background: HEALTH_COLOR[item.health] }}
-                    />
-                    {item.health === 'down' ? 'Down' : item.health === 'degraded' ? 'Slow' : 'Up'}
-                  </span>
-                </Tooltip>
-              ),
+              render: (_, item) => healthPill(item),
             },
             {
               title: 'Deployment',
@@ -518,9 +619,13 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
               key: 'ingest',
               width: 130,
               render: (_, item) =>
-                item.dashboard
-                  ? `${formatBytes(item.dashboard.ingestedRawBytes)} / ${item.dashboard.ingestionWindowMinutes} min`
-                  : '—',
+                item.dashboard ? (
+                  <span className="font-mono text-xs">
+                    {`${formatBytes(item.dashboard.ingestedRawBytes)} / ${item.dashboard.ingestionWindowMinutes} min`}
+                  </span>
+                ) : (
+                  '—'
+                ),
             },
             {
               title: 'Data from',
@@ -531,31 +636,39 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
                   .map((row) => row.oldest)
                   .filter((value): value is string => !!value)
                   .sort()[0];
-                return oldest ? dayjs(oldest).format('D MMM YYYY') : '—';
+                return (
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {oldest ? dayjs(oldest).format('D MMM YYYY') : '—'}
+                  </span>
+                );
               },
             },
           ]}
         />
-      </Panel>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Needs attention" subtitle="Click to go to the right tab">
+        <Card title="Needs attention" subtitle="Click to go to the right tab">
           {attention.length === 0 ? (
             <div className="py-3 text-sm text-gray-500 dark:text-gray-400">
               Nothing needs attention.
             </div>
           ) : (
-            <ul className="m-0 flex list-none flex-col divide-y divide-gray-100 p-0 dark:divide-gray-700">
+            <ul className="m-0 flex list-none flex-col divide-y divide-gray-200 p-0 dark:divide-gray-700">
               {attention.map((item) => (
-                <li
-                  key={item.text}
-                  className="flex items-center justify-between gap-3 py-2 text-sm"
-                >
-                  <span className="text-gray-800 dark:text-gray-100">{item.text}</span>
+                <li key={item.text} className="flex items-center gap-3 py-2 text-sm">
+                  <span
+                    aria-hidden
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-orange-500/15 text-[var(--v2-orange)]"
+                  >
+                    {item.tab === 'updates' ? <CloudSyncOutlined /> : <ExclamationCircleOutlined />}
+                  </span>
+                  <span className="min-w-0 flex-1 text-gray-800 dark:text-gray-100">
+                    {item.text}
+                  </span>
                   {item.tab && (
                     <Button
                       size="small"
-                      type="link"
                       className="shrink-0"
                       onClick={() => onNavigate(item.tab!, item.siteId)}
                     >
@@ -566,8 +679,8 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
               ))}
             </ul>
           )}
-        </Panel>
-        <Panel
+        </Card>
+        <Card
           title="Recent activity"
           subtitle="From the audit log"
           extra={
@@ -581,47 +694,47 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
           ) : activity.length === 0 ? (
             <div className="py-3 text-sm text-gray-500 dark:text-gray-400">No activity yet.</div>
           ) : (
-            <ul className="m-0 flex list-none flex-col divide-y divide-gray-100 p-0 dark:divide-gray-700">
+            <ul className="m-0 flex list-none flex-col divide-y divide-gray-200 p-0 dark:divide-gray-700">
               {activity.map((log) => (
-                <li key={log.id} className="flex items-baseline justify-between gap-3 py-2 text-sm">
-                  <span className="min-w-0 text-gray-800 dark:text-gray-100">
-                    <b className="font-medium">{log.userName || log.userEmail || 'System'}</b>{' '}
-                    {log.message}
-                  </span>
-                  <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                <li key={log.id} className="flex items-baseline gap-3 py-2 text-sm">
+                  <span className="w-20 shrink-0 text-xs text-gray-500 dark:text-gray-400">
                     {dayjs(log.createdAt).fromNow()}
+                  </span>
+                  <span className="min-w-0 text-gray-800 dark:text-gray-100">
+                    <b className="font-semibold">{log.userName || log.userEmail || 'System'}</b>{' '}
+                    <span className="text-gray-600 dark:text-gray-300">{log.message}</span>
                   </span>
                 </li>
               ))}
             </ul>
           )}
-        </Panel>
+        </Card>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel
+        <Card
           title={IS_CONTROL_PLANE ? 'Ingest by Site' : 'Ingest'}
           subtitle="GB received per hour, last 24 hours (uncompressed)"
         >
           <EChart option={ingestChart} height={240} />
-        </Panel>
-        <Panel
+        </Card>
+        <Card
           title="Storage by signal"
           subtitle={IS_CONTROL_PLANE ? 'Compressed, per Site' : 'Compressed'}
         >
           <EChart option={storageChart} height={240} />
-        </Panel>
+        </Card>
       </div>
 
-      <Panel title="Health checks" subtitle="For your load balancer and uptime monitoring">
-        <div className="flex flex-col gap-2">
+      <Card title="Health checks" subtitle="For your load balancer and uptime monitoring">
+        <div className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
           {healthURLs.map(({ label, url }) => (
             <div
               key={label}
-              className="grid items-center gap-2 text-sm sm:grid-cols-[180px_1fr_auto]"
+              className="grid items-center gap-2 py-2 text-sm first:pt-0 last:pb-0 sm:grid-cols-[200px_1fr_auto]"
             >
-              <span className="text-gray-500 dark:text-gray-300">{label}</span>
-              <code className="truncate rounded bg-gray-50 px-2 py-1 font-mono text-xs dark:bg-gray-900">
+              <span className="font-medium text-gray-800 dark:text-gray-100">{label}</span>
+              <code className="truncate rounded-lg bg-gray-50 px-2 py-1 font-mono text-xs dark:bg-gray-900/40">
                 {url}
               </code>
               <Button
@@ -637,7 +750,7 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
             </div>
           ))}
         </div>
-      </Panel>
+      </Card>
     </div>
   );
 };

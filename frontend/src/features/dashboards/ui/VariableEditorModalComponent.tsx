@@ -69,7 +69,7 @@ export const VariableEditorModalComponent = ({
 
       <div className="space-y-3">
         {draft.map((variable, index) => (
-          <div key={index} className="rounded border border-gray-200 p-3 dark:border-gray-700">
+          <div key={index} className="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
             <div className="mb-2 flex items-center gap-2">
               <Input
                 placeholder="key (e.g. cluster)"
@@ -89,7 +89,13 @@ export const VariableEditorModalComponent = ({
                 options={SOURCE_OPTIONS}
                 onChange={(source: VariableSource) => update(index, { source })}
               />
-              <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(index)} />
+              <Button
+                danger
+                type="text"
+                icon={<DeleteOutlined />}
+                aria-label="Delete variable"
+                onClick={() => remove(index)}
+              />
             </div>
 
             {variable.source === 'metricLabel' && (

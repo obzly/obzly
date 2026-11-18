@@ -3,6 +3,8 @@ import type { EChartsOption } from 'echarts';
 import { memo, useCallback, useMemo, useState } from 'react';
 
 import type { CheckView } from '../../../entity/synthetics';
+import { type Better, absoluteChange } from '../../../shared/lib/periodChange';
+import { Donut, KpiTile, RankedList } from '../../../shared/ui/v2';
 import { baseOption, timeAxis, valueAxis } from '../lib/chartOptions';
 import { formatMs, formatPercent } from '../lib/format';
 import { withMaintenance } from '../lib/maintenance';
@@ -28,6 +30,17 @@ interface Props {
 
 const KPI_STATUSES: MonitorStatus[] = ['up', 'warn', 'down', 'impacted', 'maintenance', 'off'];
 const OVERVIEW_LIMIT = 50;
+// Which way is good news for a status tile's change; Maintenance and Off are planned, so no pill.
+const KPI_BETTER: Partial<Record<MonitorStatus, Better>> = {
+  up: 'up',
+  warn: 'down',
+  down: 'down',
+  impacted: 'down',
+};
+const KPI_NOTE: Partial<Record<MonitorStatus, string>> = {
+  impacted: 'a parent is down',
+  maintenance: 'alerts muted',
+};
 
 const ShowAllToggle = ({
   total,
@@ -46,8 +59,12 @@ const ShowAllToggle = ({
 
 const NO_SLOTS = Array(STRIP_SLOTS).fill('none');
 
+/** "24 h", "7 d": how far back a change pill compares. */
+const agoLabel = (seconds: number) =>
+  seconds >= 2 * 86400 ? `${Math.round(seconds / 86400)} d` : `${Math.round(seconds / 3600)} h`;
+
 const Overview = ({ checks, result, locations, onOpen }: Props) => {
-  const { data, from, stepSeconds } = result;
+  const { data, from, stepSeconds, previous } = result;
   const statusOf = useCallback(
     (check: CheckView): MonitorStatus => data.get(check.id)?.state.status ?? 'none',
     [data],
@@ -77,75 +94,45 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
   const [showAllStrips, setShowAllStrips] = useState(false);
   const [showAllLocations, setShowAllLocations] = useState(false);
 
-  const donut = useCallback(
-    (colors: ChartColors): EChartsOption => ({
-      tooltip: {
-        trigger: 'item',
-        backgroundColor: colors.tooltip,
-        borderColor: colors.axis,
-        textStyle: { color: colors.text },
-      },
-      title: {
-        text: String(checks.length),
-        subtext: 'monitors',
-        left: 'center',
-        top: '36%',
-        textStyle: { color: colors.text, fontSize: 26, fontWeight: 600 },
-        subtextStyle: { color: colors.text, fontSize: 12 },
-      },
-      series: [
-        {
-          type: 'pie',
-          radius: ['58%', '80%'],
-          label: { show: false },
-          itemStyle: { borderColor: colors.tooltip, borderWidth: 2 },
-          data: counts.map(({ status, count }) => ({
-            name: STATUS_LABEL[status],
-            value: count,
-            itemStyle: { color: STATUS_COLOR[status], opacity: status === 'impacted' ? 0.55 : 1 },
-          })),
-        },
-      ],
-    }),
-
-    [checks, counts],
-  );
-
   // Share of monitors passing everywhere, per slot (monitors without runs or in maintenance in a slot don't count).
-  const trend = useCallback(
-    (colors: ChartColors): EChartsOption => {
-      const points = Array.from({ length: STRIP_SLOTS }, (_, slot) => {
+  const upShare = useMemo(
+    () =>
+      Array.from({ length: STRIP_SLOTS }, (_, slot) => {
         const states = enabled
           .map((check) => data.get(check.id)?.strip[slot])
           .filter((state) => state && state !== 'none' && state !== 'maintenance');
         const up = states.filter((state) => state !== 'down').length;
-        return [
-          from + slot * stepSeconds * 1000,
-          states.length ? Math.round((up / states.length) * 1000) / 10 : null,
-        ];
-      });
-      return {
-        ...baseOption(colors),
-        legend: { show: false },
-        xAxis: timeAxis(colors, from, from + STRIP_SLOTS * stepSeconds * 1000),
-        yAxis: { ...valueAxis(colors, (value) => `${value}%`), min: 0, max: 100 },
-        series: [
-          {
-            type: 'line',
-            name: 'Monitors up',
-            data: points,
-            // Few points early on: show them as dots.
-            showSymbol: true,
-            symbolSize: 4,
-            connectNulls: false,
-            lineStyle: { width: 2, color: '#059669' },
-            areaStyle: { color: 'rgba(5,150,105,0.12)' },
-          },
-        ],
-      };
-    },
-
-    [enabled, data, from, stepSeconds],
+        return states.length ? Math.round((up / states.length) * 1000) / 10 : null;
+      }),
+    [enabled, data],
+  );
+  const trend = useCallback(
+    (colors: ChartColors): EChartsOption => ({
+      ...baseOption(colors),
+      legend: { show: false },
+      xAxis: timeAxis(colors, from, from + STRIP_SLOTS * stepSeconds * 1000),
+      yAxis: { ...valueAxis(colors, (value) => `${value}%`), min: 0, max: 100 },
+      series: [
+        {
+          type: 'line',
+          name: 'Monitors up',
+          data: upShare.map((value, slot) => [from + slot * stepSeconds * 1000, value]),
+          // Few points early on: show them as dots.
+          showSymbol: true,
+          symbolSize: 4,
+          connectNulls: false,
+          // Share of monitors up: a health measure, so the "up" colour in every theme.
+          itemStyle: { color: colors.status.ok },
+          lineStyle: { width: 2, color: colors.status.ok },
+          areaStyle: { color: colors.status.ok, opacity: 0.12 },
+        },
+      ],
+    }),
+    [upShare, from, stepSeconds],
+  );
+  const upTrend = useMemo(
+    () => upShare.filter((value): value is number => value !== null),
+    [upShare],
   );
 
   const slowest = useMemo(
@@ -156,57 +143,6 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
         .slice(0, 10),
     [enabled, data],
   );
-  const slowChart = useCallback(
-    (colors: ChartColors): EChartsOption => {
-      const rows = [...slowest].reverse();
-      return {
-        ...baseOption(colors),
-        legend: { show: false },
-        grid: { left: 160, right: 56, top: 6, bottom: 24 },
-        tooltip: {
-          ...baseOption(colors).tooltip,
-          axisPointer: { type: 'shadow' },
-          valueFormatter: (value) => formatMs(Number(value)),
-        },
-        xAxis: valueAxis(colors, (value) => formatMs(value)),
-        yAxis: {
-          type: 'category',
-          data: rows.map((check) =>
-            check.name.length > 24 ? `${check.name.slice(0, 23)}…` : check.name,
-          ),
-          axisLabel: { color: colors.text, fontSize: 11 },
-          axisLine: { show: false },
-          axisTick: { show: false },
-        },
-        series: [
-          {
-            type: 'bar',
-            barWidth: 12,
-            data: rows.map((check) => {
-              const value = Math.round(data.get(check.id)?.p95Ms ?? 0);
-              const color =
-                data.get(check.id)?.state.status === 'down'
-                  ? STATUS_COLOR.down
-                  : value > 800
-                    ? STATUS_COLOR.warn
-                    : '#059669';
-              return { value, itemStyle: { color, borderRadius: [0, 3, 3, 0] } };
-            }),
-            label: {
-              show: true,
-              position: 'right',
-              color: colors.text,
-              fontSize: 11,
-              formatter: (params) => formatMs(Number(params.value)),
-            },
-          },
-        ],
-      };
-    },
-
-    [slowest, data],
-  );
-
   const outages = useMemo(
     () => worstFirst.filter((check) => ['down', 'warn'].includes(statusOf(check))),
     [worstFirst, statusOf],
@@ -221,31 +157,63 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
-        <Panel title="Monitors">
-          <div className="text-2xl font-semibold">{checks.length}</div>
-          <div className="text-xs text-gray-500 dark:text-gray-400">
-            {locations.length} locations
-          </div>
-        </Panel>
+      <section
+        aria-label="Status"
+        className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-4"
+      >
+        <KpiTile label="Monitors" value={checks.length} note={`${locations.length} locations`} />
         {counts.map(({ status, count }) => (
-          <Panel
+          <KpiTile
             key={status}
-            title={
-              <span className="inline-flex items-center gap-2">
-                <StatusDot status={status} />
-                {STATUS_LABEL[status]}
-              </span>
+            label={STATUS_LABEL[status]}
+            value={
+              <span style={count > 0 ? { color: STATUS_COLOR[status] } : undefined}>{count}</span>
             }
-          >
-            <div className="text-2xl font-semibold">{count}</div>
-          </Panel>
+            icon={<StatusDot status={status} size={12} />}
+            note={KPI_NOTE[status]}
+            change={
+              previous && KPI_BETTER[status]
+                ? absoluteChange(
+                    count,
+                    previous.counts[status] ?? 0,
+                    KPI_BETTER[status],
+                    (difference) => `${difference} vs ${agoLabel(previous.seconds)} ago`,
+                  )
+                : undefined
+            }
+            // The Up tile carries the share-passing trend from the strips.
+            trend={status === 'up' ? upTrend : undefined}
+          />
         ))}
-      </div>
+      </section>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Status" subtitle="Every monitor, now">
-          <EChart option={donut} height={220} />
+          <div className="flex flex-wrap items-center gap-5">
+            <Donut
+              label={`Status of ${checks.length} monitors`}
+              center={checks.length}
+              centerSub="monitors"
+              parts={counts
+                .filter(({ count }) => count > 0)
+                .map(({ status, count }) => ({
+                  key: status,
+                  value: count,
+                  color: STATUS_COLOR[status],
+                }))}
+            />
+            <ul className="m-0 flex min-w-[140px] flex-1 list-none flex-col gap-2 p-0 text-sm">
+              {counts.map(({ status, count }) => (
+                <li key={status} className="flex items-center gap-2">
+                  <StatusDot status={status} size={9} />
+                  <span className="flex-1 text-gray-600 dark:text-gray-300">
+                    {STATUS_LABEL[status]}
+                  </span>
+                  <strong className="font-semibold tabular-nums">{count}</strong>
+                </li>
+              ))}
+            </ul>
+          </div>
         </Panel>
         <Panel
           title="Monitors up"
@@ -275,7 +243,7 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
           {(showAllStrips ? worstFirst : worstFirst.slice(0, OVERVIEW_LIMIT)).map((check) => (
             <div
               key={check.id}
-              className="grid cursor-pointer grid-cols-[minmax(140px,240px)_minmax(0,1fr)_64px] items-center gap-3 rounded px-1 hover:bg-gray-50 dark:hover:bg-gray-700"
+              className="grid cursor-pointer grid-cols-[minmax(140px,240px)_minmax(0,1fr)_64px] items-center gap-3 rounded-lg px-1.5 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700/50"
               onClick={() => onOpen(check)}
             >
               <span className="flex min-w-0 items-center gap-2 truncate">
@@ -316,7 +284,7 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-gray-500 uppercase dark:text-gray-400">
+                <tr className="text-left text-xs tracking-wide text-gray-500 dark:text-gray-400">
                   <th className="py-1 pr-2 font-medium">Monitor</th>
                   {locations.map((location) => (
                     <th key={location} className="px-2 py-1 font-mono font-medium normal-case">
@@ -337,7 +305,11 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
                     ]),
                   );
                   return (
-                    <tr key={check.id} className="border-t border-gray-100 dark:border-gray-700">
+                    <tr
+                      key={check.id}
+                      className="cursor-pointer border-t border-gray-100 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/50"
+                      onClick={() => onOpen(check)}
+                    >
                       <td className="py-1.5 pr-2">{check.name}</td>
                       {locations.map((location) => {
                         const state = states.get(location);
@@ -365,11 +337,25 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
           </div>
         </Panel>
         <Panel title="Slowest monitors" subtitle="p95 response time over the range">
-          {slowest.length ? (
-            <EChart option={slowChart} height={Math.max(160, slowest.length * 28 + 30)} />
-          ) : (
-            <div className="text-sm text-gray-500">No timings yet.</div>
-          )}
+          <RankedList
+            empty="No timings yet."
+            rows={slowest.map((check) => {
+              const value = Math.round(data.get(check.id)?.p95Ms ?? 0);
+              return {
+                key: check.id,
+                label: check.name,
+                value,
+                display: formatMs(value),
+                color:
+                  data.get(check.id)?.state.status === 'down'
+                    ? STATUS_COLOR.down
+                    : value > 800
+                      ? STATUS_COLOR.warn
+                      : 'var(--v2-accent)',
+                onClick: () => onOpen(check),
+              };
+            })}
+          />
         </Panel>
       </div>
 
@@ -385,7 +371,7 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
             return (
               <div
                 key={check.id}
-                className="flex cursor-pointer items-center justify-between gap-3 border-b border-dashed border-gray-200 py-2 last:border-0 dark:border-gray-700"
+                className="flex cursor-pointer items-center justify-between gap-3 border-b border-gray-100 py-2.5 last:border-0 dark:border-gray-700"
                 onClick={() => onOpen(check)}
               >
                 <span className="min-w-0">
@@ -414,11 +400,12 @@ const Overview = ({ checks, result, locations, onOpen }: Props) => {
             return (
               <div
                 key={check.id}
-                className="flex items-center justify-between border-b border-dashed border-gray-200 py-2 last:border-0 dark:border-gray-700"
+                className="flex cursor-pointer items-center justify-between gap-3 border-b border-gray-100 py-2.5 last:border-0 dark:border-gray-700"
+                onClick={() => onOpen(check)}
               >
-                <span>{check.name}</span>
+                <span className="min-w-0 truncate">{check.name}</span>
                 <span
-                  className="rounded-full px-2 text-xs font-semibold tabular-nums"
+                  className="rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"
                   style={{ color: STATUS_COLOR[status], background: `${STATUS_COLOR[status]}1f` }}
                 >
                   {days} days

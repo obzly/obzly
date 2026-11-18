@@ -47,6 +47,9 @@ func (q *LogQuerier) ExecutePatternChanges(
 		limit = defaultChangesLimit
 	}
 	limit = min(limit, maxChangesLimit)
+	if request.CountOnly && (q.stream != logs_core.StreamLogs || !onRollupFields(request.Query)) {
+		return &logs_core.PatternChangesResponseDTO{Changes: []logs_core.PatternChangeDTO{}}, nil
+	}
 
 	curFrom, curTo := resolveTimeRange(request.Current)
 	baseFrom, baseTo := resolveTimeRange(request.Baseline)
@@ -63,7 +66,7 @@ func (q *LogQuerier) ExecutePatternChanges(
 		scale = float64(curTo.Sub(curFrom)) / float64(baseLen)
 	}
 
-	response := &logs_core.PatternChangesResponseDTO{Changes: []logs_core.PatternChangeDTO{}}
+	response := &logs_core.PatternChangesResponseDTO{Changes: []logs_core.PatternChangeDTO{}, Counted: true}
 	var added, rising, falling []logs_core.PatternChangeDTO
 	hashes := map[string]bool{}
 	for hash := range current {
@@ -89,6 +92,10 @@ func (q *LogQuerier) ExecutePatternChanges(
 			change.Change, change.Ratio = logs_core.PatternChangeDrop, float64(now)/expected
 			falling = append(falling, change)
 		}
+	}
+	response.NewCount, response.SpikeCount, response.DropCount = len(added), len(rising), len(falling)
+	if request.CountOnly {
+		return response, nil
 	}
 	sort.Slice(added, func(i, j int) bool { return byCountThenHash(added[i], added[j]) })
 	sort.Slice(rising, func(i, j int) bool {
@@ -163,6 +170,25 @@ func (q *LogQuerier) patternCounts(
 		counts[bucket.GroupKey] += bucket.Count
 	}
 	return counts, nil
+}
+
+// ExecutePatternSamples is the template, newest log and level of each of
+// request.Hashes among the logs matching request.Query in request.TimeRange.
+func (q *LogQuerier) ExecutePatternSamples(
+	ctx context.Context, projectID uuid.UUID, request *logs_core.PatternSamplesRequestDTO,
+) (map[string]logs_core.PatternSampleDTO, error) {
+	from, to := resolveTimeRange(request.TimeRange)
+	samples, err := q.patternSamples(ctx, projectID, request.Query, request.Hashes, from, to)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]logs_core.PatternSampleDTO, len(samples))
+	for hash, sample := range samples {
+		result[hash] = logs_core.PatternSampleDTO{
+			Pattern: logs_core.MessagePattern(sample.message), Sample: sample.message, Level: sample.level,
+		}
+	}
+	return result, nil
 }
 
 type patternSample struct {

@@ -22,11 +22,74 @@ func (c *Controller) RegisterRoutes(router *gin.RouterGroup) {
 	router.DELETE("/projects/:id/alert-rules/:ruleId", authz.Require(authz.ProjectManage), c.DeleteRule)
 	router.POST("/projects/:id/alert-rules/preview", authz.Require(authz.ProjectManage), c.PreviewRule)
 	router.GET("/projects/:id/alerts", authz.Require(authz.ProjectRead), c.ListAlerts)
+	router.GET("/projects/:id/alerts/summary", authz.Require(authz.ProjectRead), c.GetSummary)
+	router.GET("/projects/:id/alert-rules/activity", authz.Require(authz.ProjectRead), c.GetRuleActivity)
 	router.GET("/projects/:id/notification-channels", authz.Require(authz.ProjectRead), c.ListChannels)
 	router.POST("/projects/:id/notification-channels/:channelId/test", authz.Require(authz.ProjectOwn), c.TestChannel)
 	router.GET("/projects/:id/silences", authz.Require(authz.ProjectRead), c.ListSilences)
 	router.POST("/projects/:id/silences", authz.Require(authz.ProjectWrite), c.CreateSilence)
 	router.DELETE("/projects/:id/silences/:silenceId", authz.Require(authz.ProjectWrite), c.DeleteSilence)
+	router.POST("/projects/:id/silences/:silenceId/expire", authz.Require(authz.ProjectWrite), c.ExpireSilence)
+	router.GET("/projects/:id/incident-notifications", authz.Require(authz.ProjectRead), c.GetIncidentNotifications)
+	router.PUT("/projects/:id/incident-notifications", authz.Require(authz.ProjectManage),
+		c.UpdateIncidentNotifications)
+}
+
+// GetIncidentNotifications
+// @Summary Get incident notification settings
+// @Description A project's "Notify when an incident opens/ends" settings, or the defaults (off); any member
+// @Tags alerting
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Project ID"
+// @Success 200 {object} alerting.IncidentNotificationSettings
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /projects/{id}/incident-notifications [get]
+func (c *Controller) GetIncidentNotifications(ctx *gin.Context) {
+	if _, ok := users_middleware.GetUserFromContext(ctx); !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	projectID, ok := pathID(ctx, "id")
+	if !ok {
+		return
+	}
+	settings, err := c.service.GetIncidentNotifications(projectID)
+	respond(ctx, settings, err)
+}
+
+// UpdateIncidentNotifications
+// @Summary Update incident notification settings
+// @Description Project owners and admins. Thresholds: an incident notifies once it holds minSignals error signals or minServices services
+// @Tags alerting
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Project ID"
+// @Param request body IncidentNotificationRequest true "Settings"
+// @Success 200 {object} alerting.IncidentNotificationSettings
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /projects/{id}/incident-notifications [put]
+func (c *Controller) UpdateIncidentNotifications(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	projectID, ok := pathID(ctx, "id")
+	if !ok {
+		return
+	}
+	var request IncidentNotificationRequest
+	if !bind(ctx, &request) {
+		return
+	}
+	settings, err := c.service.SaveIncidentNotifications(projectID, request, user.ID)
+	respond(ctx, settings, err)
 }
 
 // ListRules
@@ -218,6 +281,64 @@ func (c *Controller) ListAlerts(ctx *gin.Context) {
 	respond(ctx, alerts, err)
 }
 
+// GetSummary
+// @Summary Alerts summary
+// @Description Alerts firing and pending now, rules, and current or upcoming silences (any member): the Alerts page header
+// @Tags alerting
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Project ID"
+// @Success 200 {object} alerting.AlertsSummary
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /projects/{id}/alerts/summary [get]
+func (c *Controller) GetSummary(ctx *gin.Context) {
+	if _, ok := users_middleware.GetUserFromContext(ctx); !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	projectID, ok := pathID(ctx, "id")
+	if !ok {
+		return
+	}
+	summary, err := c.service.Summary(projectID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load the alerts summary"})
+		return
+	}
+	ctx.JSON(http.StatusOK, summary)
+}
+
+// GetRuleActivity
+// @Summary Alert rule activity
+// @Description Each rule's firings (series going from pending to firing) and delivered notifications per UTC day over the last 7 days, today included (any member). Days before trackedSince, or before a rule was created, are unknown.
+// @Tags alerting
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Project ID"
+// @Success 200 {object} alerting.RuleActivityResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /projects/{id}/alert-rules/activity [get]
+func (c *Controller) GetRuleActivity(ctx *gin.Context) {
+	if _, ok := users_middleware.GetUserFromContext(ctx); !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	projectID, ok := pathID(ctx, "id")
+	if !ok {
+		return
+	}
+	activity, err := c.service.RuleActivity(projectID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load rule activity"})
+		return
+	}
+	ctx.JSON(http.StatusOK, activity)
+}
+
 // ListChannels
 // @Summary List notification channels
 // @Description Channels this project may use (any member); where they send is shown to project owners and admins
@@ -318,7 +439,7 @@ func (c *Controller) ListSilences(ctx *gin.Context) {
 
 // CreateSilence
 // @Summary Create a silence
-// @Description Members who can write to the project
+// @Description Members who can write to the project. mcpClient labels a silence the MCP create_silence tool made.
 // @Tags alerting
 // @Accept json
 // @Produce json
@@ -381,6 +502,39 @@ func (c *Controller) DeleteSilence(ctx *gin.Context) {
 	respond(ctx, gin.H{"message": "Silence deleted"}, c.service.DeleteSilence(projectID, silenceID, user))
 }
 
+// ExpireSilence
+// @Summary End a silence now
+// @Description Members who can write to the project. Ends a current or upcoming silence and keeps it on record (the MCP expire_silence tool uses it). A maintenance window's silence (managedBy set) or one already over is refused with 409
+// @Tags alerting
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Project ID"
+// @Param silenceId path string true "ID"
+// @Success 200 {object} alerting.Silence
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /projects/{id}/silences/{silenceId}/expire [post]
+func (c *Controller) ExpireSilence(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	projectID, ok := pathID(ctx, "id")
+	if !ok {
+		return
+	}
+	silenceID, ok := pathID(ctx, "silenceId")
+	if !ok {
+		return
+	}
+	silence, err := c.service.ExpireSilence(projectID, silenceID, user)
+	respond(ctx, silence, err)
+}
+
 func pathID(ctx *gin.Context, name string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(ctx.Param(name))
 	if err != nil {
@@ -408,7 +562,8 @@ func respond(ctx *gin.Context, body any, err error) {
 		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, ErrNotFound):
 		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case errors.Is(err, ErrManaged), errors.Is(err, ErrManagedSilence), errors.Is(err, ErrManagedByBudget):
+	case errors.Is(err, ErrManaged), errors.Is(err, ErrManagedSilence), errors.Is(err, ErrManagedByBudget),
+		errors.Is(err, ErrSilenceEnded):
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

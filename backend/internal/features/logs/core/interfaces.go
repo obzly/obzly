@@ -19,6 +19,17 @@ type LogRepository interface {
 		ctx context.Context, projectID uuid.UUID, request *LogQueryRequestDTO, emit SearchEmitter,
 	) (*LogQueryResponseDTO, error)
 	ExecuteSQLQuery(projectID uuid.UUID, request *ExecuteSQLQueryRequestDTO) (*SQLQueryResponseDTO, error)
+	// The ...Context variants stop when ctx ends: a REST client or an MCP
+	// tool call that left or timed out no longer holds executors.
+	ExecuteQueryForProjectContext(
+		ctx context.Context, projectID uuid.UUID, request *LogQueryRequestDTO,
+	) (*LogQueryResponseDTO, error)
+	ExecuteSQLQueryContext(
+		ctx context.Context, projectID uuid.UUID, request *ExecuteSQLQueryRequestDTO,
+	) (*SQLQueryResponseDTO, error)
+	ExecutePatternsContext(
+		ctx context.Context, projectID uuid.UUID, request *PatternsRequestDTO,
+	) (*PatternsResponseDTO, error)
 	ExecuteScopedSQL(projectID uuid.UUID, request *ScopedSQLRequestDTO) ([]*SQLQueryResponseDTO, error)
 	// ExecuteAggregation stops when ctx ends (the client left), freeing executors.
 	ExecuteAggregation(
@@ -39,6 +50,10 @@ type LogRepository interface {
 	ExecuteDeploys(
 		ctx context.Context, projectID uuid.UUID, request *DeploysRequestDTO,
 	) (*DeploysResponseDTO, error)
+	// ExecutePatternSamples: each wanted pattern's template and newest log.
+	ExecutePatternSamples(
+		ctx context.Context, projectID uuid.UUID, request *PatternSamplesRequestDTO,
+	) (map[string]PatternSampleDTO, error)
 	ExecuteContext(
 		ctx context.Context, projectID uuid.UUID, request *LogContextRequestDTO,
 	) (*LogContextResponseDTO, error)

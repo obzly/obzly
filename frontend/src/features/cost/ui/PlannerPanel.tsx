@@ -5,7 +5,8 @@ import { Button, Empty, Modal, Segmented, Select, Switch, Tag, Tooltip } from 'a
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { CommitmentType, PurchaseOption, UsagePoint } from '../../../entity/cost';
-import { type ChartColors, EChart, Panel, baseOption } from '../../synthetics';
+import { Card } from '../../../shared/ui/v2';
+import { type ChartColors, EChart, baseOption } from '../../synthetics';
 import {
   PAYMENTS,
   PAYMENT_LABEL,
@@ -21,6 +22,7 @@ import {
   paybackText,
 } from '../lib/advice';
 import { formatMoney, formatMoneyCompact } from '../lib/format';
+import { IconLabel, ProviderMark, ServiceIcon } from './CloudIcon';
 
 interface Props {
   plans: SitePlan[];
@@ -40,9 +42,11 @@ export const PlannerPanel = ({
   onRightsizingFirst,
 }: Props) => {
   const connections = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const plan of plans) seen.set(planId(plan), plan.connectionName);
-    return [...seen.entries()].map(([value, label]) => ({ value, label }));
+    const seen = new Map<string, { label: string; provider: string }>();
+    for (const plan of plans) {
+      seen.set(planId(plan), { label: plan.connectionName, provider: plan.provider });
+    }
+    return [...seen.entries()].map(([value, { label, provider }]) => ({ value, label, provider }));
   }, [plans]);
   const [connection, setConnection] = useState<string>();
   const [kind, setKind] = useState<CommitmentType>();
@@ -61,19 +65,21 @@ export const PlannerPanel = ({
   const money = (amount: number) => formatMoney(amount, plan?.currency || 'USD');
   if (plans.length === 0) {
     return (
-      <Panel title="Commitment planner" subtitle="Savings Plans and reservations to consider">
+      <Card title="Commitment planner" subtitle="Savings Plans and reservations to consider">
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description="No purchase recommendations yet. They're read weekly for connections that read cost, once Cost Explorer (AWS) or Cost Management (Azure) has enough usage."
         />
-      </Panel>
+      </Card>
     );
   }
 
   const payments = PAYMENTS[plan?.provider ?? 'aws'] ?? PAYMENTS.aws;
   return (
-    <Panel
-      title="Commitment planner"
+    <Card
+      title={
+        <IconLabel icon={<ProviderMark provider={plan?.provider} />}>Commitment planner</IconLabel>
+      }
       subtitle={`The provider's purchase recommendations from the last ${lookback} days of usage, on top of what you already have`}
       extra={
         connections.length > 1 && (
@@ -84,6 +90,11 @@ export const PlannerPanel = ({
             onChange={setConnection}
             options={connections}
             aria-label="Connection"
+            optionRender={(item) => (
+              <IconLabel icon={<ProviderMark provider={item.data.provider} size={14} />}>
+                {item.label}
+              </IconLabel>
+            )}
           />
         )
       }
@@ -91,6 +102,7 @@ export const PlannerPanel = ({
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <Segmented
           size="small"
+          aria-label="Commitment type"
           value={plan?.type}
           onChange={(value) => setKind(value as CommitmentType)}
           options={forConnection.map((item) => ({
@@ -101,6 +113,7 @@ export const PlannerPanel = ({
         <span className="text-xs text-gray-500 dark:text-gray-400">Look back</span>
         <Segmented
           size="small"
+          aria-label="Look back"
           value={lookback}
           onChange={(value) => onLookback(value as number)}
           options={[7, 30, 60].map((days) => ({ value: days, label: `${days} days` }))}
@@ -163,7 +176,7 @@ export const PlannerPanel = ({
                 </tbody>
               </table>
               {option?.offered && option.monthlySavings > 0 && (
-                <div className="mt-2 flex flex-col gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
+                <div className="mt-2 flex flex-col gap-2 rounded-xl border border-emerald-200 bg-[var(--v2-green-soft)] p-3 text-sm text-emerald-900 dark:border-emerald-900 dark:text-emerald-200">
                   <span>
                     Buy{' '}
                     <b>
@@ -216,7 +229,19 @@ export const PlannerPanel = ({
               <tbody className="text-gray-800 dark:text-gray-200">
                 {option.lines.map((line, index) => (
                   <tr key={index} className="border-t border-gray-100 dark:border-gray-700">
-                    <td className="py-1">{line.description}</td>
+                    <td className="py-1">
+                      <IconLabel
+                        icon={
+                          <ServiceIcon
+                            text={`${TYPE_LABEL[plan.type]} ${line.description}`}
+                            provider={plan.provider}
+                            size={14}
+                          />
+                        }
+                      >
+                        {line.description}
+                      </IconLabel>
+                    </td>
                     <td>{line.region || '—'}</td>
                     <td className="font-mono">{line.account || '—'}</td>
                     <td className="text-right tabular-nums">{money(line.monthlySavings)}</td>
@@ -248,7 +273,7 @@ export const PlannerPanel = ({
           </p>
         </Modal>
       )}
-    </Panel>
+    </Card>
   );
 };
 
@@ -265,7 +290,7 @@ const OptionCell = ({
 }) => {
   if (!option) {
     return (
-      <div className="rounded-md border border-dashed border-gray-200 p-2 text-center text-xs text-gray-400 dark:border-gray-700">
+      <div className="rounded-xl border border-dashed border-gray-200 p-2 text-center text-xs text-gray-400 dark:border-gray-700 dark:text-gray-500">
         Not read
       </div>
     );
@@ -273,7 +298,7 @@ const OptionCell = ({
   if (!option.offered) {
     return (
       <Tooltip title={option.reason}>
-        <div className="rounded-md border border-dashed border-gray-200 p-2 text-center text-xs text-gray-400 dark:border-gray-700">
+        <div className="rounded-xl border border-dashed border-gray-200 p-2 text-center text-xs text-gray-400 dark:border-gray-700 dark:text-gray-500">
           Not offered
         </div>
       </Tooltip>
@@ -282,7 +307,7 @@ const OptionCell = ({
   if (option.monthlySavings <= 0) {
     return (
       <Tooltip title={option.reason}>
-        <div className="rounded-md border border-gray-200 p-2 text-center text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+        <div className="rounded-xl border border-gray-200 p-2 text-center text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
           Nothing to buy
         </div>
       </Tooltip>
@@ -293,7 +318,7 @@ const OptionCell = ({
       type="button"
       onClick={onPick}
       aria-pressed={selected}
-      className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-md border p-2 text-left ${selected ? 'border-emerald-600 ring-2 ring-emerald-600/30' : 'border-gray-200 hover:border-gray-400 dark:border-gray-700'}`}
+      className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-xl border p-2 text-left ${selected ? 'border-accent-600 ring-accent-600/30 bg-[var(--v2-ok-soft)] ring-2' : 'border-gray-200 bg-white hover:border-gray-400 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-500'}`}
     >
       <span className="flex flex-wrap gap-1">
         {option.labels.includes('lowest_risk') && (
@@ -309,7 +334,7 @@ const OptionCell = ({
       </span>
       <span className="font-semibold text-gray-900 tabular-nums dark:text-gray-100">
         {money(option.monthlySavings)}
-        <span className="text-xs font-normal text-gray-500">/mo</span>
+        <span className="text-xs font-normal text-gray-500 dark:text-gray-400">/mo</span>
       </span>
       <span className="text-xs text-gray-500 dark:text-gray-400">
         {option.savingsPercent > 0 && `${option.savingsPercent.toFixed(0)}% off · `}
@@ -354,7 +379,7 @@ const UsageChart = ({ points, currency }: { points: UsagePoint[]; currency: stri
             name: 'On demand',
             type: 'bar' as const,
             stack: 'usage',
-            itemStyle: { color: '#009966' },
+            itemStyle: { color: colors.accent },
             data: days.map((point) => point.onDemand),
           },
         ],

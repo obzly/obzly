@@ -8,6 +8,7 @@ import type { SignInRequest } from '../../../entity/users/model/SignInRequest';
 import type { UpdateUserInfoRequest } from '../../../entity/users/model/UpdateUserInfoRequest';
 import type { UserProfile } from '../../../entity/users/model/UserProfile';
 import { UserRole } from '../../../entity/users/model/UserRole';
+import { Card, PageHeader } from '../../../shared/ui/v2';
 import { AccessTokensComponent } from './AccessTokensComponent';
 import { MFASettingsComponent } from './MFASettingsComponent';
 
@@ -24,6 +25,14 @@ const getRoleDisplayText = (role: UserRole): string => {
     default:
       return role;
   }
+};
+
+const initialsOf = (source: string): string => {
+  const parts = source
+    .trim()
+    .split(/[\s@._-]+/)
+    .filter(Boolean);
+  return ((parts[0]?.[0] ?? '?') + (parts[1]?.[0] ?? '')).toUpperCase();
 };
 
 export function ProfileComponent({ contentHeight }: Props) {
@@ -227,196 +236,239 @@ export function ProfileComponent({ contentHeight }: Props) {
     window.location.reload();
   };
 
+  const label = 'mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400';
+  const profileDirty = !!user && (editName !== user.name || editEmail !== user.email);
+  const passwordDirty = !!(newPassword || confirmPassword);
+
   return (
-    <div className="flex grow pl-3">
+    <div className="flex grow">
       <div className="w-full">
         <div
-          className="grow overflow-y-auto rounded bg-white p-5 shadow dark:bg-gray-800"
+          className="grow overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
           style={{ height: contentHeight }}
         >
-          <h1 className="text-2xl font-bold">Profile</h1>
-
-          <div className="mt-5">
-            {user ? (
-              <>
-                <div className="mb-6">
-                  <h3 className="mb-4 text-lg font-semibold">Profile Information</h3>
-                  <div className="max-w-md">
-                    <div className="mb-2 text-xs font-semibold">User ID</div>
-                    <div className="mb-4 text-sm text-gray-600 dark:text-gray-300">{user.id}</div>
-
-                    <div className="mb-1 text-xs font-semibold">Name</div>
-                    <Input
-                      value={editName}
-                      onChange={(e) => {
-                        setEditNameError(false);
-                        setEditName(e.currentTarget.value);
-                      }}
-                      status={editNameError ? 'error' : undefined}
-                      placeholder="Enter your name"
-                      className="mb-4"
-                    />
-
-                    <div className="mt-2 mb-1 text-xs font-semibold">Email</div>
-                    <Input
-                      value={editEmail}
-                      onChange={(e) => {
-                        setEditEmailError(false);
-                        setEditEmail(e.currentTarget.value.trim().toLowerCase());
-                      }}
-                      status={editEmailError ? 'error' : undefined}
-                      placeholder="Enter your email"
-                      type="email"
-                      className="mb-4"
-                      disabled={!!user.isRootAdmin}
-                    />
-                    {!!user.isRootAdmin && (
-                      <div className="mb-4 text-xs text-gray-500 dark:text-gray-300">
-                        The root admin&apos;s login is set by ADMIN_EMAIL, not here
-                      </div>
-                    )}
-
-                    {!user.isRootAdmin && editEmail !== user.email && (
-                      <>
-                        <div className="mb-1 text-xs font-semibold">Current password</div>
-                        <Input.Password
-                          value={emailPassword}
-                          onChange={(e) => setEmailPassword(e.currentTarget.value)}
-                          placeholder="Confirm it's you to change your email"
-                          autoComplete="current-password"
-                          className="mb-4"
-                        />
-                        {!!user.mfaEnabled && (
-                          <>
-                            <div className="mb-1 text-xs font-semibold">Authenticator code</div>
-                            <Input
-                              value={emailMfaCode}
-                              onChange={(e) => setEmailMfaCode(e.currentTarget.value.trim())}
-                              placeholder="6-digit code"
-                              inputMode="numeric"
-                              autoComplete="one-time-code"
-                              maxLength={6}
-                              className="mb-4"
-                            />
-                          </>
-                        )}
-                      </>
-                    )}
-
-                    <div className="mt-2 mb-1 text-xs font-semibold">Role</div>
-                    <div className="mb-4">
-                      <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">
-                        {getRoleDisplayText(user.role)}
-                      </span>
-                    </div>
-
-                    {(editName !== user.name || editEmail !== user.email) && (
-                      <Button
-                        type="primary"
-                        onClick={handleProfileUpdate}
-                        loading={isUpdatingProfile}
-                        disabled={isUpdatingProfile}
-                        className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                      >
-                        Save changes
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mb-8 max-w-md pt-2">
-                  <h3 className="mb-4 text-lg font-semibold">Two-Factor Authentication</h3>
-                  <MFASettingsComponent />
-                </div>
-
-                <div className="mb-8 pt-2">
-                  <h3 className="mb-4 text-lg font-semibold">AI assistant access (MCP)</h3>
-                  <AccessTokensComponent />
-                </div>
-
-                <div className="mb-8">
+          <div className="flex flex-col gap-5">
+            <PageHeader
+              title="Profile"
+              subtitle={user ? `${user.name} · ${user.email}` : undefined}
+              actions={
+                user && (
                   <Button type="default" onClick={handleLogout} danger>
                     Logout
                   </Button>
-                </div>
+                )
+              }
+            />
 
-                <div className="max-w-xs pt-6">
-                  <h3 className="mb-4 text-lg font-semibold">Change Password</h3>
+            {user ? (
+              <>
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <Card title="Profile Information">
+                    <div className="flex max-w-md flex-col gap-4">
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--v2-ok-soft)] text-sm font-semibold text-[var(--v2-accent)]">
+                          {initialsOf(user.name || user.email)}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-gray-900 dark:text-gray-50">
+                            {user.name}
+                          </div>
+                          <div className="truncate text-xs text-gray-500 dark:text-gray-400">
+                            {user.email}
+                          </div>
+                        </div>
+                      </div>
 
-                  <div className="max-w-sm">
-                    <div className="my-1 text-xs font-semibold">Current Password</div>
-                    <Input.Password
-                      placeholder="Enter your current password"
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.currentTarget.value)}
-                      autoComplete="current-password"
-                    />
+                      <div>
+                        <div className={label}>User ID</div>
+                        <div className="font-mono text-xs break-all text-gray-600 dark:text-gray-300">
+                          {user.id}
+                        </div>
+                      </div>
 
-                    {!!user.mfaEnabled && (
-                      <>
-                        <div className="mt-2 mb-1 text-xs font-semibold">Authenticator Code</div>
+                      <div>
+                        <div className={label}>Name</div>
                         <Input
-                          placeholder="6-digit code"
-                          value={passwordMfaCode}
-                          onChange={(e) => setPasswordMfaCode(e.currentTarget.value.trim())}
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          maxLength={6}
+                          value={editName}
+                          onChange={(e) => {
+                            setEditNameError(false);
+                            setEditName(e.currentTarget.value);
+                          }}
+                          status={editNameError ? 'error' : undefined}
+                          placeholder="Enter your name"
                         />
-                      </>
+                      </div>
+
+                      <div>
+                        <div className={label}>Email</div>
+                        <Input
+                          value={editEmail}
+                          onChange={(e) => {
+                            setEditEmailError(false);
+                            setEditEmail(e.currentTarget.value.trim().toLowerCase());
+                          }}
+                          status={editEmailError ? 'error' : undefined}
+                          placeholder="Enter your email"
+                          type="email"
+                          disabled={!!user.isRootAdmin}
+                        />
+                        {!!user.isRootAdmin && (
+                          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            The root admin&apos;s login is set by ADMIN_EMAIL, not here
+                          </div>
+                        )}
+                      </div>
+
+                      {!user.isRootAdmin && editEmail !== user.email && (
+                        <>
+                          <div>
+                            <div className={label}>Current password</div>
+                            <Input.Password
+                              value={emailPassword}
+                              onChange={(e) => setEmailPassword(e.currentTarget.value)}
+                              placeholder="Confirm it's you to change your email"
+                              autoComplete="current-password"
+                            />
+                          </div>
+                          {!!user.mfaEnabled && (
+                            <div>
+                              <div className={label}>Authenticator code</div>
+                              <Input
+                                value={emailMfaCode}
+                                onChange={(e) => setEmailMfaCode(e.currentTarget.value.trim())}
+                                placeholder="6-digit code"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                maxLength={6}
+                                className="!font-mono"
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      <div>
+                        <div className={label}>Role</div>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[var(--v2-ok-soft)] px-2 py-0.5 text-xs font-medium text-[var(--v2-accent)]">
+                          {getRoleDisplayText(user.role)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {profileDirty && (
+                      <div className="mt-4 flex items-center gap-2 border-t border-gray-200 pt-3 dark:border-gray-700">
+                        <span className="flex-1 text-xs text-gray-500 dark:text-gray-400">
+                          Unsaved changes
+                        </span>
+                        <Button
+                          type="primary"
+                          onClick={handleProfileUpdate}
+                          loading={isUpdatingProfile}
+                          disabled={isUpdatingProfile}
+                          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
+                        >
+                          Save changes
+                        </Button>
+                      </div>
                     )}
+                  </Card>
 
-                    <div className="mt-2 mb-1 text-xs font-semibold">New Password</div>
-                    <Input.Password
-                      placeholder="Enter new password"
-                      value={newPassword}
-                      onChange={(e) => {
-                        setNewPasswordError(false);
-                        setNewPassword(e.currentTarget.value);
-                      }}
-                      status={newPasswordError ? 'error' : undefined}
-                      iconRender={(visible) =>
-                        visible ? <EyeTwoTone /> : <EyeInvisibleOutlined />
-                      }
-                      visibilityToggle={{
-                        visible: newPasswordVisible,
-                        onVisibleChange: setNewPasswordVisible,
-                      }}
-                    />
+                  <Card title="Change Password">
+                    <div className="flex max-w-sm flex-col gap-4">
+                      <div>
+                        <div className={label}>Current Password</div>
+                        <Input.Password
+                          placeholder="Enter your current password"
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.currentTarget.value)}
+                          autoComplete="current-password"
+                        />
+                      </div>
 
-                    <div className="mt-2 mb-1 text-xs font-semibold">Confirm New Password</div>
-                    <Input.Password
-                      placeholder="Confirm new password"
-                      value={confirmPassword}
-                      onChange={(e) => {
-                        setConfirmPasswordError(false);
-                        setConfirmPassword(e.currentTarget.value);
-                      }}
-                      status={confirmPasswordError ? 'error' : undefined}
-                      iconRender={(visible) =>
-                        visible ? <EyeTwoTone /> : <EyeInvisibleOutlined />
-                      }
-                      visibilityToggle={{
-                        visible: confirmPasswordVisible,
-                        onVisibleChange: setConfirmPasswordVisible,
-                      }}
-                    />
+                      {!!user.mfaEnabled && (
+                        <div>
+                          <div className={label}>Authenticator Code</div>
+                          <Input
+                            placeholder="6-digit code"
+                            value={passwordMfaCode}
+                            onChange={(e) => setPasswordMfaCode(e.currentTarget.value.trim())}
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            maxLength={6}
+                            className="!font-mono"
+                          />
+                        </div>
+                      )}
 
-                    <div className="mt-3" />
+                      <div>
+                        <div className={label}>New Password</div>
+                        <Input.Password
+                          placeholder="Enter new password"
+                          value={newPassword}
+                          onChange={(e) => {
+                            setNewPasswordError(false);
+                            setNewPassword(e.currentTarget.value);
+                          }}
+                          status={newPasswordError ? 'error' : undefined}
+                          iconRender={(visible) =>
+                            visible ? <EyeTwoTone /> : <EyeInvisibleOutlined />
+                          }
+                          visibilityToggle={{
+                            visible: newPasswordVisible,
+                            onVisibleChange: setNewPasswordVisible,
+                          }}
+                        />
+                      </div>
 
-                    {(newPassword || confirmPassword) && (
-                      <Button
-                        type="primary"
-                        onClick={handlePasswordChange}
-                        loading={isChangingPassword}
-                        disabled={isChangingPassword}
-                        className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                      >
-                        {isChangingPassword ? 'Changing password...' : 'Change password'}
-                      </Button>
+                      <div>
+                        <div className={label}>Confirm New Password</div>
+                        <Input.Password
+                          placeholder="Confirm new password"
+                          value={confirmPassword}
+                          onChange={(e) => {
+                            setConfirmPasswordError(false);
+                            setConfirmPassword(e.currentTarget.value);
+                          }}
+                          status={confirmPasswordError ? 'error' : undefined}
+                          iconRender={(visible) =>
+                            visible ? <EyeTwoTone /> : <EyeInvisibleOutlined />
+                          }
+                          visibilityToggle={{
+                            visible: confirmPasswordVisible,
+                            onVisibleChange: setConfirmPasswordVisible,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {passwordDirty && (
+                      <div className="mt-4 flex items-center gap-2 border-t border-gray-200 pt-3 dark:border-gray-700">
+                        <span className="flex-1 text-xs text-gray-500 dark:text-gray-400">
+                          Unsaved changes
+                        </span>
+                        <Button
+                          type="primary"
+                          onClick={handlePasswordChange}
+                          loading={isChangingPassword}
+                          disabled={isChangingPassword}
+                          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
+                        >
+                          {isChangingPassword ? 'Changing password...' : 'Change password'}
+                        </Button>
+                      </div>
                     )}
-                  </div>
+                  </Card>
                 </div>
+
+                <Card title="Two-Factor Authentication">
+                  <div className="max-w-xl">
+                    <MFASettingsComponent />
+                  </div>
+                </Card>
+
+                <Card title="AI assistant access (MCP)">
+                  <AccessTokensComponent />
+                </Card>
               </>
             ) : (
               <div>

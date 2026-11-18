@@ -44,7 +44,7 @@ func (s *Service) projectsFor(user *users_models.User, projectID string) ([]uuid
 }
 
 // StartMaintenance drops the chunks of batches that never completed and measures realized
-// savings, hourly (leader-locked).
+// savings, once an hour across replicas (leader-locked).
 func (s *Service) StartMaintenance(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(maintenanceEvery)
@@ -54,8 +54,8 @@ func (s *Service) StartMaintenance(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, err := leaderlock.RunExclusive(ctx, cache.GetCache(), "cloud-cost-maintenance", 2*maintenanceEvery,
-					func(ctx context.Context) error {
+				_, err := leaderlock.RunAtMostEvery(ctx, cache.GetCache(), "cloud-cost-maintenance", maintenanceEvery,
+					2*maintenanceEvery, func(ctx context.Context) error {
 						now := s.now()
 						if err := dropStaleChunks(ctx, now); err != nil {
 							return err

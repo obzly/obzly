@@ -253,6 +253,10 @@ type EnvVariables struct {
 	// InventoryMaxAssetsPerProject caps one project's inventory (default
 	// 50000); past it the least recently seen assets are dropped.
 	InventoryMaxAssetsPerProject int `env:"INVENTORY_MAX_ASSETS_PER_PROJECT"`
+	// WebAnalyticsGeoIPDB: the country MMDB Web analytics looks visitor IPs
+	// up in (default the DB-IP Lite file bundled in the image). A missing
+	// file only turns the Countries panel off.
+	WebAnalyticsGeoIPDB string `env:"WEB_ANALYTICS_GEOIP_DB"`
 	// APIMaxBodyMB caps request bodies on /api/v1 routes that set no limit
 	// of their own (default 5); ingest routes keep their own limits.
 	APIMaxBodyMB int `env:"API_MAX_BODY_MB"`
@@ -332,6 +336,9 @@ type EnvVariables struct {
 	// AppVersion is the build's version (Dockerfile APP_VERSION build arg), shown by
 	// GET /api/v1/site/info. Defaults to "dev".
 	AppVersion string `env:"APP_VERSION"`
+	// UpdateCheck (UPDATE_CHECK, default true): Settings > Updates asks GitHub for the latest
+	// Obzly release (a plain anonymous request, cached 6 h). False turns the check off.
+	UpdateCheck *bool `env:"UPDATE_CHECK"`
 }
 
 const (
@@ -361,6 +368,11 @@ func (e EnvVariables) EffectiveRootAdminEmail() string {
 // LinkByEmail resolves ControlPlaneLinkByEmail's "unset means true" default.
 func (e EnvVariables) LinkByEmail() bool {
 	return e.ControlPlaneLinkByEmail == nil || *e.ControlPlaneLinkByEmail
+}
+
+// UpdateCheckEnabled resolves UpdateCheck's "unset means true" default.
+func (e EnvVariables) UpdateCheckEnabled() bool {
+	return e.UpdateCheck == nil || *e.UpdateCheck
 }
 
 // SiteExchangeEnabled reports whether this process accepts control-plane assertions
@@ -637,6 +649,9 @@ func loadMultiSiteVariables() {
 	}
 	if env.InventoryMaxAssetsPerProject <= 0 {
 		env.InventoryMaxAssetsPerProject = 50000
+	}
+	if strings.TrimSpace(env.WebAnalyticsGeoIPDB) == "" {
+		env.WebAnalyticsGeoIPDB = DefaultWebAnalyticsGeoIPDB
 	}
 	if env.APIMaxBodyMB <= 0 {
 		env.APIMaxBodyMB = 5
@@ -964,6 +979,8 @@ const (
 	DefaultIngestStreamMaxBytes = 10 << 30 // 10 GiB per signal
 	DefaultIngestL0TargetBytes  = 64 << 20
 	DefaultIngestL0MaxAge       = time.Hour
+	// DefaultWebAnalyticsGeoIPDB is where the Dockerfile puts DB-IP Lite.
+	DefaultWebAnalyticsGeoIPDB = "/app/geoip/dbip-country-lite.mmdb"
 	// MinIngestL0MaxAge keeps low-volume projects from writing (and
 	// uploading) a tiny object every few seconds.
 	MinIngestL0MaxAge = 5 * time.Minute

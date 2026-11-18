@@ -20,7 +20,7 @@ func (c *Controller) RegisterRoutes(router *gin.RouterGroup) {
 
 // GetUsage
 // @Summary Data received per hour and data kept, by signal (admin)
-// @Description For Settings → Overview: uncompressed bytes and rows that arrived in each of the last 24 hours (by the hour of each segment's newest row, so approximate after compaction), and compressed and uncompressed bytes kept with the oldest row, for logs, metrics and traces. Cached for a minute.
+// @Description For Settings → Overview and Organizations → Sites: the Site's project count, and uncompressed bytes and rows that arrived in each of the last 24 hours (by the hour of each segment's newest row, so approximate after compaction), and compressed and uncompressed bytes kept with the oldest row, for logs, metrics and traces. Cached for a minute.
 // @Tags system
 // @Produce json
 // @Security BearerAuth

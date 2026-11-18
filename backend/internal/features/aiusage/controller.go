@@ -38,6 +38,7 @@ func (c *AIUsageController) RegisterRoutes(router *gin.RouterGroup) {
 // @Param to query string true "Range end, RFC3339"
 // @Param groupBy query string false "Breakdown: service (default), model, provider or operation"
 // @Param bucketSeconds query int false "Timeseries bucket size; picked from the range when omitted"
+// @Param compare query string false "previous: add the summary of the equally long window before the range"
 // @Success 200 {object} aiusage.LLMOverviewResponseDTO
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
@@ -61,6 +62,7 @@ func (c *AIUsageController) GetLLMOverview(ctx *gin.Context) {
 
 	response, err := c.service.GetLLMOverview(ctx.Request.Context(), projectID, &LLMOverviewRequest{
 		From: filter.From, To: filter.To, GroupBy: ctx.Query("groupBy"), BucketSeconds: int64(bucketSeconds),
+		Compare: ctx.Query("compare"),
 	}, user)
 	if err != nil {
 		c.handleError(ctx, err)
@@ -122,6 +124,7 @@ func (c *AIUsageController) GetLLMCalls(ctx *gin.Context) {
 // @Param terminal query string false "Only this terminal_type"
 // @Param bucketSeconds query int false "Timeseries bucket size; picked from the range when omitted"
 // @Param groupBy query string false "Timeseries split: model (default) or user"
+// @Param compare query string false "previous: add the summary of the equally long window before the range"
 // @Success 200 {object} aiusage.OverviewResponseDTO
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
@@ -149,6 +152,7 @@ func (c *AIUsageController) GetOverview(ctx *gin.Context) {
 		UsageFilter:   filter,
 		BucketSeconds: int64(bucketSeconds),
 		GroupBy:       ctx.Query("groupBy"),
+		Compare:       ctx.Query("compare"),
 	}, user)
 	if err != nil {
 		c.handleError(ctx, err)

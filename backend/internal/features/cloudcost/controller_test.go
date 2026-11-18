@@ -242,6 +242,41 @@ func Test_CostSummary_MonthToDateForecastAndSources(t *testing.T) {
 	assert.Equal(t, "2026-10-01", *summary.Sources[0].CoveredFrom)
 }
 
+func Test_CostSummary_LastMonthFinal_OnlyOnceEverySourceFinalisedItAndNoDayIsEstimated(t *testing.T) {
+	f := newFixture(t, "Cost final month")
+	lastMonthFinal := func() bool {
+		var summary SummaryDTO
+		test_utils.MakeGetRequestAndUnmarshal(t, f.router, "/api/v1/cloud-cost/summary", f.auth, http.StatusOK,
+			&summary)
+		require.Len(t, summary.Currencies, 1)
+		return summary.Currencies[0].LastMonthFinal
+	}
+	first, second := uuid.New(), uuid.New()
+
+	payload := batch(first, spec.CostSourceAPI, "2026-10-01", "2026-11-08",
+		row("2026-10-20", "111111111111", "Amazon EC2", "", "USD", 50_000_000, 50_000_000),
+		row("2026-11-02", "111111111111", "Amazon EC2", "", "USD", 40_000_000, 40_000_000))
+	f.send(t, f.apiKey, payload, http.StatusOK)
+	assert.False(t, lastMonthFinal(), "a source that never said what's final doesn't make a month final")
+
+	payload.BatchID, payload.FinalThrough = uuid.NewString(), "2026-11-06"
+	f.send(t, f.apiKey, payload, http.StatusOK)
+	assert.True(t, lastMonthFinal())
+
+	late := batch(second, spec.CostSourceAPI, "2026-10-25", "2026-11-08",
+		row("2026-10-31", "222222222222", "Amazon S3", "", "USD", 5_000_000, 5_000_000))
+	late.FinalThrough = "2026-10-30"
+	f.send(t, f.apiKey, late, http.StatusOK)
+	assert.False(t, lastMonthFinal(), "another source hasn't finalised October 31 yet")
+
+	estimated := row("2026-10-31", "222222222222", "Amazon S3", "", "USD", 5_000_000, 5_000_000)
+	estimated.Estimated = true
+	late = batch(second, spec.CostSourceAPI, "2026-10-25", "2026-11-08", estimated)
+	late.FinalThrough = "2026-11-06"
+	f.send(t, f.apiKey, late, http.StatusOK)
+	assert.False(t, lastMonthFinal(), "a day still marked estimated")
+}
+
 func Test_CostBudget_KeepsAManagedRule_AndAlertsOnTheProjection(t *testing.T) {
 	f := newFixture(t, "Cost budget")
 	connection := uuid.New()

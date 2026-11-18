@@ -8,6 +8,7 @@ import (
 
 	"obzly/internal/broker"
 	api_keys "obzly/internal/features/api_keys"
+	"obzly/internal/features/ingestion"
 	metrics_core "obzly/internal/features/metrics/core"
 	"obzly/internal/features/otlp"
 	"obzly/internal/ingest"
@@ -105,6 +106,7 @@ func (s *OtlpMetricsService) Export(
 		return 0, 0, fmt.Errorf("failed to store metric samples: %w", err)
 	}
 
+	ingestion.GetTracker().ObserveResourceMetrics(resolved.ProjectID, resourceMetrics)
 	telemetry.IngestAcceptedRows.WithLabelValues(telemetry.SignalMetrics).Add(float64(len(converted)))
 	telemetry.IngestRejectedRows.WithLabelValues(telemetry.SignalMetrics).Add(float64(rejected))
 	return len(converted), rejected, nil

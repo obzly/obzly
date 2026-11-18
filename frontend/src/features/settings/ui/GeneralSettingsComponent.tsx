@@ -14,6 +14,8 @@ import {
 import { settingsApi } from '../../../entity/users/api/settingsApi';
 import type { UsersSettings } from '../../../entity/users/model/UsersSettings';
 import { copyToClipboard } from '../../../shared/lib';
+import { Card } from '../../../shared/ui/v2';
+import { AppearanceSettingsComponent } from './AppearanceSettingsComponent';
 import { PlansSettingsComponent } from './PlansSettingsComponent';
 
 export function GeneralSettingsComponent() {
@@ -97,177 +99,82 @@ export function GeneralSettingsComponent() {
     }
   };
 
+  const switchRow = (
+    key:
+      | 'isAllowExternalRegistrations'
+      | 'isAllowMemberInvitations'
+      | 'isMemberAllowedToCreateProjects',
+    title: string,
+    help: string,
+  ) => (
+    <div className="flex items-start justify-between gap-6 border-t border-gray-200 pt-3 first:border-t-0 first:pt-0 dark:border-gray-700">
+      <div className="min-w-0 flex-1">
+        <div className="font-medium text-gray-900 dark:text-gray-100">{title}</div>
+        <div className="mt-1 text-gray-500 dark:text-gray-300">{help}</div>
+      </div>
+      <Switch
+        aria-label={title}
+        checked={formSettings[key]}
+        onChange={(checked) => handleSettingChange(key, checked)}
+      />
+    </div>
+  );
+
   return (
-    <div>
-      <div>
-        <div>
-          {/* Only on a Site enrolled with a control plane. */}
-          {!IS_CONTROL_PLANE && SITE_ID && (
-            <div className="max-w-lg rounded-md border border-gray-200 p-4 text-sm dark:border-gray-700">
-              <div className="mb-2 font-medium text-gray-900 dark:text-gray-100">This Site</div>
-              <dl className="grid grid-cols-[max-content_1fr] items-center gap-x-4 gap-y-1.5">
-                <dt className="text-gray-500 dark:text-gray-300">Site ID</dt>
-                <dd className="flex items-center gap-1">
-                  <span className="font-mono">{SITE_ID}</span>
-                  <Tooltip title="Copy Site ID">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CopyOutlined />}
-                      aria-label="Copy Site ID"
-                      onClick={async () => {
-                        await copyToClipboard(SITE_ID);
-                        message.success('Site ID copied');
-                      }}
-                    />
-                  </Tooltip>
-                </dd>
-                {SITE_NAME && SITE_NAME !== SITE_ID && (
-                  <>
-                    <dt className="text-gray-500 dark:text-gray-300">Name</dt>
-                    <dd>{SITE_NAME}</dd>
-                  </>
-                )}
-                {CONTROL_PLANE_URL && (
-                  <>
-                    <dt className="text-gray-500 dark:text-gray-300">Control plane</dt>
-                    <dd className="truncate">
-                      <a
-                        href={CONTROL_PLANE_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-emerald-600 hover:underline"
-                      >
-                        {CONTROL_PLANE_URL}
-                      </a>
-                    </dd>
-                  </>
-                )}
-              </dl>
-              <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                Register this Site on the control plane under this exact ID. Set by this
-                deployment&apos;s SITE_ID.
-              </div>
-            </div>
-          )}
-
-          <h2 className="mt-6 mb-1 text-xl font-bold">Access policy</h2>
-          <div className="mb-4 text-sm text-gray-500 dark:text-gray-300">
-            Who can join and what members may do. MFA and sign-in are under Identity &amp; access.
-          </div>
-          <div>
-            {isLoading ? (
-              <div>
-                <Spin indicator={<LoadingOutlined spin />} />
-              </div>
-            ) : (
-              <div className="max-w-lg text-sm">
-                <div className="space-y-6">
-                  <div className="flex items-start justify-between border-b border-gray-200 pb-4 dark:border-gray-700">
-                    <div className="flex-1 pr-20">
-                      <div className="font-medium text-gray-900 dark:text-gray-100">
-                        Allow external registrations
-                      </div>
-                      <div className="mt-1 text-gray-500 dark:text-gray-300">
-                        When enabled, anyone can register an account. When disabled, new users need
-                        an invitation - except SSO users in a group mapped to access (see Single
-                        Sign-On → Group mappings), who get an account on first sign-in.
-                      </div>
-                    </div>
-
-                    <div className="ml-4">
-                      <Switch
-                        checked={formSettings.isAllowExternalRegistrations}
-                        onChange={(checked) =>
-                          handleSettingChange('isAllowExternalRegistrations', checked)
-                        }
-                        style={{
-                          backgroundColor: formSettings.isAllowExternalRegistrations
-                            ? '#059669'
-                            : undefined,
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {!formSettings.isAllowExternalRegistrations && (
-                    <div className="flex items-start justify-between border-b border-gray-200 pb-4 dark:border-gray-700">
-                      <div className="flex-1 pr-20">
-                        <div className="font-medium text-gray-900 dark:text-gray-100">
-                          Allow member invitations
-                        </div>
-
-                        <div className="mt-1 text-gray-500 dark:text-gray-300">
-                          When enabled, existing members can invite new users to join Obzly. If not
-                          - only admins can invite users.
-                        </div>
-                      </div>
-
-                      <div className="ml-4">
-                        <Switch
-                          checked={formSettings.isAllowMemberInvitations}
-                          onChange={(checked) =>
-                            handleSettingChange('isAllowMemberInvitations', checked)
-                          }
-                          style={{
-                            backgroundColor: formSettings.isAllowMemberInvitations
-                              ? '#059669'
-                              : undefined,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-start justify-between border-b border-gray-200 pb-4 dark:border-gray-700">
-                    <div className="flex-1 pr-20">
-                      <div className="font-medium text-gray-900 dark:text-gray-100">
-                        Members can create projects
-                      </div>
-
-                      <div className="mt-1 text-gray-500 dark:text-gray-300">
-                        When enabled, members (non-admin users) can create new projects. If not -
-                        only admins can create projects.
-                      </div>
-                    </div>
-                    <div className="ml-4">
-                      <Switch
-                        checked={formSettings.isMemberAllowedToCreateProjects}
-                        onChange={(checked) =>
-                          handleSettingChange('isMemberAllowedToCreateProjects', checked)
-                        }
-                        style={{
-                          backgroundColor: formSettings.isMemberAllowedToCreateProjects
-                            ? '#059669'
-                            : undefined,
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {hasChanges && (
-                  <div className="mt-8 flex space-x-2">
-                    <Button
-                      type="primary"
-                      onClick={handleSave}
-                      loading={isSaving}
-                      disabled={isSaving}
-                      className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
-                    >
-                      {isSaving ? 'Saving...' : 'Save Changes'}
-                    </Button>
-
-                    <Button type="default" onClick={handleReset} disabled={isSaving}>
-                      Reset
-                    </Button>
-                  </div>
-                )}
-              </div>
+    <div className="flex flex-col gap-4">
+      {/* Only on a Site enrolled with a control plane. */}
+      {!IS_CONTROL_PLANE && SITE_ID && (
+        <Card
+          title="This Site"
+          subtitle="Register this Site on the control plane under this exact ID. Set by this deployment's SITE_ID."
+        >
+          <dl className="m-0 grid grid-cols-[max-content_1fr] items-center gap-x-4 gap-y-1.5 text-sm">
+            <dt className="text-gray-500 dark:text-gray-300">Site ID</dt>
+            <dd className="m-0 flex items-center gap-1">
+              <span className="font-mono">{SITE_ID}</span>
+              <Tooltip title="Copy Site ID">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CopyOutlined />}
+                  aria-label="Copy Site ID"
+                  onClick={async () => {
+                    await copyToClipboard(SITE_ID);
+                    message.success('Site ID copied');
+                  }}
+                />
+              </Tooltip>
+            </dd>
+            {SITE_NAME && SITE_NAME !== SITE_ID && (
+              <>
+                <dt className="text-gray-500 dark:text-gray-300">Name</dt>
+                <dd className="m-0">{SITE_NAME}</dd>
+              </>
             )}
-          </div>
+            {CONTROL_PLANE_URL && (
+              <>
+                <dt className="text-gray-500 dark:text-gray-300">Control plane</dt>
+                <dd className="m-0 truncate">
+                  <a
+                    href={CONTROL_PLANE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-600 hover:underline"
+                  >
+                    {CONTROL_PLANE_URL}
+                  </a>
+                </dd>
+              </>
+            )}
+          </dl>
+        </Card>
+      )}
 
-          <div className="mt-3 text-sm text-gray-500 dark:text-gray-300">
+      <Card
+        title="Access policy"
+        subtitle="Who can join and what members may do. MFA and sign-in are under Identity & access."
+        extra={
+          <span className="text-sm text-gray-500 dark:text-gray-300">
             Read more about settings you can{' '}
             <a
               href={`${WEBSITE_URL}/settings`}
@@ -277,11 +184,56 @@ export function GeneralSettingsComponent() {
             >
               here
             </a>
-          </div>
+          </span>
+        }
+      >
+        {isLoading ? (
+          <Spin indicator={<LoadingOutlined spin />} />
+        ) : (
+          <div className="flex max-w-2xl flex-col gap-3 text-sm">
+            {switchRow(
+              'isAllowExternalRegistrations',
+              'Allow external registrations',
+              'When enabled, anyone can register an account. When disabled, new users need an invitation - except SSO users in a group mapped to access (see Single Sign-On → Group mappings), who get an account on first sign-in.',
+            )}
+            {!formSettings.isAllowExternalRegistrations &&
+              switchRow(
+                'isAllowMemberInvitations',
+                'Allow member invitations',
+                'When enabled, existing members can invite new users to join Obzly. If not - only admins can invite users.',
+              )}
+            {switchRow(
+              'isMemberAllowedToCreateProjects',
+              'Members can create projects',
+              'When enabled, members (non-admin users) can create new projects. If not - only admins can create projects.',
+            )}
 
-          {IS_CLOUD && <PlansSettingsComponent />}
-        </div>
-      </div>
+            {hasChanges && (
+              <div className="flex items-center gap-2 border-t border-gray-200 pt-3 dark:border-gray-700">
+                <span className="flex-1 text-xs text-gray-500 dark:text-gray-400">
+                  Unsaved changes
+                </span>
+                <Button type="default" onClick={handleReset} disabled={isSaving}>
+                  Reset
+                </Button>
+                <Button
+                  type="primary"
+                  onClick={handleSave}
+                  loading={isSaving}
+                  disabled={isSaving}
+                  className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+                >
+                  {isSaving ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {settings && <AppearanceSettingsComponent initialSettings={settings} />}
+
+      {IS_CLOUD && <PlansSettingsComponent />}
     </div>
   );
 }

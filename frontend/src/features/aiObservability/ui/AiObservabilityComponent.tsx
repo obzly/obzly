@@ -1,10 +1,11 @@
-import { Tabs } from 'antd';
 import React, { useState } from 'react';
 
+import { PageHeader } from '../../../shared/ui/v2';
 import { BudgetsComponent } from './BudgetsComponent';
 import { ClaudeCodeUsageComponent } from './ClaudeCodeUsageComponent';
 import { LlmAppsComponent } from './LlmAppsComponent';
 import { ModelPricesComponent } from './ModelPricesComponent';
+import { PillTabs } from './bits';
 
 interface Props {
   projectId: string;
@@ -17,7 +18,14 @@ interface Props {
 
 type SectionKey = 'claude-code' | 'llm-apps' | 'budgets' | 'settings';
 
-const SECTIONS: SectionKey[] = ['claude-code', 'llm-apps', 'budgets', 'settings'];
+const SECTION_TABS: { key: SectionKey; label: string }[] = [
+  { key: 'claude-code', label: 'Claude Code' },
+  { key: 'llm-apps', label: 'LLM apps' },
+  { key: 'budgets', label: 'Budgets' },
+  { key: 'settings', label: 'Settings' },
+];
+
+const SECTIONS: SectionKey[] = SECTION_TABS.map((tab) => tab.key);
 
 const SECTION_STORAGE_KEY = 'ai_observability_section';
 
@@ -39,8 +47,8 @@ export const AiObservabilityComponent = ({
 }: Props): React.JSX.Element => {
   const [section, setSection] = useState<SectionKey>(readStoredSection);
 
-  const changeSection = (key: string) => {
-    setSection(key as SectionKey);
+  const changeSection = (key: SectionKey) => {
+    setSection(key);
     try {
       localStorage.setItem(SECTION_STORAGE_KEY, key);
     } catch {
@@ -49,47 +57,41 @@ export const AiObservabilityComponent = ({
   };
 
   return (
-    <div className="overflow-y-auto p-4" style={{ height: contentHeight }}>
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">AI Observability</h2>
-      <Tabs
-        activeKey={section}
-        onChange={changeSection}
-        destroyOnHidden
-        items={[
-          {
-            key: 'claude-code',
-            label: 'Claude Code',
-            children: (
-              <ClaudeCodeUsageComponent
-                projectId={projectId}
-                onOpenDataSources={onOpenDataSources}
+    <div className="flex grow">
+      <div className="w-full overflow-y-auto" style={{ height: contentHeight }}>
+        <div className="flex max-w-[1400px] flex-col gap-5 px-1 pt-2 pb-8">
+          <PageHeader
+            title="AI Observability"
+            subtitle="Claude Code and LLM apps for this project: spend, tokens, sessions and failures"
+            actions={
+              <PillTabs
+                items={SECTION_TABS}
+                active={section}
+                onChange={changeSection}
+                label="AI Observability views"
               />
-            ),
-          },
-          {
-            key: 'llm-apps',
-            label: 'LLM apps',
-            children: (
-              <LlmAppsComponent
-                projectId={projectId}
-                onOpenDataSources={onOpenDataSources}
-                onOpenTrace={onOpenTrace}
-                onOpenPrices={() => changeSection('settings')}
-              />
-            ),
-          },
-          {
-            key: 'budgets',
-            label: 'Budgets',
-            children: <BudgetsComponent projectId={projectId} canManage={canManage} />,
-          },
-          {
-            key: 'settings',
-            label: 'Settings',
-            children: <ModelPricesComponent projectId={projectId} canManage={canManage} />,
-          },
-        ]}
-      />
+            }
+          />
+          {/* Only the open section is mounted, as before (destroyOnHidden). */}
+          {section === 'claude-code' && (
+            <ClaudeCodeUsageComponent projectId={projectId} onOpenDataSources={onOpenDataSources} />
+          )}
+          {section === 'llm-apps' && (
+            <LlmAppsComponent
+              projectId={projectId}
+              onOpenDataSources={onOpenDataSources}
+              onOpenTrace={onOpenTrace}
+              onOpenPrices={() => changeSection('settings')}
+            />
+          )}
+          {section === 'budgets' && (
+            <BudgetsComponent projectId={projectId} canManage={canManage} />
+          )}
+          {section === 'settings' && (
+            <ModelPricesComponent projectId={projectId} canManage={canManage} />
+          )}
+        </div>
+      </div>
     </div>
   );
 };

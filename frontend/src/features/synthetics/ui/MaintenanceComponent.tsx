@@ -16,6 +16,7 @@ import {
   type MaintenanceWindow,
   maintenanceApi,
 } from '../../../entity/synthetics';
+import { Card } from '../../../shared/ui/v2';
 import { inFolder } from '../lib/folders';
 import {
   MAINTENANCE_HATCH,
@@ -296,7 +297,7 @@ export const MaintenanceComponent = ({
                     key={day}
                     role="img"
                     aria-label={`${window.name}, ${dayLabel.format(dayStart(now, day))}: ${on ? 'maintenance' : 'none'}`}
-                    className="h-5 rounded-sm bg-gray-100 dark:bg-gray-700"
+                    className="h-5 rounded-md bg-[var(--v2-track)]"
                     style={on ? { background: MAINTENANCE_HATCH } : undefined}
                   />
                 ))}
@@ -311,15 +312,17 @@ export const MaintenanceComponent = ({
         </div>
       </Panel>
 
-      <Table<MaintenanceWindow>
-        rowKey="id"
-        size="middle"
-        dataSource={sorted}
-        columns={columns}
-        pagination={false}
-        scroll={{ x: 900 }}
-        locale={{ emptyText: 'No maintenance windows yet' }}
-      />
+      <Card>
+        <Table<MaintenanceWindow>
+          rowKey="id"
+          size="middle"
+          dataSource={sorted}
+          columns={columns}
+          pagination={false}
+          scroll={{ x: 900 }}
+          locale={{ emptyText: 'No maintenance windows yet' }}
+        />
+      </Card>
 
       {editing && (
         <MaintenanceEditor

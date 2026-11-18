@@ -128,7 +128,7 @@ export function MFALoginComponent({ mfaToken, isSetup, onBack, onSuccess }: Prop
         <button
           type="button"
           onClick={onBack}
-          className="cursor-pointer font-medium text-emerald-600 hover:text-emerald-700"
+          className="text-accent-600 hover:text-accent-700 cursor-pointer font-medium"
         >
           Back to sign in
         </button>

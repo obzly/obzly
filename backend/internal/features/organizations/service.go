@@ -183,7 +183,21 @@ func (s *Service) ListMembers(orgID uuid.UUID, user *users_models.User) ([]Membe
 	if _, err := s.access(orgID, user, false); err != nil {
 		return nil, err
 	}
-	return s.repo.members(orgID)
+	members, err := s.repo.members(orgID)
+	if err != nil {
+		return nil, err
+	}
+	teams, err := s.repo.memberTeams(orgID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range members {
+		members[i].Teams = teams[members[i].UserID]
+		if members[i].Teams == nil {
+			members[i].Teams = []string{}
+		}
+	}
+	return members, nil
 }
 
 // SetMember adds a user to the organization or changes their role. Only

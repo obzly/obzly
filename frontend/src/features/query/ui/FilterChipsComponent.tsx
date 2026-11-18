@@ -1,4 +1,5 @@
-import { Tag, Tooltip } from 'antd';
+import { CloseOutlined } from '@ant-design/icons';
+import { Tooltip } from 'antd';
 import React from 'react';
 
 import { levelColor } from '../lib/logLevels';
@@ -43,19 +44,16 @@ export const FilterChipsComponent = ({
   if (total === 0) return null;
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="text-xs text-gray-500 dark:text-gray-400">Filters</span>
       {chips.map((clause) => {
         const { negated, field, value } = describeClause(clause);
         return (
-          <Tag
+          <Chip
             key={clause}
-            closable
-            onClose={(e) => {
-              e.preventDefault();
-              onRemoveClause(clause);
-            }}
-            color={negated ? 'red' : 'default'}
-            className="!mr-0 max-w-[340px] !font-mono text-xs"
+            negated={negated}
+            removeLabel={`Remove filter ${clause}`}
+            onRemove={() => onRemoveClause(clause)}
           >
             <Tooltip title={clause} mouseEnterDelay={0.5}>
               <span className="inline-block max-w-[300px] truncate align-bottom">
@@ -73,32 +71,28 @@ export const FilterChipsComponent = ({
                 )}
               </span>
             </Tooltip>
-          </Tag>
+          </Chip>
         );
       })}
       {[...hiddenLevels].sort().map((level) => (
-        <Tag
+        <Chip
           key={`level:${level}`}
-          closable
-          onClose={(e) => {
-            e.preventDefault();
-            onShowLevel(level);
-          }}
-          color="red"
-          className="!mr-0 !font-mono text-xs"
+          negated
+          removeLabel={`Show ${level.toLowerCase()} logs again`}
+          onRemove={() => onShowLevel(level)}
         >
           <span
             className="mr-1 inline-block h-2 w-2 rounded-full align-middle"
             style={{ background: levelColor(level) }}
           />
           level ≠ {level.toLowerCase()}
-        </Tag>
+        </Chip>
       ))}
       {total > 1 && (
         <button
           type="button"
           onClick={onClearAll}
-          className="ml-1 text-xs text-emerald-600 hover:underline"
+          className="text-accent-600 dark:text-accent-400 ml-1 cursor-pointer text-xs hover:underline"
         >
           Clear all
         </button>
@@ -106,3 +100,34 @@ export const FilterChipsComponent = ({
     </div>
   );
 };
+
+/** A removable v2 filter chip; red-tinted when it excludes. */
+const Chip = ({
+  negated,
+  removeLabel,
+  onRemove,
+  children,
+}: {
+  negated: boolean;
+  removeLabel: string;
+  onRemove: () => void;
+  children: React.ReactNode;
+}): React.JSX.Element => (
+  <span
+    className={`inline-flex max-w-[340px] items-center gap-1 rounded-lg border py-0.5 pr-1 pl-2 font-mono text-xs ${
+      negated
+        ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300'
+        : 'border-gray-200 bg-gray-50 text-gray-800 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-100'
+    }`}
+  >
+    {children}
+    <button
+      type="button"
+      onClick={onRemove}
+      aria-label={removeLabel}
+      className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-[10px] text-gray-400 hover:bg-gray-200 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+    >
+      <CloseOutlined />
+    </button>
+  </span>
+);

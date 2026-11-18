@@ -6,6 +6,7 @@ import (
 
 	"obzly/internal/broker"
 	api_keys "obzly/internal/features/api_keys"
+	"obzly/internal/features/ingestion"
 	"obzly/internal/features/otlp"
 	spans_core "obzly/internal/features/spans/core"
 	"obzly/internal/ingest"
@@ -96,6 +97,7 @@ func (s *OtlpTracesService) Export(
 		return 0, 0, fmt.Errorf("failed to store spans: %w", err)
 	}
 
+	ingestion.GetTracker().ObserveResourceSpans(resolved.ProjectID, resourceSpans)
 	telemetry.IngestAcceptedRows.WithLabelValues(telemetry.SignalSpans).Add(float64(len(converted)))
 	return len(converted), 0, nil
 }

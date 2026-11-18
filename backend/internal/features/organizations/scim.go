@@ -168,7 +168,7 @@ func (s *Service) scimCreateUser(token *SCIMToken, change scimUserChange) (*scim
 		}
 		return nil, err
 	}
-	s.audit.WriteAuditLog(fmt.Sprintf("SCIM (%s): user %s created", token.Name, email), nil, nil)
+	s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): user %s created", token.Name, email), token.OrgID)
 	return s.scimGetUser(token.OrgID, user.ID)
 }
 
@@ -217,6 +217,8 @@ func (s *Service) scimUpdateUser(token *SCIMToken, userID uuid.UUID, change scim
 				}
 				return nil, err
 			}
+			s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): user %s updated (%s)", token.Name, row.Email,
+				scimChangedFields(name, email)), token.OrgID)
 		}
 	}
 	if change.externalID != nil {
@@ -253,7 +255,10 @@ func (s *Service) scimDeleteUser(token *SCIMToken, userID uuid.UUID) error {
 		}
 		return err
 	}
-	s.audit.WriteAuditLog(fmt.Sprintf("SCIM (%s): user %s removed from organization", token.Name, row.Email), nil, nil)
+	s.audit.WriteOrgAuditLog(
+		fmt.Sprintf("SCIM (%s): user %s removed from organization", token.Name, row.Email),
+		token.OrgID,
+	)
 	return nil
 }
 
@@ -320,7 +325,7 @@ func (s *Service) scimCreateGroup(token *SCIMToken, change scimGroupChange) (*Te
 			return nil, err
 		}
 	}
-	s.audit.WriteAuditLog(fmt.Sprintf("SCIM (%s): team %s created", token.Name, team.Name), nil, nil)
+	s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): team %s created", token.Name, team.Name), token.OrgID)
 	return s.scimGetGroup(token.OrgID, team.ID)
 }
 
@@ -342,6 +347,10 @@ func (s *Service) scimUpdateGroup(token *SCIMToken, teamID uuid.UUID, change sci
 				return nil, &scimError{409, "uniqueness", "A team with that name exists"}
 			}
 			return nil, err
+		}
+		if renamed, ok := updates["name"].(string); ok {
+			s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): team %s renamed to %s", token.Name, team.Name, renamed),
+				token.OrgID)
 		}
 	}
 	add, remove := change.add, change.remove
@@ -377,8 +386,8 @@ func (s *Service) scimUpdateGroup(token *SCIMToken, teamID uuid.UUID, change sci
 		}
 	}
 	if len(add)+len(remove) > 0 {
-		s.audit.WriteAuditLog(fmt.Sprintf("SCIM (%s): team %s members +%d -%d", token.Name, team.Name,
-			len(add), len(remove)), nil, nil)
+		s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): team %s members +%d -%d", token.Name, team.Name,
+			len(add), len(remove)), token.OrgID)
 	}
 	return s.scimGetGroup(token.OrgID, teamID)
 }
@@ -391,7 +400,7 @@ func (s *Service) scimDeleteGroup(token *SCIMToken, teamID uuid.UUID) error {
 	if err := s.deleteTeam(teamID); err != nil {
 		return err
 	}
-	s.audit.WriteAuditLog(fmt.Sprintf("SCIM (%s): team %s deleted", token.Name, team.Name), nil, nil)
+	s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): team %s deleted", token.Name, team.Name), token.OrgID)
 	return nil
 }
 
@@ -399,9 +408,14 @@ func (s *Service) scimSetActive(token *SCIMToken, row *scimUserRow, active bool)
 	if row.owned(token.OrgID) {
 		user := &users_models.User{ID: row.UserID, Email: row.Email}
 		if row.Status == users_enums.UserStatusInactive || !active {
-			if err := s.management.SetStatusByProvisioning(user, active, "SCIM ("+token.Name+")"); err != nil {
+			if err := s.management.SetStatusByProvisioning(user, active); err != nil {
 				return err
 			}
+			verb := "deactivated"
+			if active {
+				verb = "activated"
+			}
+			s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): user %s %s", token.Name, row.Email, verb), token.OrgID)
 		}
 		if !active || !row.Suspended {
 			return nil
@@ -421,7 +435,7 @@ func (s *Service) scimSetActive(token *SCIMToken, row *scimUserRow, active bool)
 	if active {
 		verb = "unsuspended"
 	}
-	s.audit.WriteAuditLog(fmt.Sprintf("SCIM (%s): membership of %s %s", token.Name, row.Email, verb), nil, nil)
+	s.audit.WriteOrgAuditLog(fmt.Sprintf("SCIM (%s): membership of %s %s", token.Name, row.Email, verb), token.OrgID)
 	return nil
 }
 
@@ -487,4 +501,15 @@ func uniqueIDs(ids []uuid.UUID) []uuid.UUID {
 		}
 	}
 	return out
+}
+
+func scimChangedFields(name, email *string) string {
+	switch {
+	case name != nil && email != nil:
+		return "name, email"
+	case email != nil:
+		return "email"
+	default:
+		return "name"
+	}
 }

@@ -111,9 +111,9 @@ export function UserAuditLogsSidebarComponent({ user }: Props) {
       width: 200,
       render: (projectId: string | undefined) => (
         <span
-          className={`inline-block rounded-full px-2 py-1 text-xs font-medium ${
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
             projectId
-              ? 'bg-blue-100 text-blue-800'
+              ? 'bg-[var(--v2-ok-soft)] text-[var(--v2-accent)]'
               : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
           }`}
         >
@@ -142,7 +142,7 @@ export function UserAuditLogsSidebarComponent({ user }: Props) {
     <div className="h-full">
       <div ref={scrollContainerRef} className="h-full overflow-y-auto">
         <div className="mb-4 flex items-center justify-between">
-          <div className="text-sm text-gray-500 dark:text-gray-300">
+          <div className="text-sm text-gray-500 dark:text-gray-400">
             {isLoading ? (
               <Spin indicator={<LoadingOutlined spin />} />
             ) : (
@@ -157,14 +157,15 @@ export function UserAuditLogsSidebarComponent({ user }: Props) {
           </div>
         ) : (
           <>
-            <Table
-              columns={columns}
-              dataSource={auditLogs}
-              pagination={false}
-              rowKey="id"
-              size="small"
-              className="mb-4"
-            />
+            <div className="rounded-xl border border-gray-200 px-3 pt-1 dark:border-gray-700">
+              <Table
+                columns={columns}
+                dataSource={auditLogs}
+                pagination={false}
+                rowKey="id"
+                size="small"
+              />
+            </div>
 
             {isLoadingMore && (
               <div className="flex justify-center py-4">

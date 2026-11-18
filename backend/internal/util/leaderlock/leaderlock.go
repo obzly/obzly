@@ -20,6 +20,15 @@ import (
 
 const keyPrefix = "obzly:leaderlock:"
 
+// lastRunPrefix keys RunAtMostEvery's interval claims, beside the locks.
+const lastRunPrefix = keyPrefix + "last-run:"
+
+// intervalSlackDivisor: an interval claim expires interval/20 early, so a
+// replica whose ticker fires exactly one interval later (or a few ms early
+// against Valkey's clock) still finds it free instead of skipping a whole
+// interval.
+const intervalSlackDivisor = 20
+
 // acquireOrRenewScript atomically acquires a free lock, or renews it if this owner holds
 // it. Returns 1 if the caller holds the lock afterwards, 0 if someone else does.
 const acquireOrRenewScript = `
@@ -115,25 +124,30 @@ func RunExclusive(
 	ttl time.Duration,
 	fn func(ctx context.Context) error,
 ) (ran bool, err error) {
-	lock := New(client, name, ttl)
+	return runExclusive(ctx, client, name, ttl, nil, fn)
+}
 
-	acquired, err := lock.TryAcquire(ctx)
-	if err != nil {
-		telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultError).Inc()
-		return false, err
+// RunAtMostEvery runs fn at most once per interval across all replicas: the
+// first replica to get name's lock after the previous run's interval claim
+// expired claims the next interval and runs fn (ran is true); everyone else
+// skips. For interval tasks whose duplicate passes cost something:
+// RunExclusive only keeps passes from overlapping, so N replicas ticking
+// every interval run it N times per interval. The lock (same name as
+// RunExclusive's, so older replicas mid-rollout still don't overlap) is held
+// and renewed for fn's duration as with RunExclusive. A failed pass keeps its
+// claim: the next try is one interval later, as on a single replica.
+func RunAtMostEvery(
+	ctx context.Context,
+	client valkey.Client,
+	name string,
+	interval time.Duration,
+	ttl time.Duration,
+	fn func(ctx context.Context) error,
+) (ran bool, err error) {
+	claim := func(ctx context.Context, owner string) (bool, error) {
+		return claimInterval(ctx, client, name, owner, interval)
 	}
-	if !acquired {
-		telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultSkipped).Inc()
-		return false, nil
-	}
-	defer func() { _ = lock.Release(ctx) }()
-
-	fnCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stopRenewing := lock.keepRenewed(fnCtx, cancel)
-	defer stopRenewing()
-
-	return true, runObserved(fnCtx, name, fn)
+	return runExclusive(ctx, client, name, ttl, claim, fn)
 }
 
 // RunExclusiveBlocking polls for name's lock until it is acquired or maxWait elapses,
@@ -237,4 +251,71 @@ func runObserved(ctx context.Context, name string, fn func(ctx context.Context) 
 	telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultOK).Inc()
 	telemetry.LeaderTaskLastSuccess.WithLabelValues(name).SetToCurrentTime()
 	return nil
+}
+
+// runExclusive acquires name's lock and, if claim (optional) agrees too, runs
+// fn while renewing the lock. Every attempt counts in leader_task_runs_total:
+// ok/error for a pass that ran, skipped for one another replica holds or
+// already ran this interval.
+func runExclusive(
+	ctx context.Context,
+	client valkey.Client,
+	name string,
+	ttl time.Duration,
+	claim func(ctx context.Context, owner string) (bool, error),
+	fn func(ctx context.Context) error,
+) (bool, error) {
+	lock := New(client, name, ttl)
+
+	acquired, err := lock.TryAcquire(ctx)
+	if err != nil {
+		telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultError).Inc()
+		return false, err
+	}
+	if !acquired {
+		telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultSkipped).Inc()
+		return false, nil
+	}
+	defer func() { _ = lock.Release(ctx) }()
+
+	if claim != nil {
+		claimed, err := claim(ctx, lock.owner)
+		if err != nil {
+			telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultError).Inc()
+			return false, err
+		}
+		if !claimed {
+			telemetry.LeaderTaskRuns.WithLabelValues(name, telemetry.ResultSkipped).Inc()
+			return false, nil
+		}
+	}
+
+	fnCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopRenewing := lock.keepRenewed(fnCtx, cancel)
+	defer stopRenewing()
+
+	return true, runObserved(fnCtx, name, fn)
+}
+
+// claimInterval takes name's claim on the current interval: true when no
+// run claimed one within the last interval (less the slack). Called with
+// name's lock held, so a claim is always followed by a run.
+func claimInterval(
+	ctx context.Context, client valkey.Client, name, owner string, interval time.Duration,
+) (bool, error) {
+	expiry := max(interval-interval/intervalSlackDivisor, time.Millisecond)
+	err := client.Do(ctx, client.B().Set().
+		Key(lastRunPrefix+name).
+		Value(owner).
+		Nx().
+		PxMilliseconds(expiry.Milliseconds()).
+		Build()).Error()
+	if valkey.IsValkeyNil(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("leaderlock: claim interval of %q failed: %w", name, err)
+	}
+	return true, nil
 }

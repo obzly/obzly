@@ -17,8 +17,17 @@ export type { InviteUserRequest } from './model/InviteUserRequest';
 export type { InviteUserResponse } from './model/InviteUserResponse';
 export type { UpdateUserInfoRequest } from './model/UpdateUserInfoRequest';
 export type { UserProfile } from './model/UserProfile';
+export type { UIPreferences } from './model/UIPreferences';
 export type { ListUsersRequest } from './model/ListUsersRequest';
 export type { ListUsersResponse } from './model/ListUsersResponse';
+export type { UsersSummary } from './model/UsersSummary';
+export type {
+  UserDetail,
+  UserOrgMembership,
+  UserProjectRole,
+  UserSignInMethod,
+  UserSiteAccess,
+} from './model/UserDetail';
 export type { ChangeUserRoleRequest } from './model/ChangeUserRoleRequest';
 export type { UsersSettings } from './model/UsersSettings';
 export { UserRole } from './model/UserRole';
@@ -36,6 +45,7 @@ export type { UpdateSSOConnectorRequest } from './model/UpdateSSOConnectorReques
 export type { PublicSSOConnector } from './model/PublicSSOConnector';
 export type { MFAStatus } from './model/MFAStatus';
 export type { AccessToken, CreateAccessTokenResponse } from './model/AccessToken';
+export { MCP_WRITE_SCOPE } from './model/AccessToken';
 export type {
   OAuthConnectedApp,
   OAuthConsentInfo,

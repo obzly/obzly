@@ -26,7 +26,7 @@ func Test_mergeServiceMap_BothSourcesOnSameEdge_TaggedBoth(t *testing.T) {
 		{SrcService: "a", DstService: "b", BytesTotal: 500, PacketsTotal: 3},
 	}
 
-	response := mergeServiceMap(spanEdges, netEdges, nil)
+	response := mergeServiceMap(spanEdges, netEdges, nil, nil)
 
 	require.Len(t, response.Edges, 1)
 	edge := response.Edges[0]
@@ -55,7 +55,7 @@ func Test_mergeServiceMap_K8sMetadata_AttachedByName(t *testing.T) {
 		"postgres-db": {Namespace: "prod"}, // no Deployment/Node - OBI's network metrics never provide these
 	}
 
-	response := mergeServiceMap(spanEdges, netEdges, k8sMetadata)
+	response := mergeServiceMap(spanEdges, netEdges, k8sMetadata, nil)
 
 	byName := make(map[string]ServiceMapNodeDTO, len(response.Nodes))
 	for _, node := range response.Nodes {
@@ -112,7 +112,7 @@ func Test_mergeServiceMap_OverCap_CollapsesIntoOtherNode(t *testing.T) {
 		})
 	}
 
-	response := mergeServiceMap(spanEdges, nil, nil)
+	response := mergeServiceMap(spanEdges, nil, nil, nil)
 
 	names := make([]string, 0, len(response.Nodes))
 	for _, node := range response.Nodes {

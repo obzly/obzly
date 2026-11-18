@@ -71,32 +71,29 @@ func BloomPath(segmentPath string) string {
 	return segmentPath + BloomSuffix
 }
 
-// TokenBlooms builds filters on its own DuckDB handle: bounded memory, a
-// spill directory for the DISTINCT over a large file.
+// TokenBlooms builds filters on the process's shared token filter database
+// (bloomHandle): bounded memory, a spill directory for the DISTINCT over a
+// large file.
 type TokenBlooms struct {
-	db       *sql.DB
-	spillDir string
+	db *sql.DB
 }
 
-const tokenBloomMemoryLimit = "512MB"
+const (
+	// tokenBloomMemoryLimit is shared by the logs and AI logs builders.
+	tokenBloomMemoryLimit = "384MB"
+	tokenBloomThreads     = 2
+)
 
-// NewTokenBlooms opens the handle, spilling under spillRoot.
+var bloomHandle = &sharedHandle{kind: "token_bloom", limit: tokenBloomMemoryLimit, threads: tokenBloomThreads}
+
+// NewTokenBlooms takes a reference on the shared database, which spills
+// under spillRoot when this opens it.
 func NewTokenBlooms(spillRoot string) (*TokenBlooms, error) {
-	db, err := sql.Open("duckdb", "")
+	db, err := bloomHandle.acquire(spillRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open token filter duckdb: %w", err)
 	}
-	spillDir, err := ConfigureMemory(db, tokenBloomMemoryLimit, spillRoot)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec("SET threads = 2"); err != nil {
-		_ = db.Close()
-		_ = os.RemoveAll(spillDir)
-		return nil, err
-	}
-	return &TokenBlooms{db: db, spillDir: spillDir}, nil
+	return &TokenBlooms{db: db}, nil
 }
 
 // Build writes the filter of stream's file at path beside it (reusing one
@@ -109,11 +106,7 @@ func (t *TokenBlooms) Build(ctx context.Context, stream, path string) (bool, err
 }
 
 func (t *TokenBlooms) Close() error {
-	err := t.db.Close()
-	if t.spillDir != "" {
-		_ = os.RemoveAll(t.spillDir)
-	}
-	return err
+	return bloomHandle.release()
 }
 
 // BuildTokenBloom writes the filter of stream's file at path to

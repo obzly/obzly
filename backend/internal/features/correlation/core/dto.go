@@ -75,3 +75,21 @@ func (s *IncidentSession) ToSummaryDTO() SessionSummaryDTO {
 		CreatedAt:      s.CreatedAt,
 	}
 }
+
+// ServiceImpactDTO is one service's error signals in a session's window,
+// counted live from the logs and spans streams.
+type ServiceImpactDTO struct {
+	ServiceName string `json:"serviceName"`
+	ErrorLogs   int64  `json:"errorLogs"`
+	ErrorSpans  int64  `json:"errorSpans"`
+	Total       int64  `json:"total"`
+}
+
+// SessionImpactDTO ranks a session's services by error signals (most
+// first) within [WindowStart, WindowEnd].
+type SessionImpactDTO struct {
+	SessionID   string             `json:"sessionId"`
+	WindowStart time.Time          `json:"windowStart"`
+	WindowEnd   time.Time          `json:"windowEnd"`
+	Services    []ServiceImpactDTO `json:"services"`
+}

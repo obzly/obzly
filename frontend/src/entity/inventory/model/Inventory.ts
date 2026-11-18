@@ -106,6 +106,20 @@ export interface InventorySummary {
   health: Partial<Record<AssetHealth, number>>;
   states: Partial<Record<AssetState, number>>;
   projects: { id: string; name: string; assets: number }[];
+  /** Only with history: true (and from Sites that keep it). */
+  history?: InventoryHistory;
+}
+
+/** Hourly counts the inventory builder keeps (30 days; the summary returns 7). */
+export interface InventoryHistory {
+  /** Hours with counts, oldest first (ISO). */
+  hours: string[];
+  /** Each kind's assets (every health) at each of hours. */
+  kinds: Partial<Record<AssetKind, number[]>>;
+  /** The newest hour at least 24 h old; absent when none is recent enough to compare with. */
+  previousAt?: string;
+  /** Assets by kind, then health, at previousAt. */
+  previous?: Partial<Record<AssetKind, Partial<Record<AssetHealth, number>>>>;
 }
 
 /** Where an asset came from: on a control plane, one of several Sites. */

@@ -42,12 +42,15 @@ type AuditResult struct {
 	Failures []AuditFailure `json:"failures"`
 }
 
+// defaultAuditConcurrency: segments an audit checks at once.
+const defaultAuditConcurrency = 4
+
 // Audit checks a random sample of uploaded segments against object
 // storage: the object exists, its size is the catalog's, and its row count
 // is the catalog's. Read-only.
 func Audit(ctx context.Context, store *ObjectStore, opts AuditOptions) (*AuditResult, error) {
 	if opts.Concurrency <= 0 {
-		opts.Concurrency = 4
+		opts.Concurrency = defaultAuditConcurrency
 	}
 	base := storage.GetDb().Model(&SegmentRecord{}).Where("uploaded_at IS NOT NULL AND object_key <> ''")
 	if len(opts.Projects) > 0 {
@@ -114,6 +117,10 @@ func auditSegment(ctx context.Context, store *ObjectStore, tempDir string, recor
 		return fail("unreadable", err.Error())
 	}
 	defer func() { _ = db.Close() }()
+	// count(*) reads the footer only.
+	if err := SetHandleLimits(db, metadataMemoryLimit, metadataThreads); err != nil {
+		return fail("unreadable", err.Error())
+	}
 	var rows int64
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM read_parquet(?)", path).Scan(&rows); err != nil {
 		return fail("unreadable", err.Error())

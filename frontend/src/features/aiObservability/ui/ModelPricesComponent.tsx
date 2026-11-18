@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import React, { useEffect, useState } from 'react';
 
 import { type AiModelPricesResponse, aiBudgetsApi } from '../../../entity/aiUsage';
+import { Card } from '../../../shared/ui/v2';
 import { formatCount } from '../lib/format';
 import { parsePrice } from '../lib/llmApps';
 
@@ -166,7 +167,7 @@ export const ModelPricesComponent = ({ projectId, canManage }: Props): React.JSX
   const priceInput = (row: PriceRow, field: 'input' | 'output' | 'cached', label: string) => (
     <Input
       size="small"
-      className="!w-28"
+      className="!w-28 font-mono"
       aria-label={label}
       value={row[field]}
       placeholder={field === 'cached' ? 'as input' : 'not set'}
@@ -184,6 +185,7 @@ export const ModelPricesComponent = ({ projectId, canManage }: Props): React.JSX
           <Input
             size="small"
             aria-label="Model"
+            className="min-w-[180px] font-mono"
             placeholder="claude-sonnet-4-5*"
             value={row.model}
             onChange={(e) => edit(row.key, { model: e.target.value })}
@@ -203,7 +205,21 @@ export const ModelPricesComponent = ({ projectId, canManage }: Props): React.JSX
       key: 'cached',
       render: (_, row) => priceInput(row, 'cached', 'Cached input price'),
     },
-    { title: 'Seen in 24 h', key: 'seen', render: (_, row) => seenText(row.seenCalls) },
+    {
+      title: 'Seen in 24 h',
+      key: 'seen',
+      render: (_, row) => (
+        <span
+          className={
+            row.seenCalls !== null && row.seenCalls > 0 && !row.id
+              ? 'text-[var(--v2-orange)]'
+              : 'text-gray-500 dark:text-gray-400'
+          }
+        >
+          {seenText(row.seenCalls)}
+        </span>
+      ),
+    },
     {
       title: '',
       key: 'actions',
@@ -246,36 +262,35 @@ export const ModelPricesComponent = ({ projectId, canManage }: Props): React.JSX
   ];
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-      <div className="mb-3 flex flex-wrap items-start gap-3">
-        <div className="mr-auto max-w-2xl">
-          <h3 className="m-0 text-base font-semibold text-gray-900 dark:text-gray-100">
-            Model prices
-          </h3>
-          <p className="m-0 text-sm text-gray-600 dark:text-gray-300">
-            USD per million tokens, for LLM apps&apos; cost estimates and budgets. Claude Code
-            reports its own cost and doesn&apos;t use this table. Obzly doesn&apos;t fetch prices:
-            check them against your provider.
-          </p>
-        </div>
-        {canManage && (
-          <div className="flex gap-2">
+    <Card
+      title="Model prices"
+      subtitle={
+        <>
+          USD per million tokens, for LLM apps&apos; cost estimates and budgets. Claude Code reports
+          its own cost and doesn&apos;t use this table. Obzly doesn&apos;t fetch prices: check them
+          against your provider.
+        </>
+      }
+      extra={
+        canManage && (
+          <>
             <Button onClick={fillCommon}>Fill in common models</Button>
-            <Button icon={<PlusOutlined />} onClick={addRow}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={addRow}>
               Add model
             </Button>
-          </div>
-        )}
-      </div>
+          </>
+        )
+      }
+      bodyClassName="flex flex-col gap-3"
+    >
       {filledAsOf && (
         <Alert
-          className="!mb-3"
           type="warning"
           showIcon
           title={`Added a starting list dated ${filledAsOf}. Prices change: review each one before relying on budgets.`}
         />
       )}
-      {seenError && <Alert className="!mb-3" type="info" showIcon title={seenError} />}
+      {seenError && <Alert type="info" showIcon title={seenError} />}
       {isLoading ? (
         <div className="flex justify-center p-8">
           <Spin indicator={<LoadingOutlined spin />} />
@@ -291,6 +306,6 @@ export const ModelPricesComponent = ({ projectId, canManage }: Props): React.JSX
           locale={{ emptyText: 'No prices yet, and no LLM calls in the last 24 hours' }}
         />
       )}
-    </div>
+    </Card>
   );
 };

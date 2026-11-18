@@ -57,7 +57,9 @@ type MetricQuerier struct {
 	coordinator *query.Coordinator
 	queryDir    string
 	memoryLimit string
-	spillDir    string
+	// threads caps the querier's DuckDB threads (0: DuckDB's default).
+	threads  int
+	spillDir string
 }
 
 type QuerierOption func(*MetricQuerier)
@@ -90,6 +92,14 @@ func WithMemoryLimit(limit string) QuerierOption {
 	}
 }
 
+// WithThreads caps the querier's DuckDB (and SQL sandboxes') threads; DuckDB
+// otherwise starts one per core of the node, each with its own read buffers.
+func WithThreads(threads int) QuerierOption {
+	return func(q *MetricQuerier) {
+		q.threads = threads
+	}
+}
+
 func NewMetricQuerier(opts ...QuerierOption) (*MetricQuerier, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -108,8 +118,14 @@ func NewMetricQuerier(opts ...QuerierOption) (*MetricQuerier, error) {
 		opt(querier)
 	}
 	querier.spillDir, err = segments.ConfigureMemory(db, querier.memoryLimit, filepath.Join(querier.queryDir, "spill"))
+	if err == nil {
+		err = segments.SetHandleLimits(db, "", querier.threads)
+	}
 	if err != nil {
 		_ = db.Close()
+		if querier.spillDir != "" {
+			_ = os.RemoveAll(querier.spillDir)
+		}
 		return nil, err
 	}
 	local := query.NewLocalExecutor("local", db, querier.objectStore, querier.cacheDir)
@@ -125,7 +141,7 @@ func NewMetricQuerier(opts ...QuerierOption) (*MetricQuerier, error) {
 		_ = os.RemoveAll(querier.spillDir)
 		return nil, err
 	}
-	telemetry.RegisterDuckDB("querier_metrics", db)
+	telemetry.RegisterDuckDB("querier_metrics", db, segments.MemoryLimitBytes(querier.memoryLimit))
 
 	return querier, nil
 }

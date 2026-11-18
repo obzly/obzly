@@ -129,6 +129,115 @@ type K8sResourceInfo struct {
 	Node       string
 }
 
+// ServiceNodeStat is one instrumented service's RED numbers over its entry
+// spans (SERVER or CONSUMER kind, or a root span). Requests is 0 for a
+// service with spans but no entry span; P95Ms is then nil.
+type ServiceNodeStat struct {
+	ServiceName string
+	Requests    int64
+	Errors      int64
+	P95Ms       *float64
+}
+
+// PeerCallStat is SrcService's CLIENT/PRODUCER spans to one peer that no
+// span of the trace answered (an untraced database, cache, broker or API).
+// DBSystem/MessagingSystem are the spans' db_system/messaging_system, "" if
+// none.
+type PeerCallStat struct {
+	SrcService      string
+	Peer            string
+	DBSystem        string
+	MessagingSystem string
+	CallCount       int64
+	ErrorCount      int64
+	AvgDurationMs   float64
+}
+
+// PeerNodeStat is one peer's totals over every caller, with its own p95
+// (percentiles can't be merged from PeerCallStat rows).
+type PeerNodeStat struct {
+	Peer            string
+	DBSystem        string
+	MessagingSystem string
+	Requests        int64
+	Errors          int64
+	P95Ms           *float64
+}
+
+type ServiceNodeStats struct {
+	Services  []ServiceNodeStat
+	PeerEdges []PeerCallStat
+	Peers     []PeerNodeStat
+}
+
+// ServiceErrorRatesQuery counts each service's entry spans (requests in the
+// RED sense) in the current period [From, To] and the previous one
+// [PreviousFrom, From); Limit keeps the services with the most errors.
+type ServiceErrorRatesQuery struct {
+	From         time.Time
+	To           time.Time
+	PreviousFrom time.Time
+	Limit        int
+	ScanBudget   int64
+}
+
+type ServiceErrorRate struct {
+	ServiceName      string
+	Requests         int64
+	Errors           int64
+	PreviousRequests int64
+	PreviousErrors   int64
+}
+
+// TraceSummaryQuery drives the Traces summary: the subject spans are root
+// spans (RootSpansOnly) or ServiceName's spans, narrowed by OperationName,
+// the duration bounds (on each span) and ErrorsOnly. Current is [From, To],
+// previous [PreviousFrom, From); StepMs buckets the current period.
+type TraceSummaryQuery struct {
+	From          time.Time
+	To            time.Time
+	PreviousFrom  time.Time
+	StepMs        int64
+	ServiceName   string
+	OperationName string
+	MinDurationMs *float64
+	MaxDurationMs *float64
+	ErrorsOnly    bool
+	RootSpansOnly bool
+	// CountOnly skips the tiles query (only MatchingTraces is computed).
+	CountOnly bool
+	// MatchCap stops counting matching traces past this many; the result
+	// is then MatchCap+1.
+	MatchCap   int
+	ScanBudget int64
+}
+
+type TraceSummaryPeriod struct {
+	Count  int64
+	Errors int64
+	P50Ms  *float64
+	P95Ms  *float64
+}
+
+// TraceSummaryBucket is one current-period bucket; Index is
+// floor(unix ns / step ns), so buckets align to multiples of the step.
+type TraceSummaryBucket struct {
+	Index  int64
+	Count  int64
+	Errors int64
+	P50Ms  *float64
+	P95Ms  *float64
+}
+
+type TraceSummaryResult struct {
+	Current  TraceSummaryPeriod
+	Previous TraceSummaryPeriod
+	Buckets  []TraceSummaryBucket
+	// MatchingTraces counts root spans in [From, To] whose trace matches the
+	// filters, at most MatchCap+1.
+	MatchingTraces int64
+}
+
 // SpansStatsDTO is a project's spans consumption stats (see ARCHITECTURE.md
 // "Project statistics").
 type SpansStatsDTO struct {
@@ -136,9 +245,12 @@ type SpansStatsDTO struct {
 	// TotalSizeMB is the compressed on-disk Parquet size.
 	TotalSizeMB float64 `json:"totalSizeMb"`
 	// RawSizeMB is the approximate uncompressed size of the ingested spans.
-	RawSizeMB      float64   `json:"rawSizeMb"`
-	OldestSpanTime time.Time `json:"oldestSpanTime"`
-	NewestSpanTime time.Time `json:"newestSpanTime"`
+	RawSizeMB float64 `json:"rawSizeMb"`
+	// ObjectStorageSizeMB: the part of TotalSizeMB already in object storage
+	// (0 without object storage); the rest is fresh segments on local disk.
+	ObjectStorageSizeMB float64   `json:"objectStorageSizeMb"`
+	OldestSpanTime      time.Time `json:"oldestSpanTime"`
+	NewestSpanTime      time.Time `json:"newestSpanTime"`
 }
 
 // LLMCallsQueryDTO is one trusted, server-built statement (never user SQL)

@@ -311,6 +311,10 @@ type StreamStats struct {
 	RowCount     int64
 	SizeBytes    int64
 	RawSizeBytes int64
+	// UploadedSizeBytes: the part of SizeBytes already in object storage;
+	// the rest is fresh segments only on the local disk of the replica that
+	// wrote them (uploaded once compaction merges them).
+	UploadedSizeBytes int64
 	// Zero time.Time if there are no matching segments.
 	OldestTime time.Time
 	NewestTime time.Time
@@ -349,17 +353,19 @@ func (r *SegmentRepository) AggregateStatsForProject(projectID uuid.UUID, stream
 
 func (r *SegmentRepository) aggregate(whereSQL string, args ...any) (StreamStats, error) {
 	var row struct {
-		RowCount     int64
-		SizeBytes    int64
-		RawSizeBytes int64
-		OldestTime   sql.NullTime
-		NewestTime   sql.NullTime
+		RowCount          int64
+		SizeBytes         int64
+		RawSizeBytes      int64
+		UploadedSizeBytes int64
+		OldestTime        sql.NullTime
+		NewestTime        sql.NullTime
 	}
 
 	err := storage.GetDb().Model(&SegmentRecord{}).
 		Select(
 			"COALESCE(SUM(row_count), 0) AS row_count, COALESCE(SUM(size_bytes), 0) AS size_bytes, "+
 				"COALESCE(SUM(raw_size_bytes), 0) AS raw_size_bytes, "+
+				"COALESCE(SUM(size_bytes) FILTER (WHERE uploaded_at IS NOT NULL), 0) AS uploaded_size_bytes, "+
 				"MIN(min_time) AS oldest_time, MAX(max_time) AS newest_time",
 		).
 		Where(whereSQL, args...).
@@ -368,7 +374,10 @@ func (r *SegmentRepository) aggregate(whereSQL string, args ...any) (StreamStats
 		return StreamStats{}, fmt.Errorf("failed to aggregate segment stats: %w", err)
 	}
 
-	stats := StreamStats{RowCount: row.RowCount, SizeBytes: row.SizeBytes, RawSizeBytes: row.RawSizeBytes}
+	stats := StreamStats{
+		RowCount: row.RowCount, SizeBytes: row.SizeBytes, RawSizeBytes: row.RawSizeBytes,
+		UploadedSizeBytes: row.UploadedSizeBytes,
+	}
 	if row.OldestTime.Valid {
 		stats.OldestTime = row.OldestTime.Time
 	}

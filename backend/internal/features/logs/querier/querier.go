@@ -49,7 +49,9 @@ type LogQuerier struct {
 	coordinator *query.Coordinator
 	queryDir    string
 	memoryLimit string
-	spillDir    string
+	// threads caps the querier's DuckDB threads (0: DuckDB's default).
+	threads  int
+	spillDir string
 	// tail adds rows still pending in JetStream (nil without the broker).
 	tail segments.TailSource
 	// partitionCache keeps time-bucketed aggregations per partition (nil: off).
@@ -90,6 +92,14 @@ func WithMemoryLimit(limit string) QuerierOption {
 	}
 }
 
+// WithThreads caps the querier's DuckDB (and SQL sandboxes') threads; DuckDB
+// otherwise starts one per core of the node, each with its own read buffers.
+func WithThreads(threads int) QuerierOption {
+	return func(q *LogQuerier) {
+		q.threads = threads
+	}
+}
+
 // WithQueryDir keeps query fragment results in dir.
 func WithQueryDir(dir string) QuerierOption {
 	return func(q *LogQuerier) {
@@ -115,8 +125,14 @@ func NewLogQuerier(opts ...QuerierOption) (*LogQuerier, error) {
 		opt(querier)
 	}
 	querier.spillDir, err = segments.ConfigureMemory(db, querier.memoryLimit, filepath.Join(querier.queryDir, "spill"))
+	if err == nil {
+		err = segments.SetHandleLimits(db, "", querier.threads)
+	}
 	if err != nil {
 		_ = db.Close()
+		if querier.spillDir != "" {
+			_ = os.RemoveAll(querier.spillDir)
+		}
 		return nil, err
 	}
 	local := query.NewLocalExecutor("local", db, querier.objectStore, querier.cacheDir)
@@ -132,7 +148,7 @@ func NewLogQuerier(opts ...QuerierOption) (*LogQuerier, error) {
 		_ = os.RemoveAll(querier.spillDir)
 		return nil, err
 	}
-	telemetry.RegisterDuckDB("querier_"+querier.stream, db)
+	telemetry.RegisterDuckDB("querier_"+querier.stream, db, segments.MemoryLimitBytes(querier.memoryLimit))
 
 	return querier, nil
 }
@@ -150,9 +166,18 @@ func (q *LogQuerier) ExecuteQuery(
 	projectID uuid.UUID,
 	request *logs_core.LogQueryRequestDTO,
 ) (*logs_core.LogQueryResponseDTO, error) {
-	response, err := q.executeQuery(context.Background(), projectID, request, nil)
-	if segmentVanished(err) {
-		return q.executeQuery(context.Background(), projectID, request, nil)
+	return q.ExecuteQueryContext(context.Background(), projectID, request)
+}
+
+// ExecuteQueryContext is ExecuteQuery stopping when ctx ends (the client left).
+func (q *LogQuerier) ExecuteQueryContext(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *logs_core.LogQueryRequestDTO,
+) (*logs_core.LogQueryResponseDTO, error) {
+	response, err := q.executeQuery(ctx, projectID, request, nil)
+	if segmentVanished(err) && ctx.Err() == nil {
+		return q.executeQuery(ctx, projectID, request, nil)
 	}
 	return response, err
 }
@@ -204,8 +229,13 @@ func (q *LogQuerier) executeQuery(
 		Limit:  limit,
 		Offset: offset,
 	}
-	tail, ordered := q.searchInputs(context.Background(), projectID, records, from, to,
+	tail, ordered := q.searchInputs(ctx, projectID, records, from, to,
 		!strings.EqualFold(request.SortOrder, "asc"))
+	// searchInputs skips segments it couldn't fetch: once ctx ended, that
+	// would look like an empty range.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(tail) == 0 && len(ordered) == 0 {
 		empty.ExecutedInMs = time.Since(startTime).String()
 		return empty, nil
@@ -224,6 +254,7 @@ func (q *LogQuerier) executeQuery(
 	countSkipped := false
 	if request.Cursor == "" && (request.TrackTotal == nil || *request.TrackTotal) {
 		total, err = q.countMatching(
+			ctx,
 			tail,
 			ordered,
 			from,
@@ -392,6 +423,7 @@ func (q *LogQuerier) DiscoverFields(projectID uuid.UUID) ([]string, error) {
 // boundary segments and the tail are read. Catalog counts include only
 // readable segments, since a query skips missing files.
 func (q *LogQuerier) countMatching(
+	ctx context.Context,
 	tail []segments.ResolvedFile,
 	ordered []*segments.SegmentRecord,
 	from, to time.Time,
@@ -418,7 +450,7 @@ func (q *LogQuerier) countMatching(
 	}
 
 	var total int64
-	err := q.coordinator.Query(context.Background(), query.Request{
+	err := q.coordinator.Query(ctx, query.Request{
 		Stream:       q.stream,
 		Segments:     toRead,
 		LocalFiles:   tail,

@@ -34,6 +34,15 @@ type SettingsChannel struct {
 	ProjectIDs  []string            `json:"projectIds"`
 	UsedBy      int                 `json:"usedBy"`
 	UpdatedAt   time.Time           `json:"updatedAt"`
+	// UseEmoji and the template override: see ChannelTemplateRequest.
+	UseEmoji         bool   `json:"useEmoji"`
+	TemplateOverride bool   `json:"templateOverride"`
+	TemplateSubject  string `json:"templateSubject"`
+	TemplateBody     string `json:"templateBody"`
+	// TemplateError is the last send-time render failure of its template
+	// (on the deployment that sends: a Site or a standalone install).
+	TemplateError   string     `json:"templateError"`
+	TemplateErrorAt *time.Time `json:"templateErrorAt"`
 }
 
 // SettingsChannelRequest creates or updates a channel; on update a nil
@@ -81,6 +90,8 @@ func (s *SettingsService) List(user *users_models.User) ([]SettingsChannel, erro
 				Scope:      &scope,
 				ProjectIDs: []string{},
 				UpdatedAt:  channel.UpdatedAt,
+				UseEmoji:   channel.UseEmoji, TemplateOverride: channel.TemplateOverride,
+				TemplateSubject: channel.TemplateSubject, TemplateBody: channel.TemplateBody,
 			})
 		}
 		return views, nil
@@ -109,6 +120,9 @@ func (s *SettingsService) List(user *users_models.User) ([]SettingsChannel, erro
 			ProjectIDs:  projectIDs,
 			UsedBy:      counts[channel.ID],
 			UpdatedAt:   channel.UpdatedAt,
+			UseEmoji:    channel.UseEmoji, TemplateOverride: channel.TemplateOverride,
+			TemplateSubject: channel.TemplateSubject, TemplateBody: channel.TemplateBody,
+			TemplateError: channel.TemplateError, TemplateErrorAt: channel.TemplateErrorAt,
 		})
 	}
 	return views, nil
@@ -162,19 +176,54 @@ func (s *SettingsService) Test(ctx context.Context, user *users_models.User, id 
 	if !user.CanUpdateSettings() {
 		return ErrForbidden
 	}
-	kind, encrypted, name, err := s.stored(id)
+	channel, err := s.storedChannel(id)
 	if err != nil {
 		return err
 	}
-	cfg, err := decryptConfig(s.secrets, encrypted)
+	tpl, _, err := effectiveTemplate(channel.Kind, channel.TemplateOverride, channel.TemplateSubject,
+		channel.TemplateBody)
 	if err != nil {
 		return err
 	}
-	return s.sender.send(ctx, kind, cfg, Notification{
-		Status: StatusTest, RuleName: "Test notification from Obzly",
-		Summary: "If you can read this, the channel " + name + " works.",
-		Labels:  Labels{"channel": name}, StartsAt: time.Now().UTC(),
-	})
+	return s.sendTest(ctx, channel, tpl, channel.UseEmoji)
+}
+
+// sendTest sends a test notification rendered with tpl through channel; a
+// template that fails to render is reported, not replaced.
+func (s *SettingsService) sendTest(
+	ctx context.Context, channel *NotificationChannel, tpl MessageTemplate, useEmoji bool,
+) error {
+	cfg, err := decryptConfig(s.secrets, channel.ConfigEncrypted)
+	if err != nil {
+		return err
+	}
+	n := testNotification(uuid.Nil, channel.Name)
+	msg, err := renderWith(channel.Kind, tpl, n, newRenderContext(n, useEmoji))
+	if err != nil {
+		return err
+	}
+	return s.sender.send(ctx, channel.Kind, cfg, n, msg)
+}
+
+// storedChannel is a channel with its template settings, from the central
+// table on a control plane, else the Site's own.
+func (s *SettingsService) storedChannel(id uuid.UUID) (*NotificationChannel, error) {
+	if config.GetEnv().ServiceMode.IsControlPlane() {
+		var shared sharedconfig.SharedChannel
+		if err := storage.GetDb().Where("id = ?", id).First(&shared).Error; err != nil {
+			return nil, notFound(err)
+		}
+		return &NotificationChannel{
+			ID: shared.ID, Name: shared.Name, Kind: shared.Kind, ConfigEncrypted: shared.ConfigEncrypted,
+			Source: sharedconfig.SourceCentral, UseEmoji: shared.UseEmoji, TemplateOverride: shared.TemplateOverride,
+			TemplateSubject: shared.TemplateSubject, TemplateBody: shared.TemplateBody,
+		}, nil
+	}
+	channel, err := s.repo.channelByID(id)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	return channel, nil
 }
 
 func (s *SettingsService) save(
@@ -223,7 +272,7 @@ func (s *SettingsService) save(
 		}
 		channel := sharedconfig.SharedChannel{
 			ID: id, Name: request.Name, Kind: kind, ConfigEncrypted: encrypted, Scope: scope,
-			CreatedBy: &user.ID, CreatedAt: now, UpdatedAt: now,
+			CreatedBy: &user.ID, CreatedAt: now, UpdatedAt: now, UseEmoji: true,
 		}
 		if !create {
 			var existing sharedconfig.SharedChannel
@@ -231,6 +280,11 @@ func (s *SettingsService) save(
 				return nil, notFound(err)
 			}
 			channel.CreatedAt, channel.CreatedBy = existing.CreatedAt, existing.CreatedBy
+			channel.UseEmoji, channel.TemplateOverride = existing.UseEmoji, existing.TemplateOverride
+			channel.TemplateSubject, channel.TemplateBody = existing.TemplateSubject, existing.TemplateBody
+			if kind != existing.Kind {
+				channel.TemplateOverride, channel.TemplateSubject, channel.TemplateBody = false, "", ""
+			}
 		}
 		if err := storage.GetDb().Save(&channel).Error; err != nil {
 			return nil, duplicateName(err, request.Name)
@@ -250,6 +304,7 @@ func (s *SettingsService) save(
 			CreatedBy:       &user.ID,
 			CreatedAt:       now,
 			UpdatedAt:       now,
+			UseEmoji:        true,
 		}
 		if !create {
 			existing, err := s.repo.channelByID(id)
@@ -257,6 +312,13 @@ func (s *SettingsService) save(
 				return nil, notFound(err)
 			}
 			channel.CreatedAt, channel.CreatedBy, channel.ProjectID = existing.CreatedAt, existing.CreatedBy, existing.ProjectID
+			channel.UseEmoji, channel.TemplateOverride = existing.UseEmoji, existing.TemplateOverride
+			channel.TemplateSubject, channel.TemplateBody = existing.TemplateSubject, existing.TemplateBody
+			channel.TemplateError, channel.TemplateErrorAt = existing.TemplateError, existing.TemplateErrorAt
+			if kind != existing.Kind {
+				channel.TemplateOverride, channel.TemplateSubject, channel.TemplateBody = false, "", ""
+				channel.TemplateError, channel.TemplateErrorAt = "", nil
+			}
 		}
 		if err := s.repo.saveChannel(channel); err != nil {
 			return nil, err

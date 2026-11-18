@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,25 +106,33 @@ func describe(kind string, cfg ChannelConfig) string {
 	return ""
 }
 
-// send delivers n through a channel. The error holds only what is safe to
-// show (an HTTP status, not the receiver's body).
-func (s *sender) send(ctx context.Context, kind string, cfg ChannelConfig, n Notification) error {
+// send delivers a rendered notification through a channel. The error holds
+// only what is safe to show (an HTTP status, not the receiver's body).
+func (s *sender) send(ctx context.Context, kind string, cfg ChannelConfig, n Notification, msg rendered) error {
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
 	switch kind {
 	case ChannelWebhook:
-		body, _ := json.Marshal(webhookBody(n))
-		return s.post(ctx, cfg.URL, cfg.Headers, body)
+		return s.post(ctx, cfg.URL, cfg.Headers, msg.JSON)
 	case ChannelSlack:
-		body, _ := json.Marshal(map[string]string{"text": slackEscape(text(n))})
+		body, _ := json.Marshal(slackBody(msg))
 		return s.post(ctx, cfg.URL, nil, body)
 	case ChannelPagerDuty:
-		body, _ := json.Marshal(pagerDutyBody(cfg.RoutingKey, n))
+		body, _ := json.Marshal(pagerDutyBody(cfg.RoutingKey, n, msg))
 		return s.post(ctx, pagerDutyEvents, nil, body)
 	case ChannelEmail:
-		return s.email(ctx, cfg.To, subject(n), text(n))
+		return s.email(ctx, cfg.To, msg.Subject, msg.Text)
 	}
 	return fmt.Errorf("unknown channel kind %q", kind)
+}
+
+// deliver renders n with tpl (the built-in template if tpl fails) and sends
+// it; templateErr is tpl's render failure, sendErr the delivery's.
+func (s *sender) deliver(
+	ctx context.Context, kind string, cfg ChannelConfig, tpl MessageTemplate, n Notification, rc renderContext,
+) (templateErr, sendErr error) {
+	msg, templateErr := render(kind, tpl, n, rc)
+	return templateErr, s.send(ctx, kind, cfg, n, msg)
 }
 
 func (s *sender) post(ctx context.Context, target string, headers map[string]string, body []byte) error {
@@ -154,16 +161,15 @@ func (s *sender) post(ctx context.Context, target string, headers map[string]str
 	return nil
 }
 
-func webhookBody(n Notification) map[string]any {
-	return map[string]any{
-		"version": "obzly.alert/1", "status": n.Status, "projectId": n.ProjectID, "ruleId": n.RuleID,
-		"ruleName": n.RuleName, "source": n.Source, "summary": n.Summary, "labels": n.Labels,
-		"value": n.Measured, "comparison": n.Comparison, "threshold": n.Threshold,
-		"fingerprint": n.Fingerprint, "startsAt": n.StartsAt, "endsAt": n.EndsAt,
-	}
+// slackBody is the message with a side bar coloured by severity and status.
+func slackBody(msg rendered) map[string]any {
+	fallback, _, _ := strings.Cut(msg.Text, "\n")
+	return map[string]any{"attachments": []map[string]any{{
+		"color": msg.Color, "text": msg.Text, "fallback": fallback, "mrkdwn_in": []string{"text"},
+	}}}
 }
 
-func pagerDutyBody(routingKey string, n Notification) map[string]any {
+func pagerDutyBody(routingKey string, n Notification, msg rendered) map[string]any {
 	action := "trigger"
 	if n.Status == StatusResolved {
 		action = "resolve"
@@ -172,37 +178,24 @@ func pagerDutyBody(routingKey string, n Notification) map[string]any {
 	if n.RuleID != nil {
 		dedup = n.RuleID.String() + ":" + n.Fingerprint
 	}
-	return map[string]any{
+	details := map[string]any{"labels": n.Labels, "value": n.Measured, "summary": n.Summary}
+	if n.RuleDescription != "" {
+		details["runbook"] = n.RuleDescription
+	}
+	if n.Incident != nil {
+		details["incident"] = n.Incident
+	}
+	body := map[string]any{
 		"routing_key": routingKey, "event_action": action, "dedup_key": dedup,
 		"payload": map[string]any{
-			"summary": subject(n), "source": "obzly", "severity": "error",
-			"custom_details": map[string]any{"labels": n.Labels, "value": n.Measured, "summary": n.Summary},
+			"summary": msg.Text, "source": "obzly", "severity": pagerDutySeverity(n.Severity),
+			"custom_details": details,
 		},
 	}
-}
-
-func subject(n Notification) string {
-	return fmt.Sprintf("[%s] %s", strings.ToUpper(n.Status), n.RuleName)
-}
-
-func text(n Notification) string {
-	var b strings.Builder
-	b.WriteString(subject(n))
-	if n.Summary != "" {
-		b.WriteString(": " + n.Summary)
+	if link := notificationLink(n); link != "" {
+		body["links"] = []map[string]string{{"href": link, "text": "Open in Obzly"}}
 	}
-	if n.Status != StatusTest {
-		fmt.Fprintf(&b, "\nvalue %s (%s %s)", formatValue(n.Measured), n.Comparison, formatValue(n.Threshold))
-	}
-	keys := make([]string, 0, len(n.Labels))
-	for key := range n.Labels {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		fmt.Fprintf(&b, "\n%s=%s", key, n.Labels[key])
-	}
-	return b.String()
+	return body
 }
 
 // slackEscaper escapes Slack's control characters, so a label or pattern

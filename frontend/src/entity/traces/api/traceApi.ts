@@ -8,6 +8,10 @@ import type {
   ListServicesResponse,
   ListTracesRequest,
   ListTracesResponse,
+  ServiceErrorsRequest,
+  ServiceErrorsResponse,
+  TraceSummaryRequest,
+  TraceSummaryResponse,
 } from '../model/Trace';
 
 const baseUrl = () => `${getApiBase()}/traces/query`;
@@ -16,6 +20,24 @@ export const traceApi = {
   async listTraces(projectId: string, request: ListTracesRequest): Promise<ListTracesResponse> {
     const requestOptions = new RequestOptions().setBody(JSON.stringify(request));
     return apiHelper.fetchPostJson(`${baseUrl()}/list/${projectId}`, requestOptions);
+  },
+
+  async getTraceSummary(
+    projectId: string,
+    request: TraceSummaryRequest,
+    signal?: AbortSignal,
+  ): Promise<TraceSummaryResponse> {
+    const requestOptions = new RequestOptions().setBody(JSON.stringify(request)).setSignal(signal);
+    return apiHelper.fetchPostJson(`${baseUrl()}/summary/${projectId}`, requestOptions);
+  },
+
+  async getServiceErrors(
+    projectId: string,
+    request: ServiceErrorsRequest,
+    signal?: AbortSignal,
+  ): Promise<ServiceErrorsResponse> {
+    const requestOptions = new RequestOptions().setBody(JSON.stringify(request)).setSignal(signal);
+    return apiHelper.fetchPostJson(`${baseUrl()}/service-errors/${projectId}`, requestOptions);
   },
 
   async getTrace(

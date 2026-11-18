@@ -14,13 +14,15 @@ import {
   type TestRun,
   syntheticsApi,
 } from '../../../entity/synthetics';
+import { useTheme } from '../../../shared/theme';
 import { formatMs } from '../lib/format';
-import { PHASES } from '../lib/phases';
+import { PHASES, phaseColor } from '../lib/phases';
 import { STATUS_COLOR } from '../lib/status';
 import { StatusBadge } from './parts';
 
 /** Where a run's time went, DNS to transfer, as offset bars. */
 export const Waterfall = ({ run }: { run: RunResult }) => {
+  const { chartColors } = useTheme();
   const phases = PHASES.filter((phase) => (run.phasesMs?.[phase.key] ?? 0) > 0);
   const total = Math.max(
     run.durationMs,
@@ -41,13 +43,13 @@ export const Waterfall = ({ run }: { run: RunResult }) => {
             className="grid grid-cols-[92px_minmax(0,1fr)_64px] items-center gap-2"
           >
             <span className="text-gray-500 dark:text-gray-400">{phase.label}</span>
-            <div className="relative h-3 rounded bg-gray-100 dark:bg-gray-700">
+            <div className="relative h-3 rounded-full bg-[var(--v2-track)]">
               <span
                 className="absolute top-0 bottom-0 rounded"
                 style={{
                   left: `${left}%`,
                   width: `${Math.max(1.5, (ms / total) * 100)}%`,
-                  background: phase.color,
+                  background: phaseColor(chartColors, phase.key),
                 }}
               />
             </div>
@@ -61,12 +63,13 @@ export const Waterfall = ({ run }: { run: RunResult }) => {
 
 /** A step's phases as one stacked bar, DNS to transfer. */
 const StepBar = ({ step }: { step: StepResult }) => {
+  const { chartColors } = useTheme();
   const phases = PHASES.filter((phase) => (step.phasesMs?.[phase.key] ?? 0) > 0);
   const total = phases.reduce((sum, phase) => sum + (step.phasesMs?.[phase.key] ?? 0), 0);
   if (total <= 0) return null;
   return (
     <div
-      className="flex h-2 overflow-hidden rounded bg-gray-100 dark:bg-gray-700"
+      className="flex h-2 overflow-hidden rounded-full bg-[var(--v2-track)]"
       role="img"
       aria-label={phases
         .map((phase) => `${phase.label} ${formatMs(step.phasesMs?.[phase.key])}`)
@@ -77,7 +80,7 @@ const StepBar = ({ step }: { step: StepResult }) => {
           key={phase.key}
           style={{
             width: `${Math.max(2, ((step.phasesMs?.[phase.key] ?? 0) / total) * 100)}%`,
-            background: phase.color,
+            background: phaseColor(chartColors, phase.key),
           }}
         />
       ))}
@@ -94,6 +97,7 @@ const STEP_DOT: Record<StepStatus, string> = {
 
 /** A multi-step run's steps: status, timing bar, assertions, extracted values (secrets masked). */
 export const StepResults = ({ run }: { run: RunResult }) => {
+  const { chartColors } = useTheme();
   const steps = run.steps ?? [];
   const failed = steps.find((step) => step.status === 'down');
   return (
@@ -112,7 +116,7 @@ export const StepResults = ({ run }: { run: RunResult }) => {
       {steps.map((step) => (
         <div
           key={step.index}
-          className="flex flex-col gap-1.5 rounded border border-gray-200 p-2.5 dark:border-gray-700"
+          className="flex flex-col gap-1.5 rounded-xl border border-gray-200 p-3 dark:border-gray-700"
         >
           <div className="flex items-center gap-2 text-sm">
             <span
@@ -167,7 +171,7 @@ export const StepResults = ({ run }: { run: RunResult }) => {
                 </div>
               ) : null}
               {step.bodySnippet && (
-                <pre className="m-0 max-h-32 overflow-auto rounded bg-gray-50 p-2 font-mono text-[11px] whitespace-pre-wrap dark:bg-gray-900">
+                <pre className="m-0 max-h-32 overflow-auto rounded-lg bg-gray-50 p-2 font-mono text-[11px] whitespace-pre-wrap dark:bg-gray-900">
                   {step.bodySnippet}
                 </pre>
               )}
@@ -178,7 +182,10 @@ export const StepResults = ({ run }: { run: RunResult }) => {
       <div className="flex flex-wrap gap-3 text-[11px] text-gray-500 dark:text-gray-400">
         {PHASES.map((phase) => (
           <span key={phase.key} className="inline-flex items-center gap-1">
-            <span className="inline-block h-2 w-2" style={{ background: phase.color }} />
+            <span
+              className="inline-block h-2 w-2"
+              style={{ background: phaseColor(chartColors, phase.key) }}
+            />
             {phase.label}
           </span>
         ))}
@@ -226,7 +233,7 @@ export const RunDetail = ({ run }: { run: RunResult }) => (
     </div>
     {run.error && (
       <div
-        className="rounded px-3 py-2 text-sm"
+        className="rounded-xl px-3 py-2 text-sm"
         style={{ background: `${STATUS_COLOR[run.status === 'warn' ? 'warn' : 'down']}1f` }}
       >
         {run.error}
@@ -248,7 +255,7 @@ export const RunDetail = ({ run }: { run: RunResult }) => (
     ) : null}
     {run.httpStatus ? (
       <Section title="Response">
-        <pre className="m-0 max-h-64 overflow-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap dark:bg-gray-900">
+        <pre className="m-0 max-h-64 overflow-auto rounded-xl bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap dark:bg-gray-900">
           {`HTTP ${run.httpStatus}${run.redirects ? ` after ${run.redirects} redirect(s)` : ''}\n`}
           {Object.entries(run.headers ?? {}).map(([name, value]) => `${name}: ${value}\n`)}
           {run.bodySnippet ? `\n${run.bodySnippet}` : ''}
@@ -352,7 +359,7 @@ export const TestResults = ({ run, onDone }: { run: TestRun; onDone?: (run: Test
   return (
     <div className="flex flex-col gap-3">
       {current.tasks.map((task) => (
-        <div key={task.id} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+        <div key={task.id} className="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
           {task.result ? (
             <RunDetail run={task.result} />
           ) : (

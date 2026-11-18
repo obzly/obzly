@@ -290,7 +290,20 @@ func describeOrphan(
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = db.Close() }()
+	spillDir, err := ConfigureMemory(db, ShortLivedMemoryLimit, filepath.Join(opts.DataDir, "spill", "reconcile"))
+	if err == nil {
+		err = SetHandleLimits(db, "", shortLivedThreads)
+	}
+	// Closed before its spill directory goes.
+	defer func() {
+		_ = db.Close()
+		if spillDir != "" {
+			_ = os.RemoveAll(spillDir)
+		}
+	}()
+	if err != nil {
+		return nil, err
+	}
 	var rows int64
 	var minTime, maxTime sql.NullTime
 	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*), min("%s"), max("%s") FROM read_parquet(?)`,

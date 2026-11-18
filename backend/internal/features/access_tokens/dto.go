@@ -10,6 +10,8 @@ type CreateAccessTokenRequestDTO struct {
 	Name          string  `json:"name"          binding:"required,min=1,max=100"`
 	ExpiresInDays int     `json:"expiresInDays" binding:"required,oneof=30 90 365"`
 	MFACode       *string `json:"mfaCode"`
+	// Write adds the mcp:write scope (MCP write tools). Needs a session that passed MFA.
+	Write bool `json:"write"`
 }
 
 type AccessTokenDTO struct {

@@ -14,10 +14,12 @@ import (
 	logs_core "obzly/internal/features/logs/core"
 	logs_querying "obzly/internal/features/logs/querying"
 	mcp_server "obzly/internal/features/mcp"
+	metrics_querying "obzly/internal/features/metrics/querying"
 	"obzly/internal/features/oauth"
 	"obzly/internal/features/posture"
 	projects_controllers "obzly/internal/features/projects/controllers"
 	projects_testing "obzly/internal/features/projects/testing"
+	traces_querying "obzly/internal/features/traces/querying"
 	users_controllers "obzly/internal/features/users/controllers"
 	users_dto "obzly/internal/features/users/dto"
 	users_enums "obzly/internal/features/users/enums"
@@ -72,6 +74,7 @@ func Test_MCP_WithAccessToken_ListsToolsAndSearchesLogs(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(byName), &result), byName)
 	assert.Equal(t, 1, result.TotalMatches, byName)
+	assert.Contains(t, byName, `"untrustedData":`)
 	require.Len(t, result.Logs, 1)
 	assert.Equal(t, "error", result.Logs[0]["level"])
 
@@ -90,6 +93,7 @@ func Test_MCP_WithAccessToken_ListsToolsAndSearchesLogs(t *testing.T) {
 	assert.Empty(t, context.Before)
 	require.Len(t, context.After, 1, around)
 	assert.Contains(t, context.After[0]["message"], "payment retried")
+	assert.Contains(t, around, `"untrustedData":`)
 
 	counted := callText(t, session, "query_logs_sql", map[string]any{
 		"project": project.ID.String(),
@@ -98,6 +102,7 @@ func Test_MCP_WithAccessToken_ListsToolsAndSearchesLogs(t *testing.T) {
 	})
 	assert.Contains(t, counted, `"columns":["level","n"]`)
 	assert.Contains(t, counted, `"rowCount":2`)
+	assert.Contains(t, counted, `"untrustedData":`)
 }
 
 func Test_MCP_ProjectOfAnotherUser_ReturnsToolError(t *testing.T) {
@@ -191,6 +196,8 @@ func createRouter() *gin.Engine {
 	projects_controllers.GetProjectController().RegisterRoutes(protected)
 	projects_controllers.GetMembershipController().RegisterRoutes(protected)
 	logs_querying.GetLogQueryController().RegisterRoutes(protected)
+	traces_querying.GetTraceQueryController().RegisterRoutes(protected)
+	metrics_querying.GetMetricQueryController().RegisterRoutes(protected)
 	cloudcost.GetController().RegisterRoutes(protected)
 	posture.GetController().RegisterRoutes(protected)
 	users_controllers.GetUserController().RegisterProtectedRoutes(protected)
@@ -336,18 +343,41 @@ func Test_MCP_SearchLogs_LargeResult_IsTrimmedToValidJSON(t *testing.T) {
 	require.NoError(t, repository.StoreLogsBatch(map[uuid.UUID][]*logs_core.LogItem{project.ID: items}))
 	require.NoError(t, repository.ForceFlush())
 
-	text := callText(t, connect(t, server.URL, createToken(t, router, owner)), "search_logs", map[string]any{
-		"project": project.ID.String(), "limit": 100, "since": "1h",
-	})
-	var result struct {
-		TotalMatches int              `json:"totalMatches"`
+	session := connect(t, server.URL, createToken(t, router, owner))
+	type page struct {
+		TotalMatches *int             `json:"totalMatches"`
 		Returned     int              `json:"returned"`
 		Logs         []map[string]any `json:"logs"`
 		Note         string           `json:"note"`
+		NextCursor   string           `json:"nextCursor"`
+		Window       struct{ From, To string }
 	}
-	require.NoError(t, json.Unmarshal([]byte(text), &result), "result must be valid JSON")
-	assert.Equal(t, 120, result.TotalMatches)
-	assert.Len(t, result.Logs, result.Returned)
-	assert.Less(t, result.Returned, 100)
-	assert.Contains(t, result.Note, "of 100 logs")
+	args := map[string]any{"project": project.ID.String(), "limit": 100, "since": "1h"}
+	var first page
+	require.NoError(t, json.Unmarshal([]byte(callText(t, session, "search_logs", args)), &first),
+		"result must be valid JSON")
+	require.NotNil(t, first.TotalMatches)
+	assert.Equal(t, 120, *first.TotalMatches)
+	assert.Len(t, first.Logs, first.Returned)
+	assert.Less(t, first.Returned, 100, "the page is shortened to fit the result limit")
+	assert.Contains(t, first.Note, "shortened to")
+	require.NotEmpty(t, first.NextCursor)
+
+	// Following nextCursor (same query, the returned window) reads every log once.
+	seen := map[any]bool{}
+	current := first
+	for range 20 {
+		for _, log := range current.Logs {
+			assert.False(t, seen[log["id"]], "log %v returned twice", log["id"])
+			seen[log["id"]] = true
+		}
+		if current.NextCursor == "" {
+			break
+		}
+		next := map[string]any{"project": project.ID.String(), "limit": 100, "from": first.Window.From,
+			"to": first.Window.To, "cursor": current.NextCursor}
+		current = page{}
+		require.NoError(t, json.Unmarshal([]byte(callText(t, session, "search_logs", next)), &current))
+	}
+	assert.Len(t, seen, 120, "no log is skipped between pages")
 }

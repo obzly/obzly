@@ -30,6 +30,7 @@ func (c *Controller) RegisterRoutes(router *gin.RouterGroup) {
 // @Produce json
 // @Security BearerAuth
 // @Param projectId query string false "Only this project"
+// @Param history query bool false "Add the last 7 days' hourly counts by kind and those of 24 h ago"
 // @Success 200 {object} inventory.SummaryDTO
 // @Failure 403 {object} map[string]string
 // @Router /inventory/summary [get]
@@ -38,7 +39,7 @@ func (c *Controller) GetSummary(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	summary, err := c.service.Summary(user, ctx.Query("projectId"))
+	summary, err := c.service.Summary(user, ctx.Query("projectId"), ctx.Query("history") == "true")
 	respond(ctx, summary, err)
 }
 

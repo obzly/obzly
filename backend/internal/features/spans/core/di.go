@@ -89,6 +89,35 @@ func (unavailableRepository) ServiceK8sMetadata(
 	return nil, errRepositoryUnavailable
 }
 
+func (unavailableRepository) ServiceNodeStats(uuid.UUID, *TimeRangeDTO) (*ServiceNodeStats, error) {
+	return nil, errRepositoryUnavailable
+}
+
+func (unavailableRepository) TraceSummary(
+	context.Context,
+	uuid.UUID,
+	*TraceSummaryQuery,
+) (*TraceSummaryResult, error) {
+	return nil, errRepositoryUnavailable
+}
+
+func (unavailableRepository) ServiceErrorRates(
+	context.Context,
+	uuid.UUID,
+	*ServiceErrorRatesQuery,
+) ([]ServiceErrorRate, error) {
+	return nil, errRepositoryUnavailable
+}
+
+func (unavailableRepository) ServiceErrorSpanCounts(
+	uuid.UUID,
+	*TimeRangeDTO,
+	[]string,
+	[]string,
+) (map[string]int64, error) {
+	return nil, errRepositoryUnavailable
+}
+
 func (unavailableRepository) QueryLLMCalls(
 	context.Context,
 	uuid.UUID,

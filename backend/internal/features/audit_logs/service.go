@@ -35,6 +35,21 @@ func (s *AuditLogService) WriteAuditLog(
 	}
 }
 
+// WriteOrgAuditLog records an action on an organization made by no signed-in
+// user (SCIM provisioning), so RecentOrgAuditLogs can list it.
+func (s *AuditLogService) WriteOrgAuditLog(message string, orgID uuid.UUID) {
+	auditLog := &AuditLog{Message: message, OrgID: &orgID, CreatedAt: time.Now().UTC()}
+	if err := s.auditLogRepository.Create(auditLog); err != nil {
+		s.logger.Error("failed to create audit log", "error", err)
+	}
+}
+
+// RecentOrgAuditLogs is an organization's newest entries, newest first (no
+// permission check: callers check access to the organization).
+func (s *AuditLogService) RecentOrgAuditLogs(orgID uuid.UUID, limit int) ([]*AuditLog, error) {
+	return s.auditLogRepository.RecentForOrg(orgID, limit)
+}
+
 func (s *AuditLogService) CreateAuditLog(auditLog *AuditLog) error {
 	return s.auditLogRepository.Create(auditLog)
 }

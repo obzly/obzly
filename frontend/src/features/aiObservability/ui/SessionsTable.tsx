@@ -1,4 +1,4 @@
-import { Input, Table, Tag } from 'antd';
+import { Input, Table } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import type { SorterResult } from 'antd/es/table/interface';
 import React, { useEffect, useState } from 'react';
@@ -10,6 +10,7 @@ import {
   aiUsageApi,
 } from '../../../entity/aiUsage';
 import { formatCount, formatTime, formatUsd } from '../lib/format';
+import { Chip } from './bits';
 
 interface Props {
   projectId: string;
@@ -94,18 +95,21 @@ export const SessionsTable = ({
     {
       title: 'Session',
       dataIndex: 'sessionId',
-      render: (id: string) => <span className="font-mono text-xs">{id.slice(0, 8)}</span>,
+      render: (id: string) => (
+        <span className="font-mono text-xs text-[var(--v2-accent)]">{id.slice(0, 8)}</span>
+      ),
     },
     { title: 'User', dataIndex: 'user', ellipsis: true },
     {
       title: 'Models',
       dataIndex: 'models',
-      render: (models: string[]) =>
-        models.map((model) => (
-          <Tag key={model} className="!mb-1">
-            {model}
-          </Tag>
-        )),
+      render: (models: string[]) => (
+        <span className="flex flex-wrap gap-1">
+          {models.map((model) => (
+            <Chip key={model}>{model}</Chip>
+          ))}
+        </span>
+      ),
     },
     {
       title: 'Last activity',
@@ -114,7 +118,11 @@ export const SessionsTable = ({
       sorter: true,
       sortDirections: ['descend'],
       sortOrder: sortOrderFor('lastSeen'),
-      render: (value: number) => formatTime(value),
+      render: (value: number) => (
+        <span className="whitespace-nowrap text-gray-500 dark:text-gray-400">
+          {formatTime(value)}
+        </span>
+      ),
     },
     { title: 'Prompts', dataIndex: 'prompts', align: 'right' },
     {
@@ -135,7 +143,7 @@ export const SessionsTable = ({
       sorter: true,
       sortDirections: ['descend'],
       sortOrder: sortOrderFor('tokens'),
-      render: (value: number) => formatCount(value),
+      render: (value: number) => <span className="font-mono">{formatCount(value)}</span>,
     },
     {
       title: 'Est. cost',
@@ -145,21 +153,28 @@ export const SessionsTable = ({
       sorter: true,
       sortDirections: ['descend'],
       sortOrder: sortOrderFor('cost'),
-      render: (value: number) => formatUsd(value),
+      render: (value: number) => <span className="font-mono">{formatUsd(value)}</span>,
     },
     {
       title: 'Errors',
       dataIndex: 'errors',
       align: 'right',
       render: (value: number) =>
-        value > 0 ? <span className="text-red-600 dark:text-red-400">{value}</span> : 0,
+        value > 0 ? <span className="text-[var(--v2-red)]">{value}</span> : 0,
     },
   ];
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Sessions</h3>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-50">
+            Sessions
+          </h2>
+          <p className="m-0 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            Click a session for its timeline
+          </p>
+        </div>
         <Input.Search
           allowClear
           size="small"
@@ -168,7 +183,7 @@ export const SessionsTable = ({
           onSearch={(value) => setSearch(value.trim())}
         />
       </div>
-      {error && <div className="mb-2 text-sm text-red-600 dark:text-red-400">{error}</div>}
+      {error && <div className="mb-2 text-sm text-[var(--v2-red)]">{error}</div>}
       <Table<AiUsageSession>
         size="small"
         rowKey="sessionId"

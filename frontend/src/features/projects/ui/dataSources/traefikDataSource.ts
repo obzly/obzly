@@ -5,10 +5,12 @@ import {
   MEMORY_LIMITER_PROCESSOR_YAML,
   OTLP_REMOTE_FIELD,
   RESOURCEDETECTION_PROCESSOR_YAML,
+  SOURCE_NAME_FIELD,
   extensionsYaml,
   otlpHttpExporterYaml,
   otlpReceiverYaml,
   serviceExtensionsYaml,
+  sourceNameAttributeYaml,
 } from './otelCollectorCommon';
 import type { DataSourceDefinition } from './types';
 
@@ -30,6 +32,7 @@ export const traefikDataSource: DataSourceDefinition = {
       defaultValue: 'http://localhost:8080/metrics',
       helpText: 'Requires metrics.prometheus enabled in Traefik’s static config.',
     },
+    SOURCE_NAME_FIELD,
     OTLP_REMOTE_FIELD,
   ],
   build: ({ baseUrl, apiKey, fieldValues }) => {
@@ -86,7 +89,7 @@ ${RESOURCEDETECTION_PROCESSOR_YAML}
     attributes:
       - key: service.name
         value: traefik
-        action: upsert
+        action: upsert${sourceNameAttributeYaml(fieldValues)}
 
 ${extensionsYaml({ fileStorageDir: FILE_STORAGE_DIR })}
 

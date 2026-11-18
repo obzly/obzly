@@ -445,7 +445,7 @@ export const MaintenanceEditor = ({ window, checks, onClose, onSaved }: Props) =
           <span className="text-sm">{enabled ? 'Enabled' : 'Paused: no occurrences'}</span>
         </div>
 
-        <div className="flex flex-col gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-gray-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-gray-200">
+        <div className="flex flex-col gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-gray-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-gray-200">
           <strong className="text-gray-900 dark:text-gray-100">
             {mode === 'once' ? 'Occurrence' : 'Next occurrences'}
           </strong>

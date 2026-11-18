@@ -39,6 +39,11 @@ interface Props {
   onLevelCounts?: (counts: Record<string, number> | null) => void;
   /** Shows an "Anomalies" button. */
   onAnomalies?: () => void;
+  /** Pattern changes in the window, shown on the Anomalies button; null when unknown. */
+  anomalyCount?: number | null;
+  /** When set, a drag picks a range (drawn from `selection`) instead of zooming; a click still zooms. */
+  onSelectRange?: (range: { from: number; to: number }) => void;
+  selection?: { from: number; to: number } | null;
 }
 
 interface Bucket {
@@ -107,9 +112,13 @@ export const LogHistogramComponent = ({
   onTotal,
   onLevelCounts,
   onAnomalies,
+  anomalyCount,
+  onSelectRange,
+  selection,
 }: Props): React.JSX.Element => {
-  const { theme } = useTheme();
+  const { theme, definition } = useTheme();
   const isDark = theme === 'dark';
+  const colors = definition.colors;
   // ECharts renders local time or UTC only: values are shifted so UTC
   // rendering shows the display timezone's wall clock.
   const [timezone] = useDisplayTimezone();
@@ -118,9 +127,14 @@ export const LogHistogramComponent = ({
   const chartRef = useRef<ECharts | null>(null);
   // A ref so a new callback identity doesn't force a chart rebuild.
   const onZoomRef = useRef(onZoom);
+  const onSelectRangeRef = useRef(onSelectRange);
   useEffect(() => {
     onZoomRef.current = onZoom;
-  }, [onZoom]);
+    onSelectRangeRef.current = onSelectRange;
+  }, [onZoom, onSelectRange]);
+  // Bumped on resize so the drawn selection follows the plot.
+  const [layoutTick, setLayoutTick] = useState(0);
+  const [selectionBox, setSelectionBox] = useState<{ left: number; right: number } | null>(null);
 
   const [bucketChoice, setBucketChoice] = useState<number | 'auto'>(readStoredBucket);
   const [allBuckets, setAllBuckets] = useState<Bucket[]>([]);
@@ -253,9 +267,6 @@ export const LogHistogramComponent = ({
     const chart = chartRef.current ?? echarts.init(containerRef.current);
     chartRef.current = chart;
 
-    const text = isDark ? '#e5e7eb' : '#374151';
-    const axisLine = isDark ? '#4b5563' : '#d1d5db';
-    const splitLine = isDark ? '#374151' : '#e5e7eb';
     const half = bucketMs / 2;
 
     // ECharts stacks by data index, not x value, so every level series
@@ -302,9 +313,9 @@ export const LogHistogramComponent = ({
         tooltip: {
           trigger: 'axis',
           axisPointer: { type: 'shadow' },
-          backgroundColor: isDark ? '#1f2937' : '#ffffff',
-          borderColor: axisLine,
-          textStyle: { color: text, fontSize: 12 },
+          backgroundColor: colors.panel,
+          borderColor: colors.border,
+          textStyle: { color: colors.text, fontSize: 12 },
           formatter: (params: unknown) => {
             const items = (Array.isArray(params) ? params : [params]) as {
               seriesName: string;
@@ -336,8 +347,8 @@ export const LogHistogramComponent = ({
           type: 'time',
           min: shift(timeRange.from.valueOf()),
           max: shift(timeRange.to.valueOf()),
-          axisLine: { lineStyle: { color: axisLine } },
-          axisLabel: { color: text, fontSize: 11, hideOverlap: true },
+          axisLine: { lineStyle: { color: colors.border } },
+          axisLabel: { color: colors.muted, fontSize: 11, hideOverlap: true },
           splitLine: { show: false },
         },
         yAxis: {
@@ -345,11 +356,11 @@ export const LogHistogramComponent = ({
           minInterval: 1,
           splitNumber: 2,
           axisLabel: {
-            color: text,
+            color: colors.muted,
             fontSize: 11,
             formatter: (v: number) => Intl.NumberFormat('en', { notation: 'compact' }).format(v),
           },
-          splitLine: { lineStyle: { color: splitLine } },
+          splitLine: { lineStyle: { color: colors.track } },
         },
         series: [
           ...levelSeries,
@@ -364,12 +375,18 @@ export const LogHistogramComponent = ({
 
     const handleResize = () => {
       chart.resize();
+      setLayoutTick((t) => t + 1);
       const width = barWidth();
       chart.setOption({
         series: visibleLevels.map((level) => ({ id: `level-${level}`, barWidth: width })),
       });
     };
     window.addEventListener('resize', handleResize);
+    // The page layout (fields panel, details) changes the width without a
+    // window resize; this also sizes a chart first drawn while hidden.
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => handleResize());
+    resizeObserver?.observe(chart.getDom());
 
     // A click zooms to the whole bucket column (short bars are hard to hit);
     // a drag zooms to the selected span. Pointer capture keeps tracking
@@ -446,9 +463,12 @@ export const LogHistogramComponent = ({
           range = clampRange(start, start + bucketMs);
         }
       }
+      const wasDrag = dragging;
       endGesture(e);
       if (range && Number.isFinite(range.from) && range.to > range.from) {
-        zoom({ from: Math.round(range.from), to: Math.round(range.to) });
+        const picked = { from: Math.round(range.from), to: Math.round(range.to) };
+        if (wasDrag && onSelectRangeRef.current) onSelectRangeRef.current(picked);
+        else zoom(picked);
       }
     };
 
@@ -461,13 +481,14 @@ export const LogHistogramComponent = ({
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
       dom.removeEventListener('pointerdown', handlePointerDown);
       dom.removeEventListener('pointermove', handlePointerMove);
       dom.removeEventListener('pointerup', handlePointerUp);
       dom.removeEventListener('pointercancel', handlePointerCancel);
       setDragBox(null);
     };
-  }, [buckets, levels, chartHiddenLevels, isDark, bucketMs, timeRange, timezone, shift]);
+  }, [buckets, levels, chartHiddenLevels, colors, bucketMs, timeRange, timezone, shift]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -482,13 +503,13 @@ export const LogHistogramComponent = ({
             symbol: 'none',
             animation: false,
             label: { show: false },
-            lineStyle: { color: '#10b981', width: 1.5, type: 'solid' },
+            lineStyle: { color: colors.accent, width: 1.5, type: 'solid' },
             data: Number.isFinite(ts) ? [{ xAxis: shift(ts) }] : [],
           },
         },
       ],
     });
-  }, [cursorTime, buckets, levels, chartHiddenLevels, isDark, shift]);
+  }, [cursorTime, buckets, levels, chartHiddenLevels, colors, shift]);
 
   // Deploy markers are silent: hovering one would replace the bar tooltip
   // and zoom cursor.
@@ -541,7 +562,26 @@ export const LogHistogramComponent = ({
         },
       ],
     });
-  }, [deploys, buckets, levels, chartHiddenLevels, isDark, shift]);
+  }, [deploys, buckets, levels, chartHiddenLevels, colors, isDark, shift]);
+
+  // The picked range in container pixels, clamped to the plot; after the
+  // chart effect, so it reads the axis just drawn.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!selection || !chart || buckets.length === 0) {
+      setSelectionBox(null);
+      return;
+    }
+    const dom = chart.getDom();
+    const toX = (ms: number) =>
+      Math.min(
+        Math.max(Number(chart.convertToPixel({ xAxisIndex: 0 }, shift(ms))), GRID.left),
+        dom.clientWidth - GRID.right,
+      );
+    const left = toX(selection.from);
+    const right = toX(selection.to);
+    setSelectionBox(Number.isFinite(left) && right > left ? { left, right } : null);
+  }, [selection, buckets, levels, chartHiddenLevels, timeRange, shift, layoutTick]);
 
   const toggleDeploys = (on: boolean) => {
     setShowDeploys(on);
@@ -594,40 +634,62 @@ export const LogHistogramComponent = ({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between px-1 pb-1">
-        <span className="text-xs text-gray-500 dark:text-gray-300">
-          {isLoading ? (
-            <span className="inline-flex items-center gap-1">
-              {total > 0 && `${total.toLocaleString()} logs so far`}
-              <Spin size="small" />
-            </span>
-          ) : (
-            `${total.toLocaleString()} logs`
-          )}
-        </span>
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
+        <div className="flex items-baseline gap-2.5">
+          <h2 className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-50">
+            {isLoading ? (
+              <span className="inline-flex items-center gap-1.5">
+                {total > 0 ? `${total.toLocaleString()} logs so far` : 'Counting logs'}
+                <Spin size="small" />
+              </span>
+            ) : (
+              `${total.toLocaleString()} logs`
+            )}
+          </h2>
           {onZoom && (
-            <span className="hidden text-[11px] text-gray-400 md:inline dark:text-gray-400">
-              Click a bar or drag to zoom
+            <span className="hidden text-[11px] text-gray-400 md:inline dark:text-gray-500">
+              {onSelectRange
+                ? 'Click a bar to zoom, drag to pick a range to explain'
+                : 'Click a bar or drag to zoom'}
             </span>
           )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
           {onZoomOut && (
             <Button size="small" icon={<ZoomOutOutlined />} onClick={onZoomOut}>
               Zoom out
             </Button>
           )}
           {onAnomalies && (
-            <Tooltip title="Message patterns that are new, spiking or dropping against an earlier period">
+            <Tooltip
+              title={
+                typeof anomalyCount === 'number'
+                  ? `Message patterns that are new, spiking or dropping against an earlier period: ${anomalyCount} against the previous period`
+                  : 'Message patterns that are new, spiking or dropping against an earlier period'
+              }
+            >
               <Button size="small" icon={<DiffOutlined />} onClick={onAnomalies}>
                 Anomalies
+                {typeof anomalyCount === 'number' && (
+                  <span
+                    aria-label={`${anomalyCount} pattern changes`}
+                    className={`rounded-full px-1.5 text-[11px] leading-4 font-medium tabular-nums ${
+                      anomalyCount > 0
+                        ? 'bg-red-500/15 text-[var(--v2-red)]'
+                        : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'
+                    }`}
+                  >
+                    {anomalyCount.toLocaleString()}
+                  </span>
+                )}
               </Button>
             </Tooltip>
           )}
           <Tooltip title="Mark Kubernetes rollouts on the chart: when a Deployment's new ReplicaSet first logged">
-            <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-300">
+            <label className="inline-flex min-h-6 cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 px-2 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-300">
               <Switch size="small" checked={showDeploys} onChange={toggleDeploys} />
               K8s Rollouts
-            </span>
+            </label>
           </Tooltip>
           <Popover content={filterContent} trigger="click" placement="bottomRight">
             <Badge dot={chartHiddenLevels.size > 0} offset={[-2, 2]}>
@@ -661,9 +723,21 @@ export const LogHistogramComponent = ({
       <div className="relative min-h-0 w-full flex-1">
         {/* touch-none: a drag selects a range instead of scrolling. */}
         <div ref={containerRef} className="h-full w-full touch-none select-none" />
+        {selectionBox && !dragBox && (
+          <div
+            aria-hidden="true"
+            className="border-accent-500 bg-accent-500/15 pointer-events-none absolute border-x-2"
+            style={{
+              left: selectionBox.left,
+              width: selectionBox.right - selectionBox.left,
+              top: GRID.top,
+              bottom: GRID.bottom,
+            }}
+          />
+        )}
         {dragBox && (
           <div
-            className="pointer-events-none absolute border-x border-emerald-500 bg-emerald-500/15"
+            className="border-accent-500 bg-accent-500/15 pointer-events-none absolute border-x"
             style={{
               left: dragBox.left,
               width: dragBox.right - dragBox.left,
@@ -671,7 +745,7 @@ export const LogHistogramComponent = ({
               bottom: GRID.bottom,
             }}
           >
-            <span className="absolute -top-0.5 left-1/2 -translate-x-1/2 rounded bg-emerald-600 px-1 text-[10px] whitespace-nowrap text-white">
+            <span className="bg-accent-600 absolute -top-0.5 left-1/2 -translate-x-1/2 rounded px-1 text-[10px] whitespace-nowrap text-white">
               {formatInTimezone(dragBox.from, 'HH:mm:ss', timezone)} –{' '}
               {formatInTimezone(dragBox.to, 'HH:mm:ss', timezone)}
             </span>

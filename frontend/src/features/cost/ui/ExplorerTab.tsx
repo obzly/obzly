@@ -12,7 +12,8 @@ import {
   costApi,
 } from '../../../entity/cost';
 import { downloadText, toCSV } from '../../../shared/lib';
-import { type ChartColors, EChart, Panel, baseOption } from '../../synthetics';
+import { Card } from '../../../shared/ui/v2';
+import { type ChartColors, EChart, baseOption } from '../../synthetics';
 import {
   BASE_DIMENSIONS,
   type ExplorerState,
@@ -36,9 +37,10 @@ import {
   resolveRange,
 } from '../lib/ranges';
 import { fanOut } from '../lib/sites';
+import { DimensionIcon, IconLabel } from './CloudIcon';
 import { FacetFilter } from './FacetFilter';
 import { SavedViewsBar } from './SavedViewsBar';
-import { CoverageMark, SiteErrors } from './parts';
+import { CoverageMark, Loading, SiteErrors } from './parts';
 
 interface Props {
   sites: CostSite[];
@@ -49,16 +51,7 @@ interface Props {
 }
 
 const STACKED = 8;
-const PALETTE = [
-  '#009966',
-  '#2563eb',
-  '#d97706',
-  '#7c3aed',
-  '#db2777',
-  '#0891b2',
-  '#65a30d',
-  '#dc2626',
-];
+// Neutral grey for the rolled-up rest: not a series of its own.
 const OTHER_COLOR = '#9ca3af';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -149,7 +142,7 @@ export const ExplorerTab = ({ sites, refresh, state, onChange, applyDefault }: P
           name: valueLabel(state.groupBy, row.key, row.label),
           type: 'bar' as const,
           stack: 'cost',
-          itemStyle: { color: PALETTE[index % PALETTE.length] },
+          itemStyle: { color: colors.series[index % colors.series.length] },
           data: row.values,
         })),
         ...(rest.some((value) => value !== 0)
@@ -213,7 +206,9 @@ export const ExplorerTab = ({ sites, refresh, state, onChange, applyDefault }: P
       ellipsis: true,
       render: (_, row) =>
         row.key ? (
-          valueLabel(state.groupBy, row.key, row.label)
+          <IconLabel icon={<DimensionIcon dimension={state.groupBy} value={row.key} />}>
+            {valueLabel(state.groupBy, row.key, row.label)}
+          </IconLabel>
         ) : (
           <span className="text-gray-500 dark:text-gray-400">{row.label || '(none)'}</span>
         ),
@@ -252,105 +247,114 @@ export const ExplorerTab = ({ sites, refresh, state, onChange, applyDefault }: P
     state.groupBy === 'resource' || filterValues(state.filters, 'resource').length > 0;
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          size="small"
-          className="w-40"
-          value={state.range}
-          onChange={(preset: RangePreset) => setRange(preset)}
-          options={(Object.keys(RANGE_LABEL) as RangePreset[]).map((preset) => ({
-            value: preset,
-            label: RANGE_LABEL[preset],
-          }))}
-        />
-        {state.range === 'custom' && (
-          <DatePicker.RangePicker
+    <div className="flex flex-col gap-4">
+      <Card bodyClassName="flex flex-col gap-3">
+        <div
+          role="group"
+          aria-label="Explorer controls"
+          className="flex flex-wrap items-center gap-2"
+        >
+          <Select
             size="small"
-            allowClear={false}
-            value={[dayjs(range.from), dayjs(range.to)]}
-            disabledDate={(day) => day.isAfter(dayjs())}
-            onChange={(values) => {
-              if (values?.[0] && values[1]) {
-                setRange('custom', {
-                  from: values[0].format('YYYY-MM-DD'),
-                  to: values[1].format('YYYY-MM-DD'),
-                });
-              }
-            }}
+            className="w-40"
+            aria-label="Range"
+            value={state.range}
+            onChange={(preset: RangePreset) => setRange(preset)}
+            options={(Object.keys(RANGE_LABEL) as RangePreset[]).map((preset) => ({
+              value: preset,
+              label: RANGE_LABEL[preset],
+            }))}
           />
-        )}
-        <Segmented
-          size="small"
-          value={state.granularity}
-          onChange={(value) => update({ granularity: value as ExplorerState['granularity'] })}
-          options={(['daily', 'monthly', 'quarterly', 'yearly'] as const).map((granularity) => ({
-            value: granularity,
-            label: GRANULARITY_LABEL[granularity],
-            disabled: !allowedGranularities(range).includes(granularity),
-          }))}
-        />
-        <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">Group by</span>
-        <Select
-          size="small"
-          className="w-40"
-          value={state.groupBy}
-          onChange={(groupBy: CostDimension) => update({ groupBy })}
-          options={groupOptions}
-        />
-        <Segmented
-          size="small"
-          value={state.metric}
-          onChange={(value) => update({ metric: value as ExplorerState['metric'] })}
-          options={[
-            { value: 'effective', label: 'Effective' },
-            { value: 'billed', label: 'Billed' },
-          ]}
-        />
-        <div className="flex-1" />
-        <SavedViewsBar<ExplorerState>
-          kind="cost"
-          state={state}
-          applyDefault={applyDefault}
-          onOpen={(saved) => onChange({ ...state, ...saved })}
-        />
-      </div>
+          {state.range === 'custom' && (
+            <DatePicker.RangePicker
+              size="small"
+              allowClear={false}
+              value={[dayjs(range.from), dayjs(range.to)]}
+              disabledDate={(day) => day.isAfter(dayjs())}
+              onChange={(values) => {
+                if (values?.[0] && values[1]) {
+                  setRange('custom', {
+                    from: values[0].format('YYYY-MM-DD'),
+                    to: values[1].format('YYYY-MM-DD'),
+                  });
+                }
+              }}
+            />
+          )}
+          <Segmented
+            size="small"
+            aria-label="Granularity"
+            value={state.granularity}
+            onChange={(value) => update({ granularity: value as ExplorerState['granularity'] })}
+            options={(['daily', 'monthly', 'quarterly', 'yearly'] as const).map((granularity) => ({
+              value: granularity,
+              label: GRANULARITY_LABEL[granularity],
+              disabled: !allowedGranularities(range).includes(granularity),
+            }))}
+          />
+          <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">Group by</span>
+          <Select
+            size="small"
+            className="w-40"
+            aria-label="Group by"
+            value={state.groupBy}
+            onChange={(groupBy: CostDimension) => update({ groupBy })}
+            options={groupOptions}
+          />
+          <Segmented
+            size="small"
+            aria-label="Metric"
+            value={state.metric}
+            onChange={(value) => update({ metric: value as ExplorerState['metric'] })}
+            options={[
+              { value: 'effective', label: 'Effective' },
+              { value: 'billed', label: 'Billed' },
+            ]}
+          />
+          <div className="flex-1" />
+          <SavedViewsBar<ExplorerState>
+            kind="cost"
+            state={state}
+            applyDefault={applyDefault}
+            onOpen={(saved) => onChange({ ...state, ...saved })}
+          />
+        </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-gray-500 dark:text-gray-400">Filters</span>
-        {filterDimensions.map((dimension) => (
-          <FacetFilter
-            key={dimension}
-            dimension={dimension}
-            values={facets.dimensions[dimension] ?? []}
-            selected={filterValues(state.filters, dimension)}
-            scope={scopeLine(state.filters, dimension)}
-            onChange={(values) =>
-              update({ filters: setFilterValues(state.filters, dimension, values) })
-            }
-          />
-        ))}
-        {activeDimensions(state.filters).length > 0 && (
-          <Button size="small" type="link" onClick={() => update({ filters: {} })}>
-            Clear all
-          </Button>
-        )}
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-gray-500 dark:text-gray-400">Filters</span>
+          {filterDimensions.map((dimension) => (
+            <FacetFilter
+              key={dimension}
+              dimension={dimension}
+              values={facets.dimensions[dimension] ?? []}
+              selected={filterValues(state.filters, dimension)}
+              scope={scopeLine(state.filters, dimension)}
+              onChange={(values) =>
+                update({ filters: setFilterValues(state.filters, dimension, values) })
+              }
+            />
+          ))}
+          {activeDimensions(state.filters).length > 0 && (
+            <Button size="small" type="link" onClick={() => update({ filters: {} })}>
+              Clear all
+            </Button>
+          )}
+        </div>
+      </Card>
 
       {result && <SiteErrors outcomes={result.outcomes} />}
 
       {!result ? (
-        <div className="flex justify-center py-16">
-          <Spin indicator={<LoadingOutlined spin />} />
-        </div>
+        <Loading />
       ) : (
         <Spin spinning={loading} indicator={<LoadingOutlined spin />}>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             {(explore?.currencies.length ?? 0) > 1 && (
               <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
                 Currency
                 <Segmented
                   size="small"
+                  aria-label="Currency"
                   value={block?.currency}
                   onChange={(value) => setCurrency(value as string)}
                   options={explore!.currencies.map((item) => ({
@@ -360,7 +364,7 @@ export const ExplorerTab = ({ sites, refresh, state, onChange, applyDefault }: P
                 />
               </div>
             )}
-            <Panel
+            <Card
               title={
                 block ? (
                   <span>
@@ -404,41 +408,42 @@ export const ExplorerTab = ({ sites, refresh, state, onChange, applyDefault }: P
                   aren&apos;t in this view.
                 </Tag>
               )}
-            </Panel>
-            {block && (
-              <Table<ExploreRow>
-                size="small"
-                rowKey={(row) => row.key || '__other'}
-                dataSource={rows}
-                columns={columns}
-                pagination={rows.length > 50 ? { pageSize: 50, showSizeChanger: false } : false}
-                scroll={{ x: 'max-content' }}
-                onRow={(row) => ({
-                  onClick: () => drill(row),
-                  className: row.key && drillNext(state.groupBy) ? 'cursor-pointer' : '',
-                })}
-                summary={() => (
-                  <Table.Summary.Row>
-                    <Table.Summary.Cell index={0} className="font-semibold">
-                      Total
-                    </Table.Summary.Cell>
-                    {block.totals.map((total, index) => (
-                      <Table.Summary.Cell key={index} index={index + 1} align="right">
-                        <Amount
-                          value={total}
-                          missing={explore!.periods[index]?.coverage === 'none'}
-                          format={money}
-                          strong
-                        />
+              {block && (
+                <Table<ExploreRow>
+                  className="mt-3"
+                  size="small"
+                  rowKey={(row) => row.key || '__other'}
+                  dataSource={rows}
+                  columns={columns}
+                  pagination={rows.length > 50 ? { pageSize: 50, showSizeChanger: false } : false}
+                  scroll={{ x: 'max-content' }}
+                  onRow={(row) => ({
+                    onClick: () => drill(row),
+                    className: row.key && drillNext(state.groupBy) ? 'cursor-pointer' : '',
+                  })}
+                  summary={() => (
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0} className="font-semibold">
+                        Total
                       </Table.Summary.Cell>
-                    ))}
-                    <Table.Summary.Cell index={block.totals.length + 1} align="right">
-                      <span className="font-semibold tabular-nums">{money(block.total)}</span>
-                    </Table.Summary.Cell>
-                  </Table.Summary.Row>
-                )}
-              />
-            )}
+                      {block.totals.map((total, index) => (
+                        <Table.Summary.Cell key={index} index={index + 1} align="right">
+                          <Amount
+                            value={total}
+                            missing={explore!.periods[index]?.coverage === 'none'}
+                            format={money}
+                            strong
+                          />
+                        </Table.Summary.Cell>
+                      ))}
+                      <Table.Summary.Cell index={block.totals.length + 1} align="right">
+                        <span className="font-semibold tabular-nums">{money(block.total)}</span>
+                      </Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  )}
+                />
+              )}
+            </Card>
           </div>
         </Spin>
       )}

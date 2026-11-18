@@ -3,6 +3,167 @@
 /* Tailwind v4: make `dark:` follow the `.dark` class ThemeContext sets, not the OS. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* UI v2 palette: neutrals lean toward the emerald accent, so every existing
+   gray-* class picks up the v2 look without touching its markup. */
+@theme {
+  --color-gray-50: #f3f6f5;
+  --color-gray-100: #eaf0ed;
+  --color-gray-200: #dde5e1;
+  --color-gray-300: #c4d0cb;
+  --color-gray-400: #9aaba4;
+  --color-gray-500: #6b7d76;
+  --color-gray-600: #4b5b55;
+  --color-gray-700: #26352f;
+  --color-gray-800: #111c18;
+  --color-gray-900: #0a1210;
+  --color-gray-950: #060c0a;
+
+  /* The brand accent. Themes swap it; "healthy/OK" greens stay emerald-* on purpose. */
+  --color-accent-50: #ecfdf5;
+  --color-accent-100: #d1fae5;
+  --color-accent-200: #a7f3d0;
+  --color-accent-300: #6ee7b7;
+  --color-accent-400: #34d399;
+  --color-accent-500: #10b981;
+  --color-accent-600: #009966;
+  --color-accent-700: #047857;
+  --color-accent-800: #065f46;
+  --color-accent-900: #064e3b;
+  --color-accent-950: #022c22;
+}
+
+/* Tokens for the v2 widgets (cards, KPI tiles, ranked lists, charts). */
+:root {
+  --v2-bg: #f3f6f5;
+  --v2-panel: #ffffff;
+  --v2-panel2: #f2f6f4;
+  --v2-border: #e0e7e4;
+  --v2-text: #0f1a16;
+  --v2-muted: #55665f;
+  --v2-track: #e6ece9;
+  --v2-accent: #009966;
+  /* Accent-tinted background for selected things (despite the name, it follows the theme accent). */
+  --v2-ok-soft: rgba(0, 153, 102, 0.1);
+  /* Status green: healthy / OK / up. Fixed in every theme, unlike --v2-accent. */
+  --v2-green: #059669;
+  --v2-green-soft: rgba(5, 150, 105, 0.12);
+  --v2-orange: #d97706;
+  --v2-red: #dc2626;
+  --v2-blue: #2563eb;
+  --v2-purple: #7c3aed;
+  --v2-pink: #db2777;
+  --v2-yellow: #ca8a04;
+}
+.dark {
+  --v2-bg: #0a1210;
+  --v2-panel: #111c18;
+  --v2-panel2: #17241f;
+  --v2-border: #21312b;
+  --v2-text: #e8f0ec;
+  --v2-muted: #9aaba4;
+  --v2-track: #1d2a25;
+  --v2-accent: #10b981;
+  --v2-ok-soft: rgba(16, 185, 129, 0.14);
+  --v2-green: #10b981;
+  --v2-green-soft: rgba(16, 185, 129, 0.16);
+  --v2-orange: #f59e0b;
+  --v2-red: #f87171;
+  --v2-blue: #60a5fa;
+  --v2-purple: #a78bfa;
+  --v2-pink: #f472b6;
+  --v2-yellow: #facc15;
+}
+
+/* Themes (shared/theme/themes.ts). ThemeContext sets data-theme on <html>, plus
+   .dark for dark ones. Emerald light/dark are the defaults above; Semi-dark is
+   Emerald light with .dark on the rail and top bar only. */
+html[data-theme='soft-light'] {
+  --color-gray-50: #f4f5fb;
+  --color-gray-100: #eceef7;
+  --color-gray-200: #e3e5f1;
+  --color-gray-300: #c9cde0;
+  --color-gray-400: #9ca2bd;
+  --color-gray-500: #6d7391;
+  --color-gray-600: #4d5372;
+  --color-gray-700: #2b3150;
+  --color-gray-800: #161a2e;
+  --color-gray-900: #0d1020;
+  --color-gray-950: #070912;
+  --color-accent-50: #eef2ff;
+  --color-accent-100: #e0e7ff;
+  --color-accent-200: #c7d2fe;
+  --color-accent-300: #a5b4fc;
+  --color-accent-400: #818cf8;
+  --color-accent-500: #6366f1;
+  --color-accent-600: #4f46e5;
+  --color-accent-700: #4338ca;
+  --color-accent-800: #3730a3;
+  --color-accent-900: #312e81;
+  --color-accent-950: #1e1b4b;
+  --v2-bg: #f4f5fb;
+  --v2-panel: #ffffff;
+  --v2-panel2: #f3f4fb;
+  --v2-border: #e3e5f1;
+  --v2-text: #171a2e;
+  --v2-muted: #5d6280;
+  --v2-track: #e8eaf5;
+  --v2-accent: #4f46e5;
+  --v2-ok-soft: rgba(79, 70, 229, 0.1);
+}
+html[data-theme='midnight'] {
+  --color-gray-50: #f1f4fb;
+  --color-gray-100: #e6ebf7;
+  --color-gray-200: #d3dbee;
+  --color-gray-300: #b3bfdc;
+  --color-gray-400: #95a1c0;
+  --color-gray-500: #6b7896;
+  --color-gray-600: #46526f;
+  --color-gray-700: #232e4b;
+  --color-gray-800: #111a30;
+  --color-gray-900: #0a0f1e;
+  --color-gray-950: #060912;
+  --color-accent-50: #eef4ff;
+  --color-accent-100: #dbe6ff;
+  --color-accent-200: #bfd3ff;
+  --color-accent-300: #93b4ff;
+  --color-accent-400: #7aa2ff;
+  --color-accent-500: #5b8cff;
+  --color-accent-600: #3f6fe6;
+  --color-accent-700: #3257bf;
+  --color-accent-800: #2b4799;
+  --color-accent-900: #273e7a;
+  --color-accent-950: #1a274d;
+  --v2-bg: #0a0f1e;
+  --v2-panel: #111a30;
+  --v2-panel2: #17213b;
+  --v2-border: #232e4b;
+  --v2-text: #e6ebf7;
+  --v2-muted: #95a1c0;
+  --v2-track: #1b2542;
+  --v2-accent: #5b8cff;
+  --v2-ok-soft: rgba(91, 140, 255, 0.16);
+}
+html[data-theme='black'] {
+  --color-gray-50: #f5f5f6;
+  --color-gray-100: #ededef;
+  --color-gray-200: #dcdce0;
+  --color-gray-300: #c3c3c9;
+  --color-gray-400: #9b9ba3;
+  --color-gray-500: #6e6e76;
+  --color-gray-600: #4a4a51;
+  --color-gray-700: #1f1f23;
+  --color-gray-800: #0b0b0c;
+  --color-gray-900: #000000;
+  --color-gray-950: #000000;
+  --v2-bg: #000000;
+  --v2-panel: #0b0b0c;
+  --v2-panel2: #141416;
+  --v2-border: #1f1f23;
+  --v2-text: #ededef;
+  --v2-muted: #9b9ba3;
+  --v2-track: #19191c;
+}
+
 :root {
   font-family:
     'Jost',
@@ -61,21 +222,22 @@ body {
   padding: 0 !important;
 }
 
-html.dark {
-  background: #0b1220;
+html {
+  background: var(--v2-bg);
 }
 
 *::-webkit-scrollbar {
   width: 3px;
+  height: 3px;
   padding: 5px;
 }
 
 *::-webkit-scrollbar-track {
-  background: gainsboro;
+  background: var(--v2-track);
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #adadad;
+  background: var(--v2-muted);
   border-radius: 360px;
 }
 

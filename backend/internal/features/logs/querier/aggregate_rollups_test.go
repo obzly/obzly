@@ -98,6 +98,7 @@ func Test_Histogram_FromPerMinuteCounts_MatchesTheRawLogs(t *testing.T) {
 		"levels, ragged edges":      {nil, "level", 5 * time.Minute, ragged, ragged.Add(83*time.Minute + 7*time.Second)},
 		"service, level filter":     {condition("level", logs_core.ConditionOperatorEquals, "error"), "service_name", 10 * time.Minute, f.base, f.base.Add(2 * time.Hour)},
 		"patterns":                  {nil, logs_core.PatternHashField, 30 * time.Minute, f.base, f.base.Add(2 * time.Hour)},
+		"several group fields":      {nil, logs_core.JoinGroupFields(logs_core.PatternHashField, "level", "service_name"), 15 * time.Minute, ragged, f.base.Add(2 * time.Hour)},
 		"pattern filter, no groups": {condition(logs_core.PatternHashField, logs_core.ConditionOperatorEquals, hash), "", time.Minute, ragged, f.base.Add(2 * time.Hour)},
 		"message filter (raw only)": {condition("message", logs_core.ConditionOperatorContains, "took 1"), "level", time.Minute, f.base, f.base.Add(2 * time.Hour)},
 		"10-second buckets (raw)":   {nil, "level", 10 * time.Second, ragged, ragged.Add(10 * time.Minute)},

@@ -70,6 +70,8 @@ interface Props {
   onGetRangeHelpers?: (helpers: TimeRangeHelpers) => void;
   // Compact toolbar layout: no labels, smaller controls.
   compact?: boolean;
+  /** Control size; defaults to 'small' when compact, else 'middle'. */
+  size?: 'small' | 'middle' | 'large';
   /** Preset value to start on, e.g. '24h'. */
   defaultPreset?: string;
 }
@@ -79,8 +81,10 @@ export const TimeRangePickerComponent = ({
   onGetCurrentRange,
   onGetRangeHelpers,
   compact = false,
+  size,
   defaultPreset = DEFAULT_TIME_PRESET,
 }: Props): React.JSX.Element => {
+  const controlSize = size ?? (compact ? 'small' : 'middle');
   // A short default window, so landing on a page doesn't query a day of data.
   const [selectedPreset, setSelectedPreset] = useState<string>(defaultPreset);
   const [customRange, setCustomRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
@@ -186,7 +190,7 @@ export const TimeRangePickerComponent = ({
 
   const rangePicker = (
     <RangePicker
-      size={compact ? 'small' : 'middle'}
+      size={controlSize}
       showTime={{
         // Seconds shown: a histogram zoom can pick a range under a minute.
         format: timeFormat.use12Hours ? 'h:mm:ss A' : 'HH:mm:ss',
@@ -208,9 +212,11 @@ export const TimeRangePickerComponent = ({
 
   const selectPicker = (
     <Select
-      size={compact ? 'small' : 'middle'}
+      size={controlSize}
       value={selectedPreset}
       onChange={handlePresetChange}
+      // Compact mode drops the visible "Time Range" label.
+      aria-label="Time range"
       className={compact ? 'w-36' : 'w-48'}
       suffixIcon={<ClockCircleOutlined />}
     >

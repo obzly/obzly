@@ -79,7 +79,7 @@ export const FolderManagerModalComponent = ({
                 title="Delete this folder? Its dashboards become unfiled."
                 onConfirm={() => handleDelete(folder.id)}
               >
-                <Button danger type="text" icon={<DeleteOutlined />} />
+                <Button danger type="text" icon={<DeleteOutlined />} aria-label="Delete folder" />
               </Popconfirm>,
             ]}
           >

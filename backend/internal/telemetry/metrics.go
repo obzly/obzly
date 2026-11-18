@@ -298,6 +298,19 @@ var (
 		Help:      "Fragments re-sent elsewhere after an executor failed them.",
 	})
 
+	QuerySingleFragments = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "query_single_fragments_total",
+		Help: "Whole-query (single fragment) requests by placement: remote, or in process because of " +
+			"no_executor, no_upload, over_bound or fallback (the remote run failed).",
+	}, []string{"placement"})
+
+	QueryShippedFiles = factory.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "query_shipped_files_total",
+		Help:      "Local files (query-time tail, segments not uploaded yet) shipped to an executor.",
+	})
+
 	QueryExecutors = factory.NewGauge(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Name:      "query_executors",

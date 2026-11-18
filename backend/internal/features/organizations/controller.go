@@ -3,6 +3,7 @@ package organizations
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	users_middleware "obzly/internal/features/users/middleware"
 
@@ -46,6 +47,7 @@ func (c *Controller) RegisterRoutes(router *gin.RouterGroup) {
 	router.POST("/orgs/:orgId/teams/:teamId/grants", c.AddGrant)
 	router.DELETE("/orgs/:orgId/teams/:teamId/grants/:grantId", c.RemoveGrant)
 	router.GET("/orgs/:orgId/scim-tokens", c.ListSCIMTokens)
+	router.GET("/orgs/:orgId/scim-events", c.ListSCIMEvents)
 	router.POST("/orgs/:orgId/scim-tokens", c.CreateSCIMToken)
 	router.DELETE("/orgs/:orgId/scim-tokens/:tokenId", c.DeleteSCIMToken)
 }
@@ -602,6 +604,34 @@ func (c *Controller) ListSCIMTokens(ctx *gin.Context) {
 	}
 	tokens, err := c.service.ListSCIMTokens(orgID, user)
 	respond(ctx, tokens, err)
+}
+
+// ListSCIMEvents
+// @Summary An organization's recent SCIM changes
+// @Description Owners and global admins: the latest provisioning changes SCIM made (users created, updated, deactivated or removed, teams changed), newest first, from the audit log
+// @Tags organizations
+// @Produce json
+// @Security BearerAuth
+// @Param orgId path string true "orgId"
+// @Param limit query int false "At most this many (default 20, max 100)"
+// @Success 200 {array} organizations.SCIMEvent
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /orgs/{orgId}/scim-events [get]
+func (c *Controller) ListSCIMEvents(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	orgID, ok := pathID(ctx, "orgId")
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(ctx.Query("limit"))
+	events, err := c.service.ListSCIMEvents(orgID, limit, user)
+	respond(ctx, events, err)
 }
 
 // CreateSCIMToken

@@ -12,6 +12,12 @@ type UsersSettings struct {
 	IsMemberAllowedToCreateProjects bool `json:"isMemberAllowedToCreateProjects" gorm:"column:is_member_allowed_to_create_projects"`
 	// every user, not only admins, must set up MFA at their next sign-in
 	IsMFARequiredForEveryone bool `json:"isMfaRequiredForEveryone" gorm:"column:is_mfa_required_for_everyone"`
+	// Theme defaults for users who never picked one (light, dark or system).
+	DefaultThemeMode  string `json:"defaultThemeMode"  gorm:"column:default_theme_mode"`
+	DefaultLightTheme string `json:"defaultLightTheme" gorm:"column:default_light_theme"`
+	DefaultDarkTheme  string `json:"defaultDarkTheme"  gorm:"column:default_dark_theme"`
+	// Off: everyone sees the default themes; users still pick light/dark/system mode.
+	IsUserThemeChoiceAllowed bool `json:"isUserThemeChoiceAllowed" gorm:"column:is_user_theme_choice_allowed"`
 }
 
 func (UsersSettings) TableName() string {

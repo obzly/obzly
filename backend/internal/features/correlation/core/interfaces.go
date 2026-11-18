@@ -18,6 +18,9 @@ type IncidentSessionRepository interface {
 	// GetSessionDetail re-hydrates each signal from its live stream; missing
 	// rows come back with Available: false.
 	GetSessionDetail(projectID, sessionID uuid.UUID) (*SessionDetailDTO, error)
+	// GetSessionSignals is a session with its raw signal refs (nothing
+	// re-hydrated); ErrSessionNotFound when the project has no such session.
+	GetSessionSignals(projectID, sessionID uuid.UUID) (*IncidentSession, []*IncidentSessionSignal, error)
 	// GetWatermark returns zero time for a never-scanned project; the
 	// cold-start lookback cap is the worker's policy, not storage's.
 	GetWatermark(projectID uuid.UUID) (time.Time, error)

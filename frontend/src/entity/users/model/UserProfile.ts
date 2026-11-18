@@ -1,3 +1,4 @@
+import type { UIPreferences } from './UIPreferences';
 import type { UserPlan } from './UserPlan';
 import type { UserRole } from './UserRole';
 
@@ -17,4 +18,6 @@ export interface UserProfile {
   plan?: UserPlan;
   /** The bootstrap super-admin ("admin", "superadmin" on a control plane, or ADMIN_EMAIL). */
   isRootAdmin?: boolean;
+  /** Absent until the user saves a preference; parse before use, ids may be stale. */
+  uiPreferences?: UIPreferences;
 }

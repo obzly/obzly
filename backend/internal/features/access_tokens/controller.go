@@ -47,12 +47,12 @@ func (c *AccessTokenController) ListAccessTokens(ctx *gin.Context) {
 
 // CreateAccessToken
 // @Summary Create a personal access token for the MCP endpoint
-// @Description The full token is returned once. Requires the MFA code when MFA is enabled.
+// @Description The full token is returned once. Requires the MFA code when MFA is enabled. write=true adds the mcp:write scope (MCP write tools) and needs a session that passed MFA.
 // @Tags access-tokens
 // @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param request body CreateAccessTokenRequestDTO true "Token name, lifetime and MFA code"
+// @Param request body CreateAccessTokenRequestDTO true "Token name, lifetime, MFA code and write access"
 // @Success 200 {object} CreateAccessTokenResponseDTO
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
@@ -79,7 +79,7 @@ func (c *AccessTokenController) CreateAccessToken(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "mfaRequired": true})
 	case errors.Is(err, mfa_services.ErrTooManyAttempts):
 		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
-	case errors.Is(err, ErrMFACodeInvalid), errors.Is(err, ErrTooManyTokens):
+	case errors.Is(err, ErrMFACodeInvalid), errors.Is(err, ErrTooManyTokens), errors.Is(err, ErrWriteRequiresMFA):
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create access token"})

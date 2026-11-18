@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"obzly/internal/authz"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"obzly/internal/util/querylimit"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
@@ -42,7 +44,15 @@ const (
 	maxStaticValuesPerVariable = 1000
 	maxTextBytes               = 64 << 10
 	maxImportJSONBytes         = 4 << 20
+
+	// Grid of an appended panel: 12 columns, a new panel half as wide.
+	gridColumns        = 12
+	defaultPanelWidth  = 6
+	defaultPanelHeight = 8
+	maxPanelHeight     = 48
 )
+
+var errDashboardNotFound = errors.New("dashboard not found")
 
 type DashboardService struct {
 	dashboardRepository *dashboards_repositories.DashboardRepository
@@ -154,6 +164,82 @@ func (s *DashboardService) UpdateDashboard(
 	}
 
 	return dashboard, nil
+}
+
+// AppendPanel adds one panel at the bottom of a tab (the first one when
+// request.TabID is empty), validated like a full save. Used by the MCP
+// add_dashboard_panel tool, which may only add, never replace a dashboard.
+func (s *DashboardService) AppendPanel(
+	projectID, dashboardID uuid.UUID,
+	request *dashboards_dto.AppendPanelRequestDTO,
+	user *users_models.User,
+) (*dashboards_dto.AppendPanelResponseDTO, error) {
+	if err := s.requireWriteAccess(projectID, user); err != nil {
+		return nil, err
+	}
+
+	panel := request.Panel
+	panel.ID = ""
+	if panel.GridPos.W <= 0 {
+		panel.GridPos.W = defaultPanelWidth
+	}
+	panel.GridPos.W = clampInt(panel.GridPos.W, 1, gridColumns)
+	if panel.GridPos.H <= 0 {
+		panel.GridPos.H = defaultPanelHeight
+	}
+	panel.GridPos.H = clampInt(panel.GridPos.H, 1, maxPanelHeight)
+
+	var tabID string
+	var saved dashboards_models.Panel
+	dashboard, err := s.dashboardRepository.UpdateLocked(dashboardID, func(d *dashboards_models.Dashboard) error {
+		if d.ProjectID != projectID {
+			return errDashboardNotFound
+		}
+		index := -1
+		for i, tab := range d.Tabs {
+			if request.TabID == "" || tab.ID == request.TabID {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return errors.New("tab not found on this dashboard")
+		}
+		bottom := 0
+		for _, existing := range d.Tabs[index].Panels {
+			bottom = max(bottom, existing.GridPos.Y+existing.GridPos.H)
+		}
+		panel.GridPos.X, panel.GridPos.Y = 0, bottom
+
+		tabs := slices.Clone(d.Tabs)
+		tabs[index].Panels = append(slices.Clone(tabs[index].Panels), panel)
+		normalized, err := normalizeTabs(tabs)
+		if err != nil {
+			return err
+		}
+		d.Tabs = normalized
+		tabID = normalized[index].ID
+		saved = normalized[index].Panels[len(normalized[index].Panels)-1]
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errDashboardNotFound
+		}
+		return nil, err
+	}
+
+	return &dashboards_dto.AppendPanelResponseDTO{Dashboard: dashboard, TabID: tabID, Panel: saved}, nil
+}
+
+// ValidatePanel checks one panel the way a dashboard save does (and assigns
+// an ID when it has none), so a caller can refuse a bad panel before saving.
+func ValidatePanel(panel dashboards_models.Panel) (dashboards_models.Panel, error) {
+	normalized, err := normalizePanels([]dashboards_models.Panel{panel})
+	if err != nil {
+		return dashboards_models.Panel{}, err
+	}
+	return normalized[0], nil
 }
 
 func (s *DashboardService) SetPinned(
@@ -288,16 +374,25 @@ func logAggregationRequest(request *dashboards_dto.PanelQueryRequestDTO) *logs_c
 		BucketMs:   request.Panel.BucketMs,
 		Limit:      request.Panel.Limit,
 		ScanBudget: config.GetEnv().QueryMaxScanBytes,
+
+		Measure:      request.Panel.Measure,
+		MeasureField: request.Panel.MeasureField,
+		TopGroups:    request.Panel.TopGroups,
+		GroupBands:   request.Panel.GroupBands,
 	}
 }
 
 func panelBuckets(buckets []logs_core.AggregationBucketDTO) []dashboards_dto.PanelBucketDTO {
 	panel := make([]dashboards_dto.PanelBucketDTO, len(buckets))
 	for i, bucket := range buckets {
+		value := float64(bucket.Count)
+		if bucket.Value != nil {
+			value = *bucket.Value
+		}
 		panel[i] = dashboards_dto.PanelBucketDTO{
 			Timestamp: bucket.Timestamp,
 			GroupKey:  bucket.GroupKey,
-			Value:     float64(bucket.Count),
+			Value:     value,
 		}
 	}
 	return panel
@@ -699,6 +794,12 @@ func normalizePanels(panels []dashboards_models.Panel) (dashboards_models.Panels
 		}
 		if !panel.Unit.IsValid() {
 			return nil, fmt.Errorf("invalid panel unit %q", panel.Unit)
+		}
+		if err := normalizePanelSettings(&panel); err != nil {
+			return nil, err
+		}
+		if err := validatePanelLogOptions(panel); err != nil {
+			return nil, err
 		}
 		if len(panel.PromQuery) > maxTextBytes {
 			return nil, fmt.Errorf("a panel query can't be longer than %d bytes", maxTextBytes)

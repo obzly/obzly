@@ -49,12 +49,21 @@ func (RetentionPolicy) TableName() string {
 }
 
 // LogSampleRule keeps Rate of the logs of Service (any if empty) at Level
-// (any if empty).
+// (any if empty) with message pattern Pattern (any if empty).
 type LogSampleRule struct {
-	Service string  `json:"service"`
-	Level   string  `json:"level"`
-	Rate    float64 `json:"rate"`
+	Service string `json:"service"`
+	Level   string `json:"level"`
+	// Pattern: a message pattern's pattern_hash; PatternText its template,
+	// only shown in settings.
+	Pattern     string  `json:"pattern,omitempty"`
+	PatternText string  `json:"patternText,omitempty"`
+	Rate        float64 `json:"rate"`
 }
+
+const (
+	maxPatternHashLength = 64
+	maxPatternTextLength = 500
+)
 
 type LogSampleRules []LogSampleRule
 
@@ -109,6 +118,12 @@ func (p *RetentionPolicy) Validate() error {
 		if rule.Rate < 0 || rule.Rate > 1 {
 			return errors.New("a rule's rate must be between 0 and 1")
 		}
+		if len(rule.Pattern) > maxPatternHashLength || strings.Trim(rule.Pattern, "0123456789abcdef") != "" {
+			return errors.New("a rule's pattern must be a pattern hash")
+		}
+		if len(rule.PatternText) > maxPatternTextLength {
+			return errors.New("a rule's pattern text is at most 500 characters")
+		}
 	}
 	return nil
 }
@@ -128,13 +143,24 @@ func (p *Project) EffectiveRetentionDays(policy RetentionPolicy) int {
 }
 
 // RateFor is the share of logs of service at level to keep: the first
-// matching rule's, else 1. level is matched case-insensitively.
-func (r LogSampleRules) RateFor(service, level string) float64 {
+// matching rule's, else 1. level is matched case-insensitively; patternHash
+// (the log's pattern_hash) is only called when a rule has a pattern.
+func (r LogSampleRules) RateFor(service, level string, patternHash func() string) float64 {
+	hash, hashed := "", false
 	for _, rule := range r {
-		if (rule.Service == "" || rule.Service == service) &&
-			(rule.Level == "" || strings.EqualFold(rule.Level, level)) {
-			return rule.Rate
+		if (rule.Service != "" && rule.Service != service) ||
+			(rule.Level != "" && !strings.EqualFold(rule.Level, level)) {
+			continue
 		}
+		if rule.Pattern != "" {
+			if !hashed {
+				hash, hashed = patternHash(), true
+			}
+			if rule.Pattern != hash {
+				continue
+			}
+		}
+		return rule.Rate
 	}
 	return 1
 }

@@ -25,6 +25,7 @@ import {
   type SiteRecommendation,
 } from '../lib/advice';
 import { formatMoney } from '../lib/format';
+import { ProviderMark, ServiceIcon } from './CloudIcon';
 
 interface Props {
   item: SiteRecommendation;
@@ -103,6 +104,10 @@ export const RecommendationDrawer = ({ item, onClose, onChanged }: Props) => {
               label: 'Resource',
               children: (
                 <span className="flex items-center gap-2">
+                  <ServiceIcon
+                    text={item.resourceType || item.resourceKey}
+                    provider={item.provider}
+                  />
                   <span className="font-mono text-xs break-all">{item.resourceKey}</span>
                   <Button
                     size="small"
@@ -120,9 +125,12 @@ export const RecommendationDrawer = ({ item, onClose, onChanged }: Props) => {
             {
               key: 'where',
               label: 'Where',
-              children: [item.connectionName, item.account, item.region]
-                .filter(Boolean)
-                .join(' · '),
+              children: (
+                <span className="flex items-center gap-2">
+                  <ProviderMark provider={item.provider} />
+                  {[item.connectionName, item.account, item.region].filter(Boolean).join(' · ')}
+                </span>
+              ),
             },
             ...(item.current || item.target
               ? [
@@ -139,7 +147,9 @@ export const RecommendationDrawer = ({ item, onClose, onChanged }: Props) => {
               children:
                 item.monthlySavings === null ? (
                   <Tooltip title="Worked out from the resource's own cost, which needs a cost export with resource-level data">
-                    <span className="text-gray-500">n/a until resource-level cost arrives</span>
+                    <span className="text-gray-500 dark:text-gray-400">
+                      n/a until resource-level cost arrives
+                    </span>
                   </Tooltip>
                 ) : (
                   <span>
@@ -172,7 +182,7 @@ export const RecommendationDrawer = ({ item, onClose, onChanged }: Props) => {
 
         {agent.length > 0 && (
           <div
-            className={`rounded-md border p-3 text-sm ${busy ? 'border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950' : 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950'}`}
+            className={`rounded-xl border p-3 text-sm ${busy ? 'border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950' : 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950'}`}
           >
             <div className={`mb-1 font-medium ${tone}`}>
               Measured by the Obzly agent on the instance
@@ -211,7 +221,7 @@ export const RecommendationDrawer = ({ item, onClose, onChanged }: Props) => {
           <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Status: {STATUS_LABEL[item.status]}
             {item.status === 'done' && item.doneBy === 'detected' && (
-              <span className="ml-2 text-xs font-normal text-gray-500">
+              <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
                 detected: the provider no longer recommends it
               </span>
             )}

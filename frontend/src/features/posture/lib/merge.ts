@@ -84,8 +84,21 @@ export const mergeSummary = (outcomes: SiteOutcome<PostureSummary>[]): PostureSu
       }
     }
   }
+  // Each Site's reason, named by its Site when there are several.
+  const reasons = new Map<string, { site: string; reason: string }[]>();
+  for (const outcome of outcomes) {
+    for (const score of outcome.value?.standards ?? []) {
+      if (score.reason) {
+        reasons.set(score.standard, [
+          ...(reasons.get(score.standard) ?? []),
+          { site: outcome.site.siteName || outcome.site.siteId, reason: score.reason },
+        ]);
+      }
+    }
+  }
   merged.standards = [...standards.values()].map(({ trendSums, ...score }) => ({
     ...score,
+    reason: joinReasons(reasons.get(score.standard) ?? []),
     percent: percent(score.passed, score.evaluated),
     // Sites' percents for a day, averaged: their control counts aren't in the trend.
     trend: [...trendSums.entries()]
@@ -184,6 +197,12 @@ export const fillRemediation = (text: string, finding: Finding): string => {
     resourceGroup: finding.evidence.resourceGroup || '<resource group>',
   };
   return text.replace(/\{(name|region|resourceGroup)\}/g, (_, key: string) => values[key]);
+};
+
+const joinReasons = (list: { site: string; reason: string }[]): string | undefined => {
+  if (list.length === 0) return undefined;
+  if (list.length === 1) return list[0].reason;
+  return list.map((item) => `${item.site}: ${item.reason}`).join('; ');
 };
 
 /** "Native", "Obzly baseline" or "Mixed" for a standard's sources. */

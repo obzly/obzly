@@ -4,8 +4,11 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
+	control_plane_services "obzly/internal/features/control_plane/services"
 	users_enums "obzly/internal/features/users/enums"
 	users_models "obzly/internal/features/users/models"
 
@@ -79,4 +82,89 @@ func Test_Call_WithoutBody_GivesHandlersAnEmptyBody(t *testing.T) {
 	var out map[string]any
 	require.NoError(t, exec.siteCall(context.Background(), &users_models.User{ID: uuid.New()},
 		"site-a", http.MethodGet, "/projects", nil, nil, &out))
+}
+
+func Test_SiteCall_WriteOrUnknownEndpoint_IsRefusedBeforeTheHandler(t *testing.T) {
+	called := false
+	engine := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{}`))
+	})
+	user := &users_models.User{ID: uuid.New()}
+	exec := &apiExecutor{engine: engine}
+	projectID := uuid.NewString()
+
+	for _, attempt := range []struct{ method, path string }{
+		{http.MethodPost, "/projects"},
+		{http.MethodDelete, "/projects/" + projectID},
+		{http.MethodPut, "/projects/dashboards/" + projectID + "/" + uuid.NewString()},
+		{http.MethodGet, "/logs/query/execute/" + projectID},
+		{http.MethodGet, "/api-keys"},
+		{http.MethodGet, "/traces/query/get/" + projectID + "/..%2F..%2Fapi-keys"},
+		{http.MethodGet, "/traces/query/get/" + projectID + "/a/b"},
+	} {
+		err := exec.siteCall(context.Background(), user, "", attempt.method, attempt.path, nil, nil, nil)
+		require.ErrorIs(t, err, errCallNotAllowed, attempt.method+" "+attempt.path)
+	}
+	err := exec.centralCall(context.Background(), user, http.MethodPost, "/control-plane/sites", nil, nil)
+	require.ErrorIs(t, err, errCallNotAllowed)
+	assert.False(t, called, "a refused call never reaches a handler")
+
+	require.NoError(t, exec.siteCall(context.Background(), user, "", http.MethodPost,
+		"/logs/query/execute/"+projectID, nil, map[string]any{}, nil))
+	assert.True(t, called)
+}
+
+// Every endpoint MCP tools may call must also pass the control plane's Site
+// proxy, or the tool works on a single install and fails through a control plane.
+func Test_SiteCallAllowlist_EveryEntryPassesTheControlPlaneProxy(t *testing.T) {
+	for method, patterns := range siteCallAllowlist.patterns {
+		for _, pattern := range patterns {
+			segments := make([]string, len(pattern))
+			for i, part := range pattern {
+				segments[i] = part
+				if strings.HasPrefix(part, "{") {
+					segments[i] = uuid.NewString()
+				}
+			}
+			path := "/api/v1/" + strings.Join(segments, "/")
+			assert.True(t, control_plane_services.IsProxyPathAllowed(method, path), method+" "+path)
+		}
+	}
+}
+
+func Test_Call_ContextCancelled_StopsWaitingAndCancelsTheHandler(t *testing.T) {
+	started := make(chan struct{})
+	handlerStopped := make(chan struct{})
+	engine := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		close(handlerStopped)
+	})
+	exec := &apiExecutor{engine: engine}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	err := exec.siteCall(ctx, &users_models.User{ID: uuid.New()}, "", http.MethodPost,
+		"/logs/query/execute/"+uuid.NewString(), nil, map[string]any{}, nil)
+
+	assert.EqualError(t, err, "the call was cancelled")
+	select {
+	case <-handlerStopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler's request context was not cancelled")
+	}
+}
+
+func Test_Call_HandlerPanics_ReturnsAnErrorInsteadOfCrashing(t *testing.T) {
+	engine := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })
+	exec := &apiExecutor{engine: engine}
+
+	err := exec.siteCall(context.Background(), &users_models.User{ID: uuid.New()}, "", http.MethodGet,
+		"/projects", nil, nil, nil)
+
+	assert.EqualError(t, err, "internal error while running the query")
 }

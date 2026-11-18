@@ -20,6 +20,19 @@ const (
 	maxLLMCalls         = 100
 )
 
+// llmAggregateColumns are the aggregates every overview row has, after its keys.
+const llmAggregateColumns = `
+	count(*)::BIGINT,
+	coalesce(sum(input_tokens), 0)::DOUBLE,
+	coalesce(sum(output_tokens), 0)::DOUBLE,
+	coalesce(sum(cached_tokens), 0)::DOUBLE,
+	(count(*) FILTER (WHERE is_error))::BIGINT,
+	coalesce(quantile_cont(duration_ms, 0.5), 0)::DOUBLE,
+	coalesce(quantile_cont(duration_ms, 0.95), 0)::DOUBLE,
+	coalesce(epoch_ms(max(ts)::TIMESTAMP), 0)::BIGINT,
+	count(DISTINCT service)::BIGINT,
+	(count(*) FILTER (WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL))::BIGINT`
+
 // llmGroupColumns are the breakdown dimensions (columns of "llm").
 var llmGroupColumns = map[string]string{
 	"service":   "service",
@@ -33,6 +46,8 @@ type LLMOverviewRequest struct {
 	To            time.Time
 	GroupBy       string
 	BucketSeconds int64
+	// Compare is "" or ComparePrevious.
+	Compare string
 }
 
 type LLMSummaryDTO struct {
@@ -82,6 +97,8 @@ type LLMOverviewResponseDTO struct {
 	Breakdown     []LLMBreakdownRowDTO    `json:"breakdown"`
 	// Newest call in the range, Unix ms (0 when there is none).
 	LatestCallAt int64 `json:"latestCallAt"`
+	// Previous: the summary of the equally long window before the range (compare=previous only).
+	Previous *LLMSummaryDTO `json:"previous,omitempty"`
 }
 
 // LLMCallDTO is one call's metadata; message content is never included.
@@ -129,6 +146,9 @@ func (s *AIUsageService) GetLLMOverview(
 	if span/request.BucketSeconds > maxBuckets {
 		return nil, fmt.Errorf("%w: bucketSeconds gives more than %d buckets", ErrInvalidRequest, maxBuckets)
 	}
+	if err := validateCompare(request.Compare); err != nil {
+		return nil, err
+	}
 
 	prices, err := loadPrices(projectID)
 	if err != nil {
@@ -139,7 +159,17 @@ func (s *AIUsageService) GetLLMOverview(
 	if err != nil {
 		return nil, err
 	}
-	return buildLLMOverview(rows, prices, request), nil
+	response := buildLLMOverview(rows, prices, request)
+	if request.Compare == ComparePrevious {
+		previous := previousWindow(&UsageFilter{From: request.From, To: request.To})
+		rows, err := queryLLM(ctx, projectID, previous.From, previous.To, s.scanBudget(), llmSummarySQL())
+		if err != nil {
+			return nil, err
+		}
+		summary := buildLLMOverview(rows, prices, request).Summary
+		response.Previous = &summary
+	}
+	return response, nil
 }
 
 func (s *AIUsageService) GetLLMCalls(
@@ -195,19 +225,21 @@ func llmOverviewSQL(groupColumn string) string {
 	grouping(bucket)::INTEGER, grouping(grp)::INTEGER, grouping(model)::INTEGER,
 	coalesce(epoch_ms(bucket::TIMESTAMP), 0)::BIGINT,
 	coalesce(grp, ''),
-	coalesce(model, ''),
-	count(*)::BIGINT,
-	coalesce(sum(input_tokens), 0)::DOUBLE,
-	coalesce(sum(output_tokens), 0)::DOUBLE,
-	coalesce(sum(cached_tokens), 0)::DOUBLE,
-	(count(*) FILTER (WHERE is_error))::BIGINT,
-	coalesce(quantile_cont(duration_ms, 0.5), 0)::DOUBLE,
-	coalesce(quantile_cont(duration_ms, 0.95), 0)::DOUBLE,
-	coalesce(epoch_ms(max(ts)::TIMESTAMP), 0)::BIGINT,
-	count(DISTINCT service)::BIGINT,
-	(count(*) FILTER (WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL))::BIGINT
+	coalesce(model, ''),` + llmAggregateColumns + `
 FROM (SELECT *, time_bucket(to_seconds(?::BIGINT), ts::TIMESTAMP) AS bucket, ` + groupColumn + ` AS grp FROM llm) c
 GROUP BY GROUPING SETS ((), (grp), (grp, model), (bucket, model), (model))`
+}
+
+// llmSummarySQL is the total and per-model aggregates only (for cost), in llmOverviewSQL's
+// columns with the bucket and group always rolled up.
+func llmSummarySQL() string {
+	return `SELECT
+	1::INTEGER, 1::INTEGER, grouping(model)::INTEGER,
+	0::BIGINT,
+	'',
+	coalesce(model, ''),` + llmAggregateColumns + `
+FROM llm
+GROUP BY GROUPING SETS ((), (model))`
 }
 
 type llmAggregate struct {

@@ -8,7 +8,7 @@ import {
   SearchOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Drawer, Dropdown, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
+import { Alert, Button, Drawer, Dropdown, Input, Modal, Select, Spin, Tooltip } from 'antd';
 import type { InputRef } from 'antd';
 import dayjs from 'dayjs';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -22,6 +22,7 @@ import {
 import { getHttpStatus } from '../../../shared/api';
 import { formatInTimezone, getUserTimeFormatWithMs } from '../../../shared/time';
 import { levelColor } from '../lib/logLevels';
+import { LevelPillComponent } from './LevelPillComponent';
 
 interface Props {
   projectId: string;
@@ -360,7 +361,7 @@ export const LogContextPanelComponent = ({
         ref={isAnchor ? anchorRef : undefined}
         className={`cursor-pointer border-l-[3px] px-2 py-0.5 font-mono text-xs ${
           isAnchor
-            ? 'sticky top-0 bottom-0 z-10 bg-emerald-50 ring-1 ring-emerald-400 dark:bg-emerald-950'
+            ? 'bg-accent-50 ring-accent-500 dark:bg-accent-950 sticky top-0 bottom-0 z-10 ring-1 ring-inset'
             : isProblem
               ? 'bg-red-50/60 hover:bg-red-50 dark:bg-red-950/30 dark:hover:bg-red-950/50'
               : 'hover:bg-gray-100 dark:hover:bg-gray-700'
@@ -372,8 +373,8 @@ export const LogContextPanelComponent = ({
           <span className="shrink-0 text-gray-500 dark:text-gray-400">
             {formatInTimezone(log.timestamp, timeFormat.format, timezone)}
           </span>
-          <span className="w-12 shrink-0 font-semibold" style={{ color: levelColor(level) }}>
-            {level}
+          <span className="w-14 shrink-0">
+            <LevelPillComponent level={level} />
           </span>
           <span
             className={`min-w-0 flex-1 text-gray-800 dark:text-gray-100 ${wrapped ? 'break-all whitespace-pre-wrap' : 'truncate'}`}
@@ -382,10 +383,10 @@ export const LogContextPanelComponent = ({
           </span>
         </div>
         {expanded && (
-          <div className="mt-1 mb-1 ml-2 grid grid-cols-[minmax(8rem,auto)_1fr] gap-x-3 text-[11px]">
+          <div className="mt-1 mb-1 ml-2 grid grid-cols-[minmax(8rem,auto)_1fr] gap-x-3 rounded-lg bg-gray-50 p-2 text-[11px] dark:bg-gray-900/50">
             {log.traceId && (
               <>
-                <span className="text-gray-500">trace_id</span>
+                <span className="text-gray-500 dark:text-gray-400">trace_id</span>
                 <span className="break-all">
                   {log.traceId}
                   {onOpenTrace && (
@@ -406,7 +407,7 @@ export const LogContextPanelComponent = ({
             )}
             {Object.entries(log.fields ?? {}).map(([key, value]) => (
               <React.Fragment key={key}>
-                <span className="text-gray-500">{key}</span>
+                <span className="text-gray-500 dark:text-gray-400">{key}</span>
                 <span className="break-all">{String(value)}</span>
               </React.Fragment>
             ))}
@@ -427,9 +428,11 @@ export const LogContextPanelComponent = ({
       return (
         <React.Fragment key={log.id}>
           {gap >= GAP_MARKER_MS && (
-            <div className="my-0.5 flex items-center gap-2 px-2 text-[10px] text-gray-400">
+            <div className="my-0.5 flex items-center gap-2 px-2 text-[10px] text-gray-400 dark:text-gray-500">
               <div className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
-              {formatGap(gap)}
+              <span className="rounded-full border border-gray-200 px-1.5 dark:border-gray-700">
+                {formatGap(gap)}
+              </span>
               <div className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
             </div>
           )}
@@ -439,14 +442,28 @@ export const LogContextPanelComponent = ({
     });
   };
 
+  const chipClass =
+    'inline-flex max-w-full items-center gap-1 rounded-lg border border-gray-200 bg-white py-0.5 pl-2 text-xs text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100';
   const header = (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs text-gray-500 dark:text-gray-400">Scope</span>
-      {applied.length === 0 && data?.anchor && <Tag>All project logs</Tag>}
+    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50 p-2.5 dark:border-gray-700 dark:bg-gray-900/50">
+      <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Scope</span>
+      {applied.length === 0 && data?.anchor && (
+        <span className={`${chipClass} pr-2`}>All project logs</span>
+      )}
       {applied.map((s) => (
-        <Tag key={s.field} closable onClose={() => removeScope(s.field)} className="font-mono">
-          {s.field} = {s.value}
-        </Tag>
+        <span key={s.field} className={`${chipClass} pr-1 font-mono`}>
+          <span className="truncate">
+            <span className="text-gray-500 dark:text-gray-400">{s.field}</span> = {s.value}
+          </span>
+          <button
+            type="button"
+            onClick={() => removeScope(s.field)}
+            aria-label={`Remove scope ${s.field}`}
+            className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-[10px] text-gray-400 hover:bg-gray-200 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+          >
+            <CloseOutlined />
+          </button>
+        </span>
       ))}
       <Dropdown
         trigger={['click']}
@@ -468,13 +485,21 @@ export const LogContextPanelComponent = ({
           Field
         </Button>
       </Dropdown>
+      <span className="mx-1 hidden h-5 w-px bg-gray-200 sm:inline-block dark:bg-gray-700" />
       <Select
         size="small"
         value={windowMinutes}
         options={WINDOW_OPTIONS}
         onChange={setWindowMinutes}
+        aria-label="Time window around the log"
       />
-      <Select size="small" value={rows} options={ROW_OPTIONS} onChange={setRows} />
+      <Select
+        size="small"
+        value={rows}
+        options={ROW_OPTIONS}
+        onChange={setRows}
+        aria-label="Rows each side"
+      />
       <Tooltip title={isFindOpen ? 'Turn off Find' : 'Find text in these logs and highlight it'}>
         <Button
           size="small"
@@ -505,7 +530,7 @@ export const LogContextPanelComponent = ({
     <div className="flex h-full flex-col gap-2">
       {header}
       {isFindOpen && (
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 rounded-xl border border-gray-200 px-2 py-1 dark:border-gray-700">
           <Input
             ref={findInputRef}
             size="small"
@@ -584,7 +609,7 @@ export const LogContextPanelComponent = ({
       )}
       <div
         ref={listRef}
-        className="min-h-0 flex-1 overflow-auto rounded border border-gray-200 dark:border-gray-700"
+        className="min-h-0 flex-1 overflow-auto rounded-2xl border border-gray-200 bg-white py-1 dark:border-gray-700 dark:bg-gray-800"
       >
         {isLoading && (
           <div className="flex justify-center py-6">
@@ -604,7 +629,7 @@ export const LogContextPanelComponent = ({
                   Load earlier
                 </Button>
               ) : (
-                <span className="text-[10px] text-gray-400">
+                <span className="text-[10px] text-gray-400 dark:text-gray-500">
                   No earlier logs within ±
                   {windowMinutes >= 60 ? `${windowMinutes / 60}h` : `${windowMinutes}m`}
                 </span>
@@ -622,7 +647,9 @@ export const LogContextPanelComponent = ({
                   Load later
                 </Button>
               ) : (
-                <span className="text-[10px] text-gray-400">No later logs in the window</span>
+                <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                  No later logs in the window
+                </span>
               )}
             </div>
           </>

@@ -150,7 +150,19 @@ func (d *Dispatcher) deliver(ctx context.Context, item *OutboxItem) error {
 	if err != nil {
 		return err
 	}
-	return d.sender.send(ctx, channel.Kind, cfg, item.Payload)
+	tpl, origin, err := effectiveTemplate(channel.Kind, channel.TemplateOverride, channel.TemplateSubject,
+		channel.TemplateBody)
+	if err != nil {
+		d.log.Error("failed to load the message template; sending the built-in one", "kind", channel.Kind, "error", err)
+	}
+	templateErr, sendErr := d.sender.deliver(ctx, channel.Kind, cfg, tpl, item.Payload,
+		newRenderContext(item.Payload, channel.UseEmoji))
+	if templateErr != nil {
+		d.log.Warn("message template failed to render; sent the built-in template instead",
+			"channelId", channel.ID, "kind", channel.Kind, "template", origin, "error", templateErr)
+	}
+	markTemplateResult(channel, origin, templateErr)
+	return sendErr
 }
 
 // record stores one delivery's outcome and feeds the channel's breaker.
@@ -171,7 +183,16 @@ func (d *Dispatcher) record(item *OutboxItem, sendErr error) error {
 		telemetry.AlertNotifications.WithLabelValues("retried").Inc()
 	}
 	d.breaker.observe(item.ChannelID, sendErr == nil, done)
-	return d.repo.updateOutbox(item.ID, updates)
+	if err := d.repo.updateOutbox(item.ID, updates); err != nil {
+		return err
+	}
+	// Counted after the outbox row is settled, so a counter failure can't resend.
+	if sendErr == nil && item.RuleID != nil && item.Status != StatusTest {
+		if err := d.repo.countDelivered(*item.RuleID, done); err != nil {
+			d.log.Error("alert rule activity count failed", "ruleId", *item.RuleID, "error", err)
+		}
+	}
+	return nil
 }
 
 func (d *Dispatcher) config(channel *NotificationChannel) (ChannelConfig, error) {
@@ -183,7 +204,7 @@ func (d *Dispatcher) config(channel *NotificationChannel) (ChannelConfig, error)
 	return cfg, json.Unmarshal([]byte(plain), &cfg)
 }
 
-// pruneLoop deletes old finished notifications on one replica at a time.
+// pruneLoop deletes old finished notifications on one replica per hour.
 func (d *Dispatcher) pruneLoop(ctx context.Context) {
 	ticker := time.NewTicker(pruneEvery)
 	defer ticker.Stop()
@@ -193,14 +214,17 @@ func (d *Dispatcher) pruneLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		if _, err := leaderlock.RunExclusive(ctx, cache.GetCache(), "alert-outbox-prune", 10*time.Minute,
-			d.prune); err != nil {
+		if _, err := leaderlock.RunAtMostEvery(ctx, cache.GetCache(), "alert-outbox-prune", pruneEvery,
+			10*time.Minute, d.prune); err != nil {
 			d.log.Error("notification outbox prune failed", "error", err)
 		}
 	}
 }
 
 func (d *Dispatcher) prune(ctx context.Context) error {
+	if err := d.repo.pruneActivity(ctx, d.now().Add(-keepActivity)); err != nil {
+		return err
+	}
 	before := d.now().Add(-keepOutbox)
 	for ctx.Err() == nil {
 		deleted, err := d.repo.pruneOutbox(ctx, before, pruneBatch)

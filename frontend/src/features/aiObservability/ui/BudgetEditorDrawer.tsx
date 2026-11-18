@@ -1,10 +1,11 @@
-import { Alert, App, Button, Checkbox, Drawer, Input, InputNumber, Select } from 'antd';
+import { Alert, App, Button, Checkbox, Drawer, Input, InputNumber, Segmented, Select } from 'antd';
 import React, { useMemo, useState } from 'react';
 
 import type { AiBudget, AiBudgetRequest, BudgetPeriod } from '../../../entity/aiUsage';
 import type { NotificationChannel } from '../../../entity/alerting';
 import { getAvailableTimezones } from '../../../shared/time';
 import { SCOPE_OPTIONS, emptyBudgetRequest, toBudgetRequest } from '../lib/budgets';
+import { FieldLabel } from './bits';
 
 interface Props {
   budget: AiBudget | null;
@@ -13,12 +14,9 @@ interface Props {
   onSave: (request: AiBudgetRequest) => Promise<void>;
 }
 
-const fieldLabel = (text: string, help?: string) => (
-  <div className="mb-1">
-    <span className="font-medium text-gray-900 dark:text-gray-100">{text}</span>
-    {help && <div className="text-xs text-gray-500 dark:text-gray-300">{help}</div>}
-  </div>
-);
+const fieldLabel = (text: string) => <FieldLabel text={text} />;
+
+const LEGEND = 'mb-1 text-[13px] font-medium text-gray-700 dark:text-gray-200';
 
 const splitThresholds = (
   thresholds: number[],
@@ -120,7 +118,7 @@ export const BudgetEditorDrawer = ({
           onClick={save}
           loading={isSaving}
           disabled={!canSave}
-          className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
         >
           Save budget
         </Button>
@@ -137,7 +135,7 @@ export const BudgetEditorDrawer = ({
             onChange={(e) => set({ name: e.target.value })}
           />
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <div>
             {fieldLabel('Amount (USD)')}
             <InputNumber
@@ -145,19 +143,6 @@ export const BudgetEditorDrawer = ({
               min={0.01}
               value={draft.amountUsd}
               onChange={(value) => set({ amountUsd: value ?? 0 })}
-            />
-          </div>
-          <div>
-            {fieldLabel('Period')}
-            <Select<BudgetPeriod>
-              className="!w-full"
-              value={draft.period}
-              onChange={(period) => set({ period })}
-              options={[
-                { value: 'day', label: 'Day' },
-                { value: 'week', label: 'Week (from Monday)' },
-                { value: 'month', label: 'Month' },
-              ]}
             />
           </div>
           <div>
@@ -171,9 +156,21 @@ export const BudgetEditorDrawer = ({
             />
           </div>
         </div>
+        <div>
+          {fieldLabel('Period')}
+          <Segmented<BudgetPeriod>
+            value={draft.period}
+            onChange={(period) => set({ period })}
+            options={[
+              { value: 'day', label: 'Day' },
+              { value: 'week', label: 'Week (from Monday)' },
+              { value: 'month', label: 'Month' },
+            ]}
+          />
+        </div>
         <fieldset>
-          <legend className="mb-1 font-medium text-gray-900 dark:text-gray-100">Applies to</legend>
-          <div className="flex flex-col gap-2">
+          <legend className={LEGEND}>Applies to</legend>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2">
             {SCOPE_OPTIONS.map((option) => {
               const selected = draft.scope === option.value;
               return (
@@ -182,16 +179,18 @@ export const BudgetEditorDrawer = ({
                   type="button"
                   aria-pressed={selected}
                   onClick={() => set({ scope: option.value })}
-                  className={`flex flex-col rounded-md border px-3 py-2 text-left ${
+                  className={`flex cursor-pointer flex-col gap-0.5 rounded-[10px] border p-2.5 text-left ${
                     selected
-                      ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950'
-                      : 'border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800'
+                      ? 'border-[var(--v2-accent)] bg-[var(--v2-ok-soft)]'
+                      : 'border-gray-200 bg-white hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600'
                   }`}
                 >
-                  <span className="font-semibold text-gray-900 dark:text-gray-100">
+                  <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-50">
                     {option.label}
                   </span>
-                  <span className="text-xs text-gray-500 dark:text-gray-400">{option.hint}</span>
+                  <span className="text-[11.5px] text-gray-500 dark:text-gray-400">
+                    {option.hint}
+                  </span>
                 </button>
               );
             })}
@@ -206,7 +205,7 @@ export const BudgetEditorDrawer = ({
           )}
         </fieldset>
         <fieldset>
-          <legend className="mb-1 font-medium text-gray-900 dark:text-gray-100">Counts</legend>
+          <legend className={LEGEND}>Counts</legend>
           <div className="flex flex-wrap gap-4">
             <Checkbox
               checked={draft.includeClaudeCode}
@@ -259,7 +258,7 @@ export const BudgetEditorDrawer = ({
             options={channels.map((c) => ({ value: c.id, label: `${c.name} (${c.kind})` }))}
           />
         </div>
-        <p className="m-0 text-xs text-gray-500 dark:text-gray-400">
+        <p className="m-0 border-t border-gray-200 pt-3 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
           Each threshold notifies once per period
           {draft.scope === 'each_user'
             ? ' per user'

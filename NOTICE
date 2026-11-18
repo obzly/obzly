@@ -15,3 +15,9 @@ The Infrastructure view's resource icons (frontend/public/icons/infra/) are:
 - Azure public service icons (https://learn.microsoft.com/azure/architecture/icons/),
   provided by Microsoft under its icon terms. Microsoft and Azure are trademarks of
   the Microsoft group of companies.
+
+Web analytics looks visitor IP addresses up in the DB-IP Lite country database
+(https://db-ip.com), bundled in the container image at /app/geoip and licensed
+under the Creative Commons Attribution 4.0 International License
+(https://creativecommons.org/licenses/by/4.0/); unmodified. IP geolocation by
+DB-IP (https://db-ip.com).

@@ -10,6 +10,7 @@ import {
   syntheticsApi,
 } from '../../../entity/synthetics';
 import { useSite } from '../../../shared/site';
+import { Card } from '../../../shared/ui/v2';
 import { IconAction } from './parts';
 
 interface Props {
@@ -96,9 +97,9 @@ export const DestinationsComponent = ({ destinations, onChanged }: Props) => {
   };
 
   return (
-    <div>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <p className="m-0 text-sm text-gray-500 dark:text-gray-400">
+    <Card>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <p className="m-0 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
           A destination is a Site project that stores results. Probes send to it directly with its
           API key.
         </p>
@@ -245,7 +246,7 @@ export const DestinationsComponent = ({ destinations, onChanged }: Props) => {
           </Labelled>
         </div>
       </Drawer>
-    </div>
+    </Card>
   );
 };
 

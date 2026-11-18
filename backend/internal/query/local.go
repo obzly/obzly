@@ -31,6 +31,11 @@ func (e *LocalExecutor) ID() string {
 	return e.id
 }
 
+// ShipsLocalFiles: it reads local files where they are.
+func (e *LocalExecutor) ShipsLocalFiles() bool {
+	return true
+}
+
 // Execute writes the fragment's rows to resultPath, or returns ErrNoFiles
 // when none of its files can be read (ResolveFiles skips a missing one).
 func (e *LocalExecutor) Execute(ctx context.Context, fragment Fragment, resultPath string) error {

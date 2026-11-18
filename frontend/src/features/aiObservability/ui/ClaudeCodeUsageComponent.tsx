@@ -1,5 +1,5 @@
 import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Button, Segmented, Select, Spin, Table, Tabs } from 'antd';
+import { Button, Segmented, Select, Spin, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -14,14 +14,17 @@ import {
   aiUsageApi,
 } from '../../../entity/aiUsage';
 import { getHttpStatus } from '../../../shared/api';
+import { absoluteChange, relativeChange } from '../../../shared/lib/periodChange';
+import { Card, KpiTile } from '../../../shared/ui/v2';
 import { type TimeRange, TimeRangePickerComponent } from '../../query';
 import { formatCount, formatMs, formatPercent, formatTime, formatUsd } from '../lib/format';
+import { bucketLabel, bucketTotals, peakBucket } from '../lib/series';
 import { AiOnboardingPanel } from './AiOnboardingPanel';
 import { EventsTable } from './EventsTable';
 import { SessionDrawer } from './SessionDrawer';
 import { SessionsTable } from './SessionsTable';
-import { StatTile } from './StatTile';
 import { UsageChart, type UsageMetric } from './UsageChart';
+import { FootStats, InfoTip } from './bits';
 
 interface Props {
   projectId: string;
@@ -31,7 +34,11 @@ interface Props {
 const COST_TOOLTIP =
   "Claude Code's API-equivalent estimate. On Pro, Max and Team plans this is not what you're billed.";
 
-const CARD = 'rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800';
+const METRIC_NOUN: Record<UsageMetric, string> = {
+  costUsd: 'est. cost',
+  tokens: 'tokens',
+  requests: 'requests',
+};
 
 type TabKey = 'dashboard' | 'sessions' | 'events';
 
@@ -84,12 +91,14 @@ const errorColumns: ColumnsType<AiUsageErrorRow> = [
   { title: 'Last seen', dataIndex: 'lastSeen', render: formatTime },
 ];
 
-const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
-  <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-    <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-200">{title}</h3>
-    {children}
-  </div>
-);
+const TABS: { value: TabKey; label: string }[] = [
+  { value: 'dashboard', label: 'Dashboard' },
+  { value: 'sessions', label: 'Sessions' },
+  { value: 'events', label: 'Events' },
+];
+
+const formatMetric = (metric: UsageMetric, value: number): string =>
+  metric === 'costUsd' ? formatUsd(value) : formatCount(value);
 
 export const ClaudeCodeUsageComponent = ({
   projectId,
@@ -110,8 +119,12 @@ export const ClaudeCodeUsageComponent = ({
   const [openSession, setOpenSession] = useState<AiUsageSession | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>(readStoredTab);
 
-  const changeTab = (key: string) => {
-    setActiveTab(key as TabKey);
+  // Sessions and Events stay mounted once opened so their search and page survive a switch.
+  const [visited, setVisited] = useState<Set<TabKey>>(() => new Set([activeTab]));
+
+  const changeTab = (key: TabKey) => {
+    setActiveTab(key);
+    setVisited((prev) => new Set(prev).add(key));
     try {
       localStorage.setItem(TAB_STORAGE_KEY, key);
     } catch {
@@ -139,7 +152,7 @@ export const ClaudeCodeUsageComponent = ({
     let cancelled = false;
     setIsLoading(true);
     aiUsageApi
-      .getOverview(projectId, { ...filter, groupBy })
+      .getOverview(projectId, { ...filter, groupBy, compare: 'previous' })
       .then((response) => {
         if (cancelled) return;
         setOverview(response);
@@ -167,15 +180,40 @@ export const ClaudeCodeUsageComponent = ({
     ? summary.inputTokens + summary.cacheReadTokens + summary.cacheCreationTokens
     : 0;
   const totalTokens = summary ? totalInput + summary.outputTokens : 0;
+  // The window just before the range, for change pills.
+  const previous = overview?.previous;
+  const previousInput = previous
+    ? previous.inputTokens + previous.cacheReadTokens + previous.cacheCreationTokens
+    : 0;
   const hasAnyData =
     !!overview && overview.filterOptions.users.length + overview.filterOptions.models.length > 0;
   const toOptions = (values: string[] = []) => values.map((value) => ({ value, label: value }));
 
+  // Sparklines and the chart footer come from the same timeseries as the chart.
+  const trendOf = (key: UsageMetric) =>
+    overview
+      ? bucketTotals(overview.timeseries, (point) => point[key], overview.bucketSeconds)
+      : [];
+  const metricSeries = trendOf(metric);
+  const peak = peakBucket(metricSeries);
+  const metricTotal = metricSeries.reduce((sum, point) => sum + point.value, 0);
+  const cacheHitRate = totalInput && summary ? summary.cacheReadTokens / totalInput : null;
+  const thirdFoot =
+    metric === 'costUsd'
+      ? { label: 'Cache hits', value: cacheHitRate === null ? 'n/a' : formatPercent(cacheHitRate) }
+      : metric === 'tokens'
+        ? {
+            label: 'Output share',
+            value:
+              totalTokens && summary ? formatPercent(summary.outputTokens / totalTokens) : 'n/a',
+          }
+        : { label: 'API errors', value: summary ? formatCount(summary.apiErrors) : 'n/a' };
+
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="mr-auto">
-          <div className="text-xs text-gray-500 dark:text-gray-400">
+    <div className="flex flex-col gap-4">
+      <Card bodyClassName="flex flex-col gap-3" className="!gap-0 !py-3.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="mr-auto min-w-[240px] flex-1 text-xs text-gray-500 dark:text-gray-400">
             Claude Code usage from its OpenTelemetry events
             {overview?.latestEventAt ? (
               <span>
@@ -185,45 +223,59 @@ export const ClaudeCodeUsageComponent = ({
               </span>
             ) : null}
           </div>
+          <Select
+            allowClear
+            showSearch
+            size="small"
+            placeholder="All users"
+            aria-label="All users"
+            className="!w-52"
+            value={user}
+            onChange={setUser}
+            options={toOptions(overview?.filterOptions.users)}
+          />
+          <Select
+            allowClear
+            showSearch
+            size="small"
+            placeholder="All models"
+            aria-label="All models"
+            className="!w-52"
+            value={model}
+            onChange={setModel}
+            options={toOptions(overview?.filterOptions.models)}
+          />
+          <Select
+            allowClear
+            size="small"
+            placeholder="All terminals"
+            aria-label="All terminals"
+            className="!w-36"
+            value={terminal}
+            onChange={setTerminal}
+            options={toOptions(overview?.filterOptions.terminals)}
+          />
+          <TimeRangePickerComponent compact defaultPreset="24h" onChange={setTimeRange} />
+          <Tooltip title="Refresh">
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              aria-label="Refresh"
+              onClick={() => setRefreshToken((token) => token + 1)}
+            />
+          </Tooltip>
         </div>
-        <Select
-          allowClear
-          showSearch
-          size="small"
-          placeholder="All users"
-          className="!w-52"
-          value={user}
-          onChange={setUser}
-          options={toOptions(overview?.filterOptions.users)}
-        />
-        <Select
-          allowClear
-          showSearch
-          size="small"
-          placeholder="All models"
-          className="!w-52"
-          value={model}
-          onChange={setModel}
-          options={toOptions(overview?.filterOptions.models)}
-        />
-        <Select
-          allowClear
-          size="small"
-          placeholder="All terminals"
-          className="!w-36"
-          value={terminal}
-          onChange={setTerminal}
-          options={toOptions(overview?.filterOptions.terminals)}
-        />
-        <TimeRangePickerComponent compact defaultPreset="24h" onChange={setTimeRange} />
-        <Button
-          size="small"
-          icon={<ReloadOutlined />}
-          onClick={() => setRefreshToken((token) => token + 1)}
-        />
-      </div>
+        {overview && summary && hasAnyData && filter && (
+          <Segmented<TabKey>
+            className="self-start"
+            value={activeTab}
+            onChange={changeTab}
+            options={TABS}
+          />
+        )}
+      </Card>
 
-      {error && <div className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</div>}
+      {error && <div className="text-sm text-[var(--v2-red)]">{error}</div>}
 
       {!overview && isLoading && (
         <div className="flex justify-center p-12">
@@ -235,154 +287,178 @@ export const ClaudeCodeUsageComponent = ({
         <AiOnboardingPanel isSiteOutdated={isSiteOutdated} onOpenDataSources={onOpenDataSources} />
       )}
 
-      {overview && summary && hasAnyData && filter && (
-        <Tabs
-          activeKey={activeTab}
-          onChange={changeTab}
-          items={[
-            {
-              key: 'dashboard',
-              label: 'Dashboard',
-              children: (
-                <div className={`space-y-4 ${isLoading ? 'opacity-60' : ''}`}>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-                    <StatTile
-                      label="Est. cost"
-                      value={formatUsd(summary.costUsd)}
-                      tooltip={COST_TOOLTIP}
-                    />
-                    <StatTile
-                      label="Tokens"
-                      value={formatCount(totalTokens)}
-                      hint={`${formatCount(summary.outputTokens)} output`}
-                    />
-                    <StatTile
-                      label="Cache hit rate"
-                      value={totalInput ? formatPercent(summary.cacheReadTokens / totalInput) : '-'}
-                      hint="Input served from prompt cache"
-                    />
-                    <StatTile
-                      label="Requests"
-                      value={formatCount(summary.requests)}
-                      hint={`avg ${formatMs(summary.avgDurationMs)} · TTFT p50 ${formatMs(summary.p50TtftMs)}`}
-                    />
-                    <StatTile
-                      label="Sessions"
-                      value={formatCount(summary.sessions)}
-                      hint={`${formatCount(summary.prompts)} prompts · ${formatCount(summary.toolCalls)} tool calls`}
-                    />
-                    <StatTile
-                      label="Users"
-                      value={formatCount(summary.users)}
-                      hint={summary.apiErrors ? `${summary.apiErrors} API errors` : 'No API errors'}
-                    />
-                  </div>
+      {overview && summary && hasAnyData && filter && activeTab === 'dashboard' && (
+        <div className={`flex flex-col gap-4 ${isLoading ? 'opacity-60' : ''}`}>
+          <section
+            aria-label="Claude Code totals"
+            className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-4"
+          >
+            <KpiTile
+              label="Est. cost"
+              value={formatUsd(summary.costUsd)}
+              icon={<InfoTip label="Est. cost" text={COST_TOOLTIP} />}
+              change={relativeChange(summary.costUsd, previous?.costUsd, 'down')}
+              trend={trendOf('costUsd').map((point) => point.value)}
+            />
+            <KpiTile
+              label="Tokens"
+              value={formatCount(totalTokens)}
+              note={`${formatCount(summary.outputTokens)} output`}
+              change={relativeChange(
+                totalTokens,
+                previous && previousInput + previous.outputTokens,
+                'up',
+              )}
+              trend={trendOf('tokens').map((point) => point.value)}
+              color="var(--v2-blue)"
+            />
+            <KpiTile
+              label="Cache hit rate"
+              value={cacheHitRate === null ? 'n/a' : formatPercent(cacheHitRate)}
+              note="Input served from prompt cache"
+              change={
+                cacheHitRate !== null && previous && previousInput
+                  ? absoluteChange(
+                      cacheHitRate * 100,
+                      (previous.cacheReadTokens / previousInput) * 100,
+                      'up',
+                      (points) => `${points.toFixed(1)} pts`,
+                    )
+                  : undefined
+              }
+            />
+            <KpiTile
+              label="Requests"
+              value={formatCount(summary.requests)}
+              note={`avg ${formatMs(summary.avgDurationMs)} · TTFT p50 ${formatMs(summary.p50TtftMs)}`}
+              change={relativeChange(summary.requests, previous?.requests, 'up')}
+              trend={trendOf('requests').map((point) => point.value)}
+              color="var(--v2-purple)"
+            />
+            <KpiTile
+              label="Sessions"
+              value={formatCount(summary.sessions)}
+              change={relativeChange(summary.sessions, previous?.sessions, 'up')}
+              note={`${formatCount(summary.prompts)} prompts · ${formatCount(summary.toolCalls)} tool calls`}
+            />
+            <KpiTile
+              label="Users"
+              value={formatCount(summary.users)}
+              change={relativeChange(summary.users, previous?.users, 'up')}
+              note={summary.apiErrors ? `${summary.apiErrors} API errors` : 'No API errors'}
+            />
+          </section>
 
-                  <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <h3 className="mr-auto text-sm font-semibold text-gray-700 dark:text-gray-200">
-                        Usage over time
-                      </h3>
-                      <Segmented
-                        size="small"
-                        value={metric}
-                        onChange={(value) => setMetric(value as UsageMetric)}
-                        options={[
-                          { label: 'Est. cost', value: 'costUsd' },
-                          { label: 'Tokens', value: 'tokens' },
-                          { label: 'Requests', value: 'requests' },
-                        ]}
-                      />
-                      <Segmented
-                        size="small"
-                        value={groupBy}
-                        onChange={(value) => setGroupBy(value as 'model' | 'user')}
-                        options={[
-                          { label: 'By model', value: 'model' },
-                          { label: 'By user', value: 'user' },
-                        ]}
-                      />
-                    </div>
-                    <UsageChart
-                      points={overview.timeseries}
-                      metric={metric}
-                      bucketSeconds={overview.bucketSeconds}
-                      from={Date.parse(filter.from)}
-                      to={Date.parse(filter.to)}
-                      height={280}
-                    />
-                  </div>
+          <Card
+            title="Usage over time"
+            subtitle={`Stacked ${METRIC_NOUN[metric]} per ${bucketLabel(overview.bucketSeconds)}`}
+            extra={
+              <>
+                <Segmented
+                  size="small"
+                  value={metric}
+                  onChange={(value) => setMetric(value as UsageMetric)}
+                  options={[
+                    { label: 'Est. cost', value: 'costUsd' },
+                    { label: 'Tokens', value: 'tokens' },
+                    { label: 'Requests', value: 'requests' },
+                  ]}
+                />
+                <Segmented
+                  size="small"
+                  value={groupBy}
+                  onChange={(value) => setGroupBy(value as 'model' | 'user')}
+                  options={[
+                    { label: 'By model', value: 'model' },
+                    { label: 'By user', value: 'user' },
+                  ]}
+                />
+              </>
+            }
+            bodyClassName="flex flex-col gap-3"
+          >
+            <UsageChart
+              points={overview.timeseries}
+              metric={metric}
+              bucketSeconds={overview.bucketSeconds}
+              from={Date.parse(filter.from)}
+              to={Date.parse(filter.to)}
+              height={280}
+            />
+            <FootStats
+              items={[
+                {
+                  label: `Highest ${bucketLabel(overview.bucketSeconds)}`,
+                  value: peak
+                    ? `${formatTime(peak.bucket)} · ${formatMetric(metric, peak.value)}`
+                    : 'n/a',
+                },
+                { label: 'In this range', value: formatMetric(metric, metricTotal) },
+                thirdFoot,
+              ]}
+            />
+          </Card>
 
-                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                    <Section title="Users">
-                      <Table<AiUsageBreakdownRow>
-                        size="small"
-                        rowKey="key"
-                        columns={breakdownColumns('User')}
-                        dataSource={overview.users}
-                        pagination={{ pageSize: 10, hideOnSinglePage: true }}
-                        scroll={{ x: 'max-content' }}
-                      />
-                    </Section>
-                    <Section title="Models">
-                      <Table<AiUsageBreakdownRow>
-                        size="small"
-                        rowKey="key"
-                        columns={breakdownColumns('Model')}
-                        dataSource={overview.models}
-                        pagination={{ pageSize: 10, hideOnSinglePage: true }}
-                        scroll={{ x: 'max-content' }}
-                      />
-                    </Section>
-                    <Section title="Tools">
-                      <Table<AiUsageToolRow>
-                        size="small"
-                        rowKey="tool"
-                        columns={toolColumns}
-                        dataSource={overview.tools}
-                        pagination={{ pageSize: 10, hideOnSinglePage: true }}
-                        scroll={{ x: 'max-content' }}
-                      />
-                    </Section>
-                    <Section title="API errors">
-                      <Table<AiUsageErrorRow>
-                        size="small"
-                        rowKey={(row) => `${row.statusCode}|${row.model}|${row.error}`}
-                        columns={errorColumns}
-                        dataSource={overview.errors}
-                        pagination={{ pageSize: 10, hideOnSinglePage: true }}
-                        scroll={{ x: 'max-content' }}
-                      />
-                    </Section>
-                  </div>
-                </div>
-              ),
-            },
-            {
-              key: 'sessions',
-              label: 'Sessions',
-              children: (
-                <div className={CARD}>
-                  <SessionsTable
-                    projectId={projectId}
-                    filter={filter}
-                    refreshToken={refreshToken}
-                    onOpenSession={setOpenSession}
-                  />
-                </div>
-              ),
-            },
-            {
-              key: 'events',
-              label: 'Events',
-              children: (
-                <div className={CARD}>
-                  <EventsTable projectId={projectId} filter={filter} refreshToken={refreshToken} />
-                </div>
-              ),
-            },
-          ]}
-        />
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <Card title="Users">
+              <Table<AiUsageBreakdownRow>
+                size="small"
+                rowKey="key"
+                columns={breakdownColumns('User')}
+                dataSource={overview.users}
+                pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                scroll={{ x: 'max-content' }}
+              />
+            </Card>
+            <Card title="Models">
+              <Table<AiUsageBreakdownRow>
+                size="small"
+                rowKey="key"
+                columns={breakdownColumns('Model')}
+                dataSource={overview.models}
+                pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                scroll={{ x: 'max-content' }}
+              />
+            </Card>
+            <Card title="Tools">
+              <Table<AiUsageToolRow>
+                size="small"
+                rowKey="tool"
+                columns={toolColumns}
+                dataSource={overview.tools}
+                pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                scroll={{ x: 'max-content' }}
+              />
+            </Card>
+            <Card title="API errors">
+              <Table<AiUsageErrorRow>
+                size="small"
+                rowKey={(row) => `${row.statusCode}|${row.model}|${row.error}`}
+                columns={errorColumns}
+                dataSource={overview.errors}
+                pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                scroll={{ x: 'max-content' }}
+              />
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {overview && summary && hasAnyData && filter && visited.has('sessions') && (
+        <Card className={activeTab === 'sessions' ? '' : '!hidden'}>
+          <SessionsTable
+            projectId={projectId}
+            filter={filter}
+            refreshToken={refreshToken}
+            onOpenSession={setOpenSession}
+          />
+        </Card>
+      )}
+
+      {overview && summary && hasAnyData && filter && visited.has('events') && (
+        <Card className={activeTab === 'events' ? '' : '!hidden'}>
+          <EventsTable projectId={projectId} filter={filter} refreshToken={refreshToken} />
+        </Card>
       )}
 
       <SessionDrawer

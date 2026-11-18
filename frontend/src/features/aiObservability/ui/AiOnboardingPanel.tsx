@@ -1,6 +1,8 @@
 import { Alert, Button, Typography } from 'antd';
 import type { JSX, ReactNode } from 'react';
 
+import { Card } from '../../../shared/ui/v2';
+
 interface Props {
   /** The Site answered 404 for the AI usage API: it runs an Obzly build older than this page. */
   isSiteOutdated: boolean;
@@ -21,19 +23,19 @@ const ENV_SNIPPET = [
 ].join('\n');
 
 const Step = ({ n, title, children }: { n: number; title: string; children: ReactNode }) => (
-  <li className="flex gap-3">
-    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-xs font-semibold text-white">
+  <li className="flex gap-3 border-t border-gray-200 pt-4 dark:border-gray-700">
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--v2-ok-soft)] text-[13px] font-semibold text-[var(--v2-accent)]">
       {n}
     </span>
     <div className="min-w-0 flex-1">
-      <div className="text-sm font-medium text-gray-800 dark:text-gray-100">{title}</div>
-      <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">{children}</div>
+      <div className="text-sm font-semibold text-gray-900 dark:text-gray-50">{title}</div>
+      <div className="mt-1 text-[13px] text-gray-600 dark:text-gray-300">{children}</div>
     </div>
   </li>
 );
 
 export const AiOnboardingPanel = ({ isSiteOutdated, onOpenDataSources }: Props): JSX.Element => (
-  <div className="mx-auto mt-6 max-w-3xl space-y-4">
+  <div className="flex max-w-4xl flex-col gap-4">
     {isSiteOutdated && (
       <Alert
         type="warning"
@@ -43,11 +45,8 @@ export const AiOnboardingPanel = ({ isSiteOutdated, onOpenDataSources }: Props):
       />
     )}
 
-    <div className="rounded-lg border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-      <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-        Start collecting AI usage
-      </h3>
-      <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+    <Card title="Start collecting AI usage">
+      <p className="m-0 text-sm text-gray-600 dark:text-gray-300">
         {isSiteOutdated
           ? 'Once the Site is upgraded, onboard your agents to see usage here.'
           : 'No Claude Code telemetry in this project for the selected time range. If agents are already set up, try a wider range; otherwise onboard them below.'}{' '}
@@ -56,7 +55,7 @@ export const AiOnboardingPanel = ({ isSiteOutdated, onOpenDataSources }: Props):
         model.
       </p>
 
-      <ol className="mt-5 space-y-5">
+      <ol className="mt-4 mb-0 flex list-none flex-col gap-4 p-0">
         <Step n={1} title="Get the settings for this project">
           Open <b>Data sources</b>, pick <b>Claude Code</b> under AI Tools, and enter the Site URL
           and an API key for this project. It generates a ready-to-use env file and a
@@ -73,7 +72,7 @@ export const AiOnboardingPanel = ({ isSiteOutdated, onOpenDataSources }: Props):
           <code>claude</code> session.
           <Typography.Paragraph
             copyable={{ text: ENV_SNIPPET }}
-            className="!mt-2 !mb-0 overflow-x-auto rounded-md bg-gray-50 p-3 font-mono !text-xs whitespace-pre text-gray-800 dark:bg-gray-900 dark:text-gray-200"
+            className="!mt-2 !mb-0 overflow-x-auto rounded-lg bg-[var(--v2-panel2)] p-3 font-mono !text-xs whitespace-pre text-gray-800 dark:text-gray-200"
           >
             {ENV_SNIPPET}
           </Typography.Paragraph>
@@ -91,10 +90,10 @@ export const AiOnboardingPanel = ({ isSiteOutdated, onOpenDataSources }: Props):
         </Step>
       </ol>
 
-      <p className="mt-5 text-xs text-gray-500 dark:text-gray-400">
+      <p className="m-0 mt-4 border-t border-gray-200 pt-3 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         Cost is Claude Code&apos;s API-equivalent estimate; on Pro, Max and Team plans it is not
         what you&apos;re billed. Prompt text is not collected unless you enable it in the wizard.
       </p>
-    </div>
+    </Card>
   </div>
 );

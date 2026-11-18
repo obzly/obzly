@@ -51,14 +51,16 @@ func Test_ClaimRule_SecondClaimOfTheSameEvaluation_Fails(t *testing.T) {
 func Test_SendSlack_LabelsFromTelemetry_CantMentionOrLink(t *testing.T) {
 	rec := newReceiver(t)
 	s := loopbackSender(t)
-	err := s.send(context.Background(), ChannelSlack, ChannelConfig{URL: rec.server.URL}, Notification{
-		Status: StatusFiring, RuleName: "Errors <!here>", Summary: "a & b",
-		Labels: Labels{"pattern": "<!channel> <https://evil.example.com|reset your password>"},
-	})
+	templateErr, err := s.deliver(context.Background(), ChannelSlack, ChannelConfig{URL: rec.server.URL},
+		DefaultTemplate(ChannelSlack), Notification{
+			Status: StatusFiring, RuleName: "Errors <!here>", Summary: "a & b",
+			Labels: Labels{"pattern": "<!channel> <https://evil.example.com|reset your password>"},
+		}, renderContext{})
+	require.NoError(t, templateErr)
 	require.NoError(t, err)
 	payloads := rec.payloads()
 	require.Len(t, payloads, 1)
-	text, _ := payloads[0]["text"].(string)
+	text := slackText(t, payloads[0])
 	require.NotContains(t, text, "<")
 	require.NotContains(t, text, ">")
 	require.Contains(t, text, "&lt;!channel&gt;")
@@ -157,4 +159,14 @@ func Test_Prune_OldFinishedNotifications_AreDeletedRecentOnesKept(t *testing.T) 
 	require.ElementsMatch(t, []uuid.UUID{recentSent, pending}, left)
 	require.NotContains(t, left, oldSent)
 	require.NotContains(t, left, oldFailed)
+}
+
+// slackText is the text of a Slack payload's attachment.
+func slackText(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	attachments, _ := payload["attachments"].([]any)
+	require.Len(t, attachments, 1)
+	attachment, _ := attachments[0].(map[string]any)
+	text, _ := attachment["text"].(string)
+	return text
 }

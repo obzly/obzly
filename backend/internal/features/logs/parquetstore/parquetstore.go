@@ -54,6 +54,7 @@ type options struct {
 	stream      string
 	tail        segments.TailSource
 	memoryLimit string
+	threads     int
 	partitions  *partcache.Cache
 }
 
@@ -69,6 +70,13 @@ func WithPartitionCache(cache *partcache.Cache) Option {
 func WithQuerierMemoryLimit(limit string) Option {
 	return func(o *options) {
 		o.memoryLimit = limit
+	}
+}
+
+// WithQuerierThreads caps the querier's DuckDB threads (logs_querier.WithThreads).
+func WithQuerierThreads(threads int) Option {
+	return func(o *options) {
+		o.threads = threads
 	}
 }
 
@@ -121,6 +129,9 @@ func New(dataDir string, opts ...Option) (*LogParquetStore, error) {
 	querierOpts := []logs_querier.QuerierOption{
 		logs_querier.WithStream(cfg.stream),
 		logs_querier.WithQueryDir(filepath.Join(dataDir, "query", cfg.stream)),
+	}
+	if cfg.threads > 0 {
+		querierOpts = append(querierOpts, logs_querier.WithThreads(cfg.threads))
 	}
 	if cfg.memoryLimit != "" {
 		querierOpts = append(querierOpts, logs_querier.WithMemoryLimit(cfg.memoryLimit))
@@ -194,6 +205,30 @@ func (s *LogParquetStore) ExecuteSQLQuery(
 	return s.querier.ExecuteSQLQuery(projectID, request)
 }
 
+func (s *LogParquetStore) ExecuteQueryForProjectContext(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *logs_core.LogQueryRequestDTO,
+) (*logs_core.LogQueryResponseDTO, error) {
+	return s.querier.ExecuteQueryContext(ctx, projectID, request)
+}
+
+func (s *LogParquetStore) ExecuteSQLQueryContext(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *logs_core.ExecuteSQLQueryRequestDTO,
+) (*logs_core.SQLQueryResponseDTO, error) {
+	return s.querier.ExecuteSQLQueryContext(ctx, projectID, request)
+}
+
+func (s *LogParquetStore) ExecutePatternsContext(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *logs_core.PatternsRequestDTO,
+) (*logs_core.PatternsResponseDTO, error) {
+	return s.querier.ExecutePatternsContext(ctx, projectID, request)
+}
+
 func (s *LogParquetStore) ExecuteScopedSQL(
 	projectID uuid.UUID,
 	request *logs_core.ScopedSQLRequestDTO,
@@ -239,6 +274,14 @@ func (s *LogParquetStore) ExecutePatternChanges(
 	request *logs_core.PatternChangesRequestDTO,
 ) (*logs_core.PatternChangesResponseDTO, error) {
 	return s.querier.ExecutePatternChanges(ctx, projectID, request)
+}
+
+func (s *LogParquetStore) ExecutePatternSamples(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *logs_core.PatternSamplesRequestDTO,
+) (map[string]logs_core.PatternSampleDTO, error) {
+	return s.querier.ExecutePatternSamples(ctx, projectID, request)
 }
 
 func (s *LogParquetStore) ExecuteDeploys(
@@ -427,11 +470,12 @@ func (s *LogParquetStore) TestConnection() error {
 
 func toStatsDTO(stats segments.StreamStats) *logs_core.LogsStatsDTO {
 	return &logs_core.LogsStatsDTO{
-		TotalLogs:     stats.RowCount,
-		TotalSizeMB:   float64(stats.SizeBytes) / (1024 * 1024),
-		RawSizeMB:     float64(stats.RawSizeBytes) / (1024 * 1024),
-		OldestLogTime: stats.OldestTime,
-		NewestLogTime: stats.NewestTime,
+		TotalLogs:           stats.RowCount,
+		TotalSizeMB:         float64(stats.SizeBytes) / (1024 * 1024),
+		RawSizeMB:           float64(stats.RawSizeBytes) / (1024 * 1024),
+		ObjectStorageSizeMB: float64(stats.UploadedSizeBytes) / (1024 * 1024),
+		OldestLogTime:       stats.OldestTime,
+		NewestLogTime:       stats.NewestTime,
 	}
 }
 

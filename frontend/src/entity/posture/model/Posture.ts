@@ -25,6 +25,8 @@ export interface StandardScore {
   evaluated: number;
   percent: number;
   sources: PostureSource[];
+  /** Why the sources are what they are, e.g. "Security Hub in every scanned region". */
+  reason?: string;
   trend?: ScorePoint[];
 }
 

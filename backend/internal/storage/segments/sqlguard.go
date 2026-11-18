@@ -5,8 +5,8 @@
 //     A quote-aware scanner splits on top-level ';'; one trailing ';' is
 //     trimmed.
 //  2. Must be a SELECT.
-//  3. A keyword blocklist (PRAGMA, SET, ATTACH, COPY, ...) as defense in
-//     depth.
+//  3. A keyword blocklist (PRAGMA, SET, ATTACH, COPY, ...) and a function
+//     blocklist (settings, secrets, files, query()) as defense in depth.
 //  4. The caller runs it with enable_external_access=false (blocks file
 //     reads, ATTACH, COPY TO), then lock_configuration=true so no SET can
 //     raise memory_limit or the spill cap.
@@ -42,13 +42,21 @@ var blockedKeywordPattern = regexp.MustCompile(
 	`(?i)\b(` + strings.Join(blockedKeywords, "|") + `)\b`,
 )
 
+// blockedFunctionPattern matches calls of functions that read server state
+// (settings, secrets, temp files) or files instead of the logs table, quoted
+// or not. query() and query_table() would run a string as SQL, past both scans.
+var blockedFunctionPattern = regexp.MustCompile(`(?i)(?:^|[^\w"])"?(duckdb_\w+|pragma_\w+|current_setting|` +
+	`which_secret|getenv|read_\w+|glob|parquet_\w+|sniff_csv|query|query_table)"?\s*\(`)
+
 var errNotSelect = errors.New("query must be a single SELECT statement")
 
 // scannedStatement is one ';'-separated statement, plus a copy with every
-// quoted string and identifier blanked out for the keyword scan.
+// quoted string and identifier blanked out for the keyword scan, and one
+// with only '...' strings blanked for the function scan.
 type scannedStatement struct {
 	text     string
 	redacted string
+	code     string
 }
 
 // ValidateSingleStatementSelect checks sqlText is exactly one SELECT with no
@@ -83,6 +91,9 @@ func ValidateSingleStatementSelect(sqlText string) (string, error) {
 	// trip the blocklist.
 	if match := blockedKeywordPattern.FindString(nonEmpty[0].redacted); match != "" {
 		return "", fmt.Errorf("query contains a disallowed keyword %q", match)
+	}
+	if match := blockedFunctionPattern.FindStringSubmatch(nonEmpty[0].code); match != nil {
+		return "", fmt.Errorf("query calls a disallowed function %q", match[1])
 	}
 
 	return statement, nil
@@ -121,7 +132,7 @@ func ParsesAsSingleSelect(db *sql.DB, statement string) error {
 // parameters), E'...' escape strings and an unterminated quote.
 func scanStatements(sqlText string) ([]scannedStatement, error) {
 	var statements []scannedStatement
-	var text, redacted strings.Builder
+	var text, redacted, code strings.Builder
 
 	runes := []rune(sqlText)
 	var quote rune
@@ -134,13 +145,20 @@ func scanStatements(sqlText string) ([]scannedStatement, error) {
 			switch {
 			case c != quote:
 				redacted.WriteRune(' ')
+				if quote == '"' {
+					code.WriteRune(c)
+				} else {
+					code.WriteRune(' ')
+				}
 			case i+1 < len(runes) && runes[i+1] == quote:
 				text.WriteRune(runes[i+1])
 				redacted.WriteString("  ")
+				code.WriteString("  ")
 				i++
 			default:
 				quote = 0
 				redacted.WriteRune(c)
+				code.WriteRune(c)
 			}
 			continue
 		}
@@ -156,20 +174,22 @@ func scanStatements(sqlText string) ([]scannedStatement, error) {
 			c == '/' && i+1 < len(runes) && runes[i+1] == '*':
 			return nil, errors.New("comments (-- or /* */) are not allowed in this query")
 		case c == ';':
-			statements = append(statements, scannedStatement{text.String(), redacted.String()})
+			statements = append(statements, scannedStatement{text.String(), redacted.String(), code.String()})
 			text.Reset()
 			redacted.Reset()
+			code.Reset()
 			continue
 		}
 		text.WriteRune(c)
 		redacted.WriteRune(c)
+		code.WriteRune(c)
 	}
 
 	if quote != 0 {
 		return nil, errors.New("query has an unterminated quote")
 	}
 	if strings.TrimSpace(text.String()) != "" || len(statements) == 0 {
-		statements = append(statements, scannedStatement{text.String(), redacted.String()})
+		statements = append(statements, scannedStatement{text.String(), redacted.String(), code.String()})
 	}
 
 	return statements, nil

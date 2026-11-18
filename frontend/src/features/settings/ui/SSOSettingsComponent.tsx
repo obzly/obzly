@@ -1,5 +1,5 @@
 import { DeleteOutlined, EditOutlined, LoadingOutlined, TeamOutlined } from '@ant-design/icons';
-import { App, Button, Input, Modal, Select, Spin, Switch, Table, Tag, Tooltip } from 'antd';
+import { App, Button, Input, Modal, Select, Spin, Switch, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 
@@ -11,8 +11,11 @@ import type { SSOConnector } from '../../../entity/users/model/SSOConnector';
 import { SSOProviderType } from '../../../entity/users/model/SSOProviderType';
 import type { UpdateSSOConnectorRequest } from '../../../entity/users/model/UpdateSSOConnectorRequest';
 import { MFAConfirmModal } from '../../../shared/ui/MFAConfirmModal';
+import { Card } from '../../../shared/ui/v2';
 import { SSOGroupMappingsModal } from './SSOGroupMappingsModal';
 import { SSOSiteGroupMappingsModal } from './SSOSiteGroupMappingsModal';
+
+const PILL = 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium';
 
 const PROVIDER_LABELS: Record<SSOProviderType, string> = {
   [SSOProviderType.COGNITO]: 'AWS Cognito',
@@ -237,13 +240,16 @@ export const SSOSettingsComponent = () => {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      render: (name: string) => <span className="font-medium">{name}</span>,
     },
     {
       title: 'Provider',
       dataIndex: 'providerType',
       key: 'providerType',
       render: (providerType: SSOProviderType) => (
-        <Tag color="blue">{PROVIDER_LABELS[providerType] || providerType}</Tag>
+        <span className={`${PILL} bg-blue-500/15 text-[var(--v2-blue)]`}>
+          {PROVIDER_LABELS[providerType] || providerType}
+        </span>
       ),
     },
     {
@@ -251,13 +257,22 @@ export const SSOSettingsComponent = () => {
       dataIndex: 'issuerUrl',
       key: 'issuerUrl',
       ellipsis: true,
+      render: (url: string) => <span className="font-mono text-xs">{url}</span>,
     },
     {
       title: 'Enabled',
       dataIndex: 'enabled',
       key: 'enabled',
       render: (enabled: boolean) => (
-        <Tag color={enabled ? 'green' : 'default'}>{enabled ? 'Yes' : 'No'}</Tag>
+        <span
+          className={
+            enabled
+              ? `${PILL} bg-[var(--v2-ok-soft)] text-[var(--v2-accent)]`
+              : `${PILL} bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300`
+          }
+        >
+          {enabled ? 'Yes' : 'No'}
+        </span>
       ),
     },
     {
@@ -304,23 +319,19 @@ export const SSOSettingsComponent = () => {
   const redirectUri = getOAuthRedirectUri();
 
   return (
-    <div className="max-w-4xl">
-      <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Single Sign-On</h2>
+    <Card
+      title="Single Sign-On"
+      subtitle="Configure OIDC-based single sign-on (AWS Cognito, Google Workspace, Microsoft Entra ID, or any other standard OpenID Connect provider). Once created and enabled, a matching button appears on the sign-in page."
+      extra={
         <Button
           type="primary"
           onClick={handleCreate}
-          className="border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700"
+          className="border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700"
         >
           Add Connector
         </Button>
-      </div>
-      <div className="mb-4 text-sm text-gray-500 dark:text-gray-300">
-        Configure OIDC-based single sign-on (AWS Cognito, Google Workspace, Microsoft Entra ID, or
-        any other standard OpenID Connect provider). Once created and enabled, a matching button
-        appears on the sign-in page.
-      </div>
-
+      }
+    >
       {isLoading ? (
         <div className="flex items-center py-4">
           <Spin indicator={<LoadingOutlined spin />} />
@@ -347,8 +358,7 @@ export const SSOSettingsComponent = () => {
         width={600}
         okText={editingConnector ? 'Update' : 'Create'}
         okButtonProps={{
-          className:
-            'border-emerald-600 bg-emerald-600 hover:border-emerald-700 hover:bg-emerald-700',
+          className: 'border-accent-600 bg-accent-600 hover:border-accent-700 hover:bg-accent-700',
         }}
       >
         <div className="mt-4 space-y-3">
@@ -457,11 +467,10 @@ export const SSOSettingsComponent = () => {
           </div>
 
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2">
               <Switch
                 checked={formValues.requireVerifiedEmail}
                 onChange={(checked) => updateFormValue('requireVerifiedEmail', checked)}
-                style={{ backgroundColor: formValues.requireVerifiedEmail ? '#059669' : undefined }}
               />
               <span className="text-sm">Require verified email (recommended)</span>
             </div>
@@ -476,11 +485,10 @@ export const SSOSettingsComponent = () => {
           </div>
 
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2">
               <Switch
                 checked={formValues.trustIdpMfa}
                 onChange={(checked) => updateFormValue('trustIdpMfa', checked)}
-                style={{ backgroundColor: formValues.trustIdpMfa ? '#059669' : undefined }}
               />
               <span className="text-sm">Provider enforces MFA</span>
             </div>
@@ -495,16 +503,15 @@ export const SSOSettingsComponent = () => {
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2">
             <Switch
               checked={formValues.enabled}
               onChange={(checked) => updateFormValue('enabled', checked)}
-              style={{ backgroundColor: formValues.enabled ? '#059669' : undefined }}
             />
             <span className="text-sm">Enabled</span>
           </div>
 
-          <div className="rounded border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
+          <div className="rounded-xl bg-gray-50 px-3.5 py-3 text-xs text-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
             Redirect URI to register with your identity provider:
             <div className="mt-1 font-mono break-all">{redirectUri}</div>
           </div>
@@ -556,6 +563,6 @@ export const SSOSettingsComponent = () => {
           This action cannot be undone.
         </p>
       </Modal>
-    </div>
+    </Card>
   );
 };

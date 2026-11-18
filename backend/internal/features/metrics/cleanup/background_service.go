@@ -28,7 +28,7 @@ type MetricCleanupBackgroundService struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// leaderLockClient lets one replica at a time run each pass.
+	// leaderLockClient lets one replica run each pass once per interval.
 	leaderLockClient valkey.Client
 }
 
@@ -100,13 +100,13 @@ func (s *MetricCleanupBackgroundService) retentionWorker() {
 			return
 
 		case <-ticker.C:
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "metrics-retention-cleanup",
-				retentionCleanupInterval,
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "metrics-retention-cleanup",
+				retentionCleanupInterval, retentionCleanupInterval,
 				func(ctx context.Context) error { return s.enforceAllProjectsRetention() })
 			if err != nil {
 				s.logger.Error("Error during retention cleanup", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping retention cleanup pass - another replica holds the lock")
+				s.logger.Debug("Skipping retention cleanup pass - ran or is running on another replica this interval")
 			}
 		}
 	}
@@ -152,13 +152,13 @@ func (s *MetricCleanupBackgroundService) compactionWorker() {
 				}
 				continue
 			}
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "metrics-compaction",
-				compactionInterval,
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "metrics-compaction",
+				compactionInterval, compactionInterval,
 				func(ctx context.Context) error { return s.compactAllProjects(nil) })
 			if err != nil {
 				s.logger.Error("Error during compaction", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping compaction pass - another replica holds the lock")
+				s.logger.Debug("Skipping compaction pass - ran or is running on another replica this interval")
 			}
 			// Every replica uploads its own segments, after compaction so
 			// object storage mostly gets full-sized ones.
@@ -232,13 +232,13 @@ func (s *MetricCleanupBackgroundService) reconciliationWorker() {
 			return
 
 		case <-ticker.C:
-			ran, err := leaderlock.RunExclusive(s.ctx, s.leaderLockClient, "metrics-reconciliation",
-				reconciliationInterval,
+			ran, err := leaderlock.RunAtMostEvery(s.ctx, s.leaderLockClient, "metrics-reconciliation",
+				reconciliationInterval, reconciliationInterval,
 				func(ctx context.Context) error { return s.reconcileSegments() })
 			if err != nil {
 				s.logger.Error("Error during segment reconciliation", slog.String("error", err.Error()))
 			} else if !ran {
-				s.logger.Debug("Skipping reconciliation pass - another replica holds the lock")
+				s.logger.Debug("Skipping reconciliation pass - ran or is running on another replica this interval")
 			}
 		}
 	}

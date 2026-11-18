@@ -72,6 +72,11 @@ var parityQueries = []string{
 	`sum by (job) (min by (job, zone) (min_over_time(mem_bytes[5m])) > bool 100)`,
 	`max by (job) (quantile_over_time(0.95, (max by (job, zone) (max_over_time(mem_bytes[2m])))[30m:2m]))`,
 	`min by (job, zone) (last_over_time(mem_bytes[7m]))`,
+	// Operands storage evaluates at once: at a 30 s step the 30m side
+	// declines (too many steps per sample) while the other is pushed, so
+	// each answer must land on its own operand.
+	`sum by (job) (rate(http_requests_total[30m])) / sum by (job) (rate(http_requests_total[5m]))`,
+	`sum by (job) (increase(http_requests_total[5m])) - sum by (job) (increase(http_requests_total[30m]))`,
 }
 
 // pushdownTolerance: push-down sums in another order than the engine

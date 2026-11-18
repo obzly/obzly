@@ -10,6 +10,8 @@ const CTX = { baseUrl: 'https://obzly.example.com', apiKey: 'obz_test_key' };
 
 // Field values that change the output beyond each field's own options.
 const EXTRA_VARIANTS: Record<string, Record<string, string>[]> = {
+  nginx: [{ sourceName: 'edge "proxy": eu' }],
+  envoy: [{ sourceName: 'envoy-edge' }],
   kubernetes: [
     {
       clusterName: 'contoso-prod',

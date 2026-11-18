@@ -145,7 +145,7 @@ export const OnboardingTooltipComponent: React.FC<Props> = ({ targetRef, show })
           pointerEvents: 'none',
         }}
       >
-        <div className="text-center text-sm font-medium text-emerald-600">Click here</div>
+        <div className="text-accent-600 text-center text-sm font-medium">Click here</div>
         <div
           className="absolute -top-2 left-1/2 h-0 w-0 -translate-x-1/2 border-8 border-transparent border-b-white"
           style={{

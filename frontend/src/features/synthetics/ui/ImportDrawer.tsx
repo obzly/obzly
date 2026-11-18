@@ -233,7 +233,7 @@ export const ImportDrawer = ({ open, onClose, onApplied }: Props) => {
 };
 
 const Count = ({ label, value, danger }: { label: string; value: number; danger?: boolean }) => (
-  <div className="rounded border border-gray-200 py-2 dark:border-gray-700">
+  <div className="rounded-xl border border-gray-200 py-2 dark:border-gray-700">
     <div className={`text-xl font-semibold ${danger && value > 0 ? 'text-red-500' : ''}`}>
       {value}
     </div>

@@ -11,7 +11,7 @@
 # it's "run this stage natively" either way. BUILDPLATFORM is a global
 # arg buildx predefines automatically, no explicit ARG declaration
 # needed.
-FROM --platform=$BUILDPLATFORM node:26.13.0-alpine AS frontend-build
+FROM --platform=$BUILDPLATFORM node:26.13.1-alpine AS frontend-build
 
 WORKDIR /frontend
 
@@ -44,7 +44,7 @@ RUN npm run build
 # built against a newer glibc fails there with "GLIBC_2.38 not found"
 # (seen after the Phase 6 rebuild). Bookworm's cross toolchains target the
 # same glibc.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-bookworm AS backend-build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-bookworm AS backend-build
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -62,7 +62,7 @@ RUN set -e; \
 
 # goose runs in the image (migrations at startup), so it's built for the
 # target; pure Go. A cross-compiled `go install` lands in bin/<os>_<arch>.
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go install github.com/pressly/goose/v3/cmd/goose@v3.29.0 && \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go install github.com/pressly/goose/v3/cmd/goose@v3.30.1 && \
     if [ -f "/go/bin/${TARGETOS}_${TARGETARCH}/goose" ]; then mv "/go/bin/${TARGETOS}_${TARGETARCH}/goose" /go/bin/goose; fi
 # swag only runs here.
 RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6
@@ -97,6 +97,50 @@ RUN set -e; \
     CC=$cc CXX=$cxx CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -o /app/main ./cmd
 
+
+# ========= GEOIP DATABASE =========
+# DB-IP Lite country (https://db-ip.com, CC BY 4.0): Web analytics looks
+# visitor IPs up in it when it summarises an hour (the UI shows the
+# attribution the licence asks for, see NOTICE). DB-IP publishes it monthly
+# at download.db-ip.com/free/; early in a month the current file may not be
+# out yet, so the previous month's is the fallback. Any GeoIP2-Country
+# compatible .mmdb can replace it at runtime (WEB_ANALYTICS_GEOIP_DB), and
+# a missing file only turns the Countries panel off.
+# GEOIP_MONTH (YYYY-MM) pins the month; changing it also refreshes this
+# layer, which a cached builder would otherwise keep from its first build.
+# GEOIP_OPTIONAL=true builds without the database when neither month can
+# be downloaded (e.g. offline builds) instead of failing.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS geoip
+
+ARG GEOIP_MONTH=
+ARG GEOIP_OPTIONAL=false
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    mkdir -p /geoip; \
+    current="${GEOIP_MONTH:-$(date -u +%Y-%m)}"; \
+    previous="$(date -u -d "${current}-01 -1 month" +%Y-%m)"; \
+    for month in "$current" "$previous"; do \
+      url="https://download.db-ip.com/free/dbip-country-lite-${month}.mmdb.gz"; \
+      if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/dbip.mmdb.gz "$url" && \
+         gunzip -c /tmp/dbip.mmdb.gz > /geoip/dbip-country-lite.mmdb && \
+         [ -s /geoip/dbip-country-lite.mmdb ]; then \
+        echo "dbip-country-lite-${month}" > /geoip/VERSION; \
+        break; \
+      fi; \
+      rm -f /geoip/dbip-country-lite.mmdb; \
+      echo "DB-IP Lite ${month} not available, trying the previous month" >&2; \
+    done; \
+    rm -f /tmp/dbip.mmdb.gz; \
+    if [ ! -s /geoip/dbip-country-lite.mmdb ]; then \
+      if [ "$GEOIP_OPTIONAL" = "true" ]; then \
+        echo "Building without a GeoIP database: Web analytics shows no countries" >&2; \
+      else \
+        echo "Could not download DB-IP Lite for ${current} or ${previous}" >&2; exit 1; \
+      fi; \
+    fi
 
 # ========= RUNTIME =========
 # Postgres, OpenSearch and Valkey used to be installed and orchestrated
@@ -158,6 +202,10 @@ COPY backend/migrations ./migrations
 
 # Copy UI files
 COPY --from=backend-build /app/ui/build ./ui/build
+
+# DB-IP Lite country database (CC BY 4.0) for Web analytics, at
+# WEB_ANALYTICS_GEOIP_DB's default path.
+COPY --from=geoip /geoip ./geoip
 
 # Non-secret defaults only (no DSN or passwords): those come from the
 # deployment, so a missing one fails at startup.

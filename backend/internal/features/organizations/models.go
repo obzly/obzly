@@ -43,6 +43,8 @@ type Membership struct {
 	Suspended  bool    `json:"suspended"            gorm:"column:suspended"`
 	Email      string  `json:"email"                gorm:"->;column:email"`
 	Name       string  `json:"name"                 gorm:"->;column:name"`
+	// Teams: names of the organization's teams the member is in.
+	Teams []string `json:"teams" gorm:"-"`
 }
 
 func (Membership) TableName() string { return "organization_memberships" }

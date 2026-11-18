@@ -1,11 +1,12 @@
 import { LoadingOutlined } from '@ant-design/icons';
-import { Drawer, Spin, Tag, Timeline } from 'antd';
+import { Drawer, Spin, Timeline } from 'antd';
 import dayjs from 'dayjs';
 import React, { useEffect, useState } from 'react';
 
 import { type AiUsageSession, type AiUsageSessionEvent, aiUsageApi } from '../../../entity/aiUsage';
 import { colorFor, describeEvent } from '../lib/describeEvent';
 import { formatCount, formatUsd } from '../lib/format';
+import { Chip } from './bits';
 
 interface Props {
   projectId: string;
@@ -53,24 +54,26 @@ export const SessionDrawer = ({ projectId, session, onClose }: Props): React.JSX
       title={session ? `Session ${session.sessionId.slice(0, 8)}` : ''}
     >
       {session && (
-        <div className="mb-4 space-y-1 text-sm text-gray-600 dark:text-gray-300">
-          <div>{session.user}</div>
-          <div>
+        <div className="mb-4 flex flex-col gap-1.5 border-b border-gray-200 pb-4 text-[13px] text-gray-600 dark:border-gray-700 dark:text-gray-300">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <strong className="font-semibold text-gray-900 dark:text-gray-50">
+              {session.user}
+            </strong>
             {session.models.map((model) => (
-              <Tag key={model}>{model}</Tag>
+              <Chip key={model}>{model}</Chip>
             ))}
           </div>
           <div>
             {formatUsd(session.costUsd)} est. · {formatCount(session.tokens)} tokens ·{' '}
             {session.requests} requests · {session.toolCalls} tool calls
           </div>
-          <div className="font-mono text-xs text-gray-400 dark:text-gray-500">
+          <div className="font-mono text-[11.5px] text-gray-500 dark:text-gray-400">
             {session.sessionId}
           </div>
         </div>
       )}
       {isLoading && <Spin indicator={<LoadingOutlined spin />} />}
-      {error && <div className="text-sm text-red-600 dark:text-red-400">{error}</div>}
+      {error && <div className="text-sm text-[var(--v2-red)]">{error}</div>}
       {!isLoading && !error && (
         <Timeline
           items={visible.map((e) => {
@@ -79,7 +82,7 @@ export const SessionDrawer = ({ projectId, session, onClose }: Props): React.JSX
               color: colorFor(event, fields),
               children: (
                 <div className="text-sm">
-                  <span className="mr-2 font-mono text-xs text-gray-400 dark:text-gray-500">
+                  <span className="mr-2 font-mono text-xs text-gray-500 dark:text-gray-400">
                     {dayjs(e.timestamp).format('HH:mm:ss')}
                   </span>
                   <span className="text-gray-700 dark:text-gray-200">

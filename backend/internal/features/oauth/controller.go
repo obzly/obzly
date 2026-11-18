@@ -52,7 +52,7 @@ func (c *OAuthController) ProtectedResourceMetadata(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"resource":                 base + "/mcp",
 		"authorization_servers":    []string{base},
-		"scopes_supported":         []string{access_tokens.ScopeMCPRead},
+		"scopes_supported":         []string{access_tokens.ScopeMCPRead, access_tokens.ScopeMCPWrite},
 		"bearer_methods_supported": []string{"header"},
 		"resource_name":            "Obzly",
 	})
@@ -68,11 +68,14 @@ func (c *OAuthController) AuthorizationServerMetadata(ctx *gin.Context) {
 	corsHeaders(ctx)
 	base := publicurl.BaseURL(ctx.Request)
 	ctx.JSON(http.StatusOK, gin.H{
-		"issuer":                                         base,
-		"authorization_endpoint":                         base + "/oauth/authorize",
-		"token_endpoint":                                 base + "/oauth/token",
-		"registration_endpoint":                          base + "/oauth/register",
-		"scopes_supported":                               []string{access_tokens.ScopeMCPRead},
+		"issuer":                 base,
+		"authorization_endpoint": base + "/oauth/authorize",
+		"token_endpoint":         base + "/oauth/token",
+		"registration_endpoint":  base + "/oauth/register",
+		"scopes_supported": []string{
+			access_tokens.ScopeMCPRead,
+			access_tokens.ScopeMCPWrite,
+		},
 		"response_types_supported":                       []string{"code"},
 		"response_modes_supported":                       []string{"query"},
 		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
@@ -161,6 +164,11 @@ func (c *OAuthController) Register(ctx *gin.Context) {
 // @Failure 400 {object} map[string]any
 // @Router /oauth/authorize/validate [post]
 func (c *OAuthController) ValidateAuthorize(ctx *gin.Context) {
+	user, ok := users_middleware.GetUserFromContext(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated", "fatal": true})
+		return
+	}
 	var request AuthorizeRequest
 	if err := ctx.ShouldBindJSON(&request); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid authorization request", "fatal": true})
@@ -177,12 +185,16 @@ func (c *OAuthController) ValidateAuthorize(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, body)
 		return
 	}
+	info.WriteNeedsMFA = info.WriteRequested && !user.MFAEnabled && !users_middleware.SessionSatisfiesMFA(ctx)
 	ctx.JSON(http.StatusOK, info)
 }
 
-type decisionRequest struct {
+// DecisionRequest: AllowWrite is the consent page's write toggle; it grants
+// mcp:write only when the client requested it.
+type DecisionRequest struct {
 	AuthorizeRequest
-	Approve bool `json:"approve"`
+	Approve    bool `json:"approve"`
+	AllowWrite bool `json:"allowWrite"`
 }
 
 // Decide
@@ -190,7 +202,9 @@ type decisionRequest struct {
 // @Tags oauth
 // @Accept json
 // @Produce json
+// @Description allowWrite grants mcp:write only when the client requested it and the session passed MFA; otherwise the grant is read-only.
 // @Security BearerAuth
+// @Param request body DecisionRequest true "Authorization request parameters, decision and write toggle"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]any
 // @Router /oauth/authorize/decision [post]
@@ -200,7 +214,7 @@ func (c *OAuthController) Decide(ctx *gin.Context) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
-	var request decisionRequest
+	var request DecisionRequest
 	if err := ctx.ShouldBindJSON(&request); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid authorization request", "fatal": true})
 		return
@@ -208,7 +222,7 @@ func (c *OAuthController) Decide(ctx *gin.Context) {
 
 	base := publicurl.BaseURL(ctx.Request)
 	redirectTo, authErr := c.service.Decide(ctx.Request.Context(), user, &request.AuthorizeRequest,
-		request.Approve, base, base+"/mcp", users_middleware.SessionSatisfiesMFA(ctx))
+		request.Approve, request.AllowWrite, base, base+"/mcp", users_middleware.SessionSatisfiesMFA(ctx))
 	if authErr != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": authErr.Description, "fatal": true})
 		return
