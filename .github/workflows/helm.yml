@@ -1,13 +1,16 @@
 name: Helm chart
 
 # ci-release.yml ignores deploy/**, so the chart has its own check.
+# Not on pushes to main: a merged PR already passed this check on a branch
+# up to date with main.
 on:
-  push:
-    branches: ["main"]
-    paths: ["deploy/helm/**", ".github/workflows/helm.yml"]
   pull_request:
     paths: ["deploy/helm/**", ".github/workflows/helm.yml"]
   workflow_dispatch:
+
+concurrency:
+  group: helm-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
