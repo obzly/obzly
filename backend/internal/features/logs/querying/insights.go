@@ -510,13 +510,14 @@ func (s *LogQueryService) volume(
 		Noisy: []logs_core.NoisyPatternDTO{},
 	}
 	// One window per day: the biggest services' days, and every line's.
-	windows := make([]logs_core.CountWindowDTO, days)
-	sums := make([]string, days)
+	// Sized by the constant cap, not by days: days comes from the request.
+	windows := make([]logs_core.CountWindowDTO, 0, volumeMaxDays)
+	sums := make([]string, 0, volumeMaxDays)
 	for i := range days {
 		at := start.Add(time.Duration(i) * day)
 		response.Days = append(response.Days, at)
-		windows[i] = logs_core.CountWindowDTO{From: at, To: minTime(at.Add(day-time.Nanosecond), now)}
-		sums[i] = "w" + strconv.Itoa(i)
+		windows = append(windows, logs_core.CountWindowDTO{From: at, To: minTime(at.Add(day-time.Nanosecond), now)})
+		sums = append(sums, "w"+strconv.Itoa(i))
 	}
 	perService, err := c.count(&logs_core.GroupWindowsRequestDTO{
 		GroupField: "service_name", Windows: windows,
