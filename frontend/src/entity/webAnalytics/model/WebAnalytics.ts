@@ -105,7 +105,15 @@ export interface WebAnalyticsReport {
     lastBuiltAt: string | null;
     missing: number;
   };
-  live: { from: string; to: string; rows: number; durationMs: number; cached: boolean };
+  live: {
+    from: string;
+    to: string;
+    rows: number;
+    durationMs: number;
+    cached: boolean;
+    /** Part of the live range didn't fit the read's time budget and is left out. */
+    partial?: boolean;
+  };
   sources: WebAnalyticsSource[];
   selected: string[];
   hosts: { host: string; requests: number }[];

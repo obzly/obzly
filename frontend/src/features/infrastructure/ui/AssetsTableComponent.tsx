@@ -1,8 +1,16 @@
-import { Input, Segmented, Select, Table, Tag, Tooltip } from 'antd';
+import { LoadingOutlined } from '@ant-design/icons';
+import { Alert, Input, Segmented, Select, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType, SorterResult } from 'antd/es/table/interface';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { AssetHealth, AssetKind, SiteAsset } from '../../../entity/inventory';
+import {
+  type AssetHealth,
+  type AssetKind,
+  type AssetQuery,
+  type SiteAsset,
+  type SiteRef,
+  inventoryApi,
+} from '../../../entity/inventory';
 import { Card } from '../../../shared/ui/v2';
 import {
   type AssetNode,
@@ -14,22 +22,33 @@ import {
   buildTree,
   since,
 } from '../lib/assets';
+import { type SiteCursor, type SortOrder, compareAssets, loadMergedPage } from '../lib/paging';
 import type { SiteResult } from '../lib/useInventory';
 import { HealthDot, KindIcon, KindLabel, LifecycleTag, PercentBar } from './parts';
 
 type SortKey = 'health' | 'kind' | 'name' | 'cpu' | 'memory' | 'restarts' | 'age' | 'lastSeen';
-type SortOrder = 'ascend' | 'descend';
 type HealthFilter = 'all' | AssetHealth;
 type Layout = 'flat' | 'tree';
 
 interface Props {
-  assets: SiteAsset[];
   sites: SiteResult[];
+  /** Cluster names across the Sites, for the cluster filter. */
+  clusters: string[];
+  /** Every asset across the Sites (empty inventory vs no match). */
+  inventoryTotal: number;
   /** Several Sites: show and filter by Site. */
   multiSite: boolean;
   kinds: Set<AssetKind>;
   onKindsChange: (kinds: Set<AssetKind>) => void;
   onOpen: (asset: SiteAsset) => void;
+  /** Bumped to read the assets again. */
+  refresh: number;
+}
+
+/** A list the tree shows only the first of, said as "1,000 of 1,412 under checkout-api". */
+interface Capped {
+  key: string;
+  text: string;
 }
 
 const SORT_STORAGE_KEY = 'infrastructure_sort';
@@ -45,6 +64,10 @@ const SORT_KEYS: SortKey[] = [
   'lastSeen',
 ];
 const KIND_ORDER = Object.fromEntries(KIND_FILTERS.map((kind, index) => [kind.value, index]));
+const PAGE_SIZES = [50, 100, 200, 500];
+// The tree reads at most this many matches, roots or children per Site and level.
+const TREE_LIMIT = 1000;
+const SEARCH_DELAY_MS = 300;
 
 const readStored = <T,>(key: string, valid: (value: T) => boolean, fallback: T): T => {
   try {
@@ -91,13 +114,19 @@ const SORTERS: Record<SortKey, (a: SiteAsset, b: SiteAsset) => number> = {
   lastSeen: (a, b) => b.lastSeen.localeCompare(a.lastSeen) || byName(a, b),
 };
 
+const toNode = (asset: SiteAsset): AssetNode => ({ ...asset, uid: assetUid(asset) });
+
+// Server-side paging, sorting and filtering in the flat layout; the tree reads its roots and opens
+// branches on demand, or reads the matches with their parents when filtered.
 export const AssetsTableComponent = ({
-  assets,
   sites,
+  clusters,
+  inventoryTotal,
   multiSite,
   kinds,
   onKindsChange,
   onOpen,
+  refresh,
 }: Props) => {
   const [sort, setSort] = useState(() =>
     readStored<{ key: SortKey; order: SortOrder }>(
@@ -110,45 +139,233 @@ export const AssetsTableComponent = ({
     readStored<Layout>(LAYOUT_STORAGE_KEY, (value) => value === 'flat' || value === 'tree', 'flat'),
   );
   const [health, setHealth] = useState<HealthFilter>('all');
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [site, setSite] = useState<string>('');
   const [cluster, setCluster] = useState<string>('');
-
-  const clusters = useMemo(
-    () => [...new Set(assets.filter((a) => a.kind === 'cluster').map((a) => a.cluster))].sort(),
-    [assets],
+  const [pageSize, setPageSize] = useState(100);
+  // The page belongs to its filters and sort: new ones start at page 1.
+  const [paging, setPaging] = useState({ key: '', page: 1 });
+  const [flat, setFlat] = useState<{ rows: AssetNode[]; total: number }>({ rows: [], total: 0 });
+  const [treeRoots, setTreeRoots] = useState<AssetNode[]>([]);
+  // Children read per branch, with the refresh they were read at.
+  const [children, setChildren] = useState<Map<string, { nodes: AssetNode[]; at: number }>>(
+    new Map(),
   );
+  const [expanded, setExpanded] = useState<Map<string, AssetNode>>(new Map());
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [capped, setCapped] = useState<Capped[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  // What the flat layout has read of each Site, for the filters and sort it was read with.
+  const cursors = useRef({ key: '', map: new Map<string, SiteCursor>() });
+  const treeQuery = useRef('');
+  // The last view read: the 60 s refresh reads it again without the loading overlay.
+  const shown = useRef('');
 
-  const matches = useMemo(() => {
-    const text = search.trim().toLowerCase();
-    return (asset: SiteAsset) =>
-      (health === 'all' || asset.health === health) &&
-      (kinds.size === 0 || kinds.has(asset.kind)) &&
-      (!site || asset.siteId === site) &&
-      (!cluster || asset.cluster === cluster) &&
-      (!text ||
-        asset.name.toLowerCase().includes(text) ||
-        asset.node.toLowerCase().includes(text) ||
-        asset.projectName.toLowerCase().includes(text) ||
-        Object.values(asset.attributes).some((value) => value.toLowerCase().includes(text)));
-  }, [health, kinds, site, cluster, search]);
+  const targets = useMemo<SiteRef[]>(
+    () =>
+      sites
+        .filter((s) => !s.error && (!site || s.siteId === site))
+        .map((s) => ({ siteId: s.siteId, siteName: s.siteName })),
+    [sites, site],
+  );
+  const filters = useMemo<AssetQuery>(
+    () => ({
+      kind: [...kinds],
+      health: health === 'all' ? undefined : [health],
+      cluster: cluster || undefined,
+      q: search || undefined,
+    }),
+    [kinds, health, cluster, search],
+  );
+  const filtered = kinds.size > 0 || health !== 'all' || search !== '';
+  const queryKey = JSON.stringify([filters, targets.map((t) => t.siteId)]);
+  const pageKey = JSON.stringify([queryKey, sort]);
+  const page = paging.key === pageKey ? paging.page : 1;
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput.trim()), SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // Flat: one page across the Sites.
+  useEffect(() => {
+    if (layout !== 'flat') return;
+    const controller = new AbortController();
+    const cursorKey = `${pageKey}|${refresh}`;
+    if (cursors.current.key !== cursorKey) cursors.current = { key: cursorKey, map: new Map() };
+    const map = cursors.current.map;
+    let done = false;
+    const view = JSON.stringify([layout, pageKey, page, pageSize]);
+    if (shown.current !== view) setLoading(true);
+    shown.current = view;
+    const query: AssetQuery = {
+      ...filters,
+      sort: sort.key,
+      order: sort.order === 'descend' ? 'desc' : 'asc',
+    };
+    void loadMergedPage(
+      targets,
+      map,
+      (target, offset, limit) =>
+        inventoryApi.assets(target.siteId, { ...query, offset, limit }, controller.signal),
+      compareAssets(sort.key, sort.order),
+      (page - 1) * pageSize,
+      pageSize,
+    ).then((result) => {
+      done = true;
+      if (controller.signal.aborted) return;
+      setFlat({ rows: result.rows.map(toNode), total: result.total });
+      setErrors(result.errors.map((e) => `${e.site.siteName || 'This Site'}: ${e.error}`));
+      setCapped([]);
+      setLoading(false);
+    });
+    return () => {
+      controller.abort();
+      // A cancelled read may have left a Site's cursor failed: start over.
+      if (!done && cursors.current.map === map) cursors.current = { key: '', map: new Map() };
+    };
+  }, [layout, pageKey, page, pageSize, refresh]);
+
+  // Tree: the roots, or the matches with their parents.
+  useEffect(() => {
+    if (layout !== 'tree') return;
+    const controller = new AbortController();
+    const view = JSON.stringify([layout, queryKey]);
+    if (shown.current !== view) {
+      setLoading(true);
+      setChildren(new Map());
+    }
+    shown.current = view;
+    // New filters close the branches; a refresh keeps them open and reads them again.
+    if (!filtered && treeQuery.current !== queryKey) setExpanded(new Map());
+    treeQuery.current = queryKey;
+    const query: AssetQuery = filtered
+      ? { ...filters, ancestors: true, limit: TREE_LIMIT }
+      : { cluster: cluster || undefined, roots: true, childCounts: true, limit: TREE_LIMIT };
+    void Promise.all(
+      targets.map((target) =>
+        inventoryApi
+          .assets(target.siteId, query, controller.signal)
+          .then((list) => ({ target, list, error: undefined }))
+          .catch((reason) => ({ target, list: undefined, error: (reason as Error).message })),
+      ),
+    ).then((results) => {
+      if (controller.signal.aborted) return;
+      const nodes: SiteAsset[] = [];
+      const cappedNow: Capped[] = [];
+      for (const { target, list } of results) {
+        if (!list) continue;
+        for (const asset of [...list.assets, ...(list.ancestors ?? [])]) {
+          nodes.push({ ...asset, ...target });
+        }
+        if (list.total > list.assets.length) {
+          cappedNow.push({
+            key: target.siteId,
+            text: `${list.assets.length.toLocaleString()} of ${list.total.toLocaleString()} ${filtered ? 'matches' : 'top-level assets'}${multiSite ? ` on ${target.siteName}` : ''}`,
+          });
+        }
+      }
+      const roots = filtered ? buildTree(nodes) : nodes.map(toNode);
+      setTreeRoots(roots);
+      if (filtered) {
+        // Matches sit inside their branches: open every branch so they show.
+        const open = new Map<string, AssetNode>();
+        const walk = (list: AssetNode[]) =>
+          list.forEach((node) => {
+            if (node.children) {
+              open.set(node.uid, node);
+              walk(node.children);
+            }
+          });
+        walk(roots);
+        setExpanded(open);
+      }
+      setCapped(cappedNow);
+      setErrors(
+        results.flatMap((r) =>
+          r.error ? [`${r.target.siteName || 'This Site'}: ${r.error}`] : [],
+        ),
+      );
+      setLoading(false);
+    });
+    return () => controller.abort();
+  }, [layout, queryKey, refresh]);
+
+  // Unfiltered tree: read the children of open branches not read since the last refresh.
+  useEffect(() => {
+    if (layout !== 'tree' || filtered) return;
+    const missing = [...expanded.values()].filter(
+      (node) => children.get(node.uid)?.at !== refresh && !pending.has(node.uid),
+    );
+    if (missing.length === 0) return;
+    setPending((current) => new Set([...current, ...missing.map((node) => node.uid)]));
+    for (const node of missing) {
+      const target = { siteId: node.siteId, siteName: node.siteName };
+      inventoryApi
+        .assets(node.siteId, {
+          projectId: node.projectId,
+          parent: node.key,
+          cluster: cluster || undefined,
+          childCounts: true,
+          limit: TREE_LIMIT,
+        })
+        .then((list) => {
+          setChildren((current) =>
+            new Map(current).set(node.uid, {
+              nodes: list.assets.map((asset) => toNode({ ...asset, ...target })),
+              at: refresh,
+            }),
+          );
+          if (list.total > list.assets.length) {
+            setCapped((current) => [
+              ...current.filter((c) => c.key !== node.uid),
+              {
+                key: node.uid,
+                text: `${list.assets.length.toLocaleString()} of ${list.total.toLocaleString()} under ${node.name}`,
+              },
+            ]);
+          }
+        })
+        .catch((reason) => {
+          setErrors((current) => [...current, `${node.name}: ${(reason as Error).message}`]);
+          // Not tried again before the next refresh.
+          setChildren((current) => new Map(current).set(node.uid, { nodes: [], at: refresh }));
+        })
+        .finally(() =>
+          setPending((current) => {
+            const next = new Set(current);
+            next.delete(node.uid);
+            return next;
+          }),
+        );
+    }
+  }, [layout, filtered, expanded, children, refresh, pending]);
 
   const rows = useMemo<AssetNode[]>(() => {
-    if (layout === 'flat') {
-      return assets.filter(matches).map((asset) => ({ ...asset, uid: assetUid(asset) }));
-    }
-    // A tree keeps a branch when it or anything under it matches.
-    const prune = (nodes: AssetNode[]): AssetNode[] =>
-      nodes.flatMap((node) => {
-        const children = node.children ? prune(node.children) : [];
-        if (!matches(node) && children.length === 0) return [];
-        return [{ ...node, children: children.length > 0 ? children : undefined }];
-      });
-    return prune(buildTree(assets));
-  }, [assets, layout, matches]);
+    if (layout === 'flat') return flat.rows;
+    if (filtered) return treeRoots;
+    // A branch with children not read yet gets an empty list, so it shows as expandable.
+    const grow = (node: AssetNode): AssetNode => {
+      const loaded = children.get(node.uid)?.nodes;
+      return {
+        ...node,
+        children: loaded
+          ? loaded.length > 0
+            ? loaded.map(grow)
+            : undefined
+          : node.childCount
+            ? []
+            : undefined,
+      };
+    };
+    return treeRoots.map(grow);
+  }, [layout, filtered, flat.rows, treeRoots, children]);
 
+  // The flat layout sorts on the Sites; the tree sorts what it has read.
   const sortable = (key: SortKey) => ({
-    sorter: SORTERS[key],
+    sorter: layout === 'flat' ? true : SORTERS[key],
     sortOrder: sort.key === key ? sort.order : null,
     sortDirections: ['ascend', 'descend', 'ascend'] as SortOrder[],
   });
@@ -183,7 +400,12 @@ export const AssetsTableComponent = ({
       ...sortable('name'),
       render: (_, asset) => (
         <span className="inline-flex max-w-[270px] items-center gap-1.5 align-middle">
-          {layout === 'tree' && <KindIcon asset={asset} size={16} />}
+          {layout === 'tree' &&
+            (pending.has(asset.uid) ? (
+              <LoadingOutlined spin className="text-gray-400" />
+            ) : (
+              <KindIcon asset={asset} size={16} />
+            ))}
           <Tooltip title={asset.name} placement="top" mouseEnterDelay={0.4}>
             <span className="truncate font-mono text-[13px] font-medium">{asset.name}</span>
           </Tooltip>
@@ -306,7 +528,9 @@ export const AssetsTableComponent = ({
           allowClear
           placeholder="Search name, label or IP"
           className="max-w-xs"
-          onChange={(event) => setSearch(event.target.value)}
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.target.value)}
+          onSearch={(value) => setSearch(value.trim())}
         />
         <Segmented<HealthFilter>
           value={health}
@@ -331,6 +555,7 @@ export const AssetsTableComponent = ({
           value={layout}
           onChange={(value) => {
             setLayout(value);
+            setExpanded(new Map());
             store(LAYOUT_STORAGE_KEY, value);
           }}
           options={[
@@ -381,21 +606,70 @@ export const AssetsTableComponent = ({
           />
         )}
       </div>
+      {errors.length > 0 && (
+        <Alert
+          className="mb-3"
+          type="error"
+          showIcon
+          title={`Couldn't read ${errors.join('; ')}`}
+        />
+      )}
+      {layout === 'tree' && capped.length > 0 && (
+        <Alert
+          className="mb-3"
+          type="info"
+          showIcon
+          title={`Showing ${capped.map((c) => c.text).join(', ')}. Narrow the search or filters, or use the flat layout to page through all of them.`}
+        />
+      )}
       <Table<AssetNode>
         rowKey="uid"
         size="middle"
         dataSource={rows}
         columns={columns}
-        pagination={layout === 'flat' ? { defaultPageSize: 100, showSizeChanger: true } : false}
+        loading={loading && { indicator: <LoadingOutlined spin /> }}
+        pagination={
+          layout === 'flat'
+            ? {
+                current: page,
+                pageSize,
+                total: flat.total,
+                showSizeChanger: true,
+                pageSizeOptions: PAGE_SIZES,
+                showTotal: (total, [from, to]) =>
+                  `Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}`,
+              }
+            : false
+        }
         scroll={{ x: 1640 }}
         showSorterTooltip={false}
         expandable={
           layout === 'tree'
-            ? { indentSize: 18, expandIconColumnIndex: 2 }
+            ? {
+                indentSize: 18,
+                expandIconColumnIndex: 2,
+                expandedRowKeys: [...expanded.keys()],
+                onExpand: (open, node) =>
+                  setExpanded((current) => {
+                    const next = new Map(current);
+                    if (open) next.set(node.uid, node);
+                    else next.delete(node.uid);
+                    return next;
+                  }),
+              }
             : { childrenColumnName: '_none' }
         }
         onRow={(asset) => ({ onClick: () => onOpen(asset), className: 'cursor-pointer' })}
-        onChange={(_, __, sorter) => {
+        onChange={(pagination, __, sorter, extra) => {
+          if (extra.action === 'paginate') {
+            if (pagination.pageSize && pagination.pageSize !== pageSize) {
+              setPageSize(pagination.pageSize);
+              setPaging({ key: pageKey, page: 1 });
+            } else {
+              setPaging({ key: pageKey, page: pagination.current ?? 1 });
+            }
+            return;
+          }
           const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<AssetNode>;
           const next = {
             key: (current.columnKey as SortKey) ?? 'health',
@@ -405,7 +679,11 @@ export const AssetsTableComponent = ({
           store(SORT_STORAGE_KEY, next);
         }}
         locale={{
-          emptyText: assets.length === 0 ? 'Nothing in the inventory yet' : 'No assets match',
+          emptyText: loading
+            ? ' '
+            : inventoryTotal === 0
+              ? 'Nothing in the inventory yet'
+              : 'No assets match',
         }}
       />
     </Card>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -26,8 +27,14 @@ const (
 	// backfill doesn't hold the worker.
 	hoursPerPass   = 12
 	passTimeBudget = 3 * time.Minute
-	// hourScanTimeout bounds one hour's statements.
+	// hourScanTimeout bounds one slice's statements.
 	hourScanTimeout = 2 * time.Minute
+	// rowsPerSlice: access lines one slice of an hour is sized for, from
+	// the busiest hour built lately (a slice past the caps is split anyway).
+	rowsPerSlice = 1_000_000
+	// maxHourFailures: hours that may fail in one project's pass before the
+	// rest wait for the next pass.
+	maxHourFailures = 2
 	// keepHourly: hourly rows kept once their day is built (the 24 h and
 	// 7 d views read hours; longer ranges read days).
 	keepHourly = 9 * 24 * time.Hour
@@ -108,18 +115,30 @@ func (b *Builder) BuildProject(ctx context.Context, settings *Settings) error {
 	if err != nil {
 		return err
 	}
+	slice := sliceFor(built)
 	started := time.Now()
-	done := 0
+	done, failed := 0, 0
 	for hour := newest; !hour.Before(horizon); hour = hour.Add(-time.Hour) {
-		if done >= hoursPerPass || time.Since(started) > passTimeBudget || ctx.Err() != nil {
+		if done >= hoursPerPass || failed >= maxHourFailures || time.Since(started) > passTimeBudget ||
+			ctx.Err() != nil {
 			break
 		}
 		if _, ok := built[hour]; ok {
 			continue
 		}
 		done++
-		if err := b.BuildHour(ctx, settings, hour); err != nil {
-			return err
+		hourStarted := time.Now()
+		if err := b.buildHour(ctx, settings, hour, slice); err != nil {
+			// Logged here, with what the scan got through; older hours still build.
+			failed++
+			attrs := []any{"projectId", settings.ProjectID, "hour", hour.Format(time.RFC3339),
+				"slice", slice.String(), "durationMs", time.Since(hourStarted).Milliseconds(), "error", err}
+			var scanErr *scanError
+			if errors.As(err, &scanErr) {
+				attrs = append(attrs, "rowsRead", scanErr.rowsRead, "slicesDone", scanErr.slices,
+					"failedFrom", scanErr.from.Format(time.RFC3339), "failedTo", scanErr.to.Format(time.RFC3339))
+			}
+			b.log.Warn("web analytics hour failed", attrs...)
 		}
 	}
 	if err := b.buildDays(ctx, settings, horizon, newest); err != nil {
@@ -128,12 +147,18 @@ func (b *Builder) BuildProject(ctx context.Context, settings *Settings) error {
 	return b.applyRetention(ctx, settings, now)
 }
 
-// BuildHour summarises one closed hour of raw logs and stores it.
+// BuildHour summarises one closed hour of raw logs and stores it. An hour
+// without access logs is stored too (no rows), so reports read it as built.
 func (b *Builder) BuildHour(ctx context.Context, settings *Settings, hour time.Time) error {
+	return b.buildHour(ctx, settings, hour, 0)
+}
+
+// buildHour is BuildHour reading the hour in slices of slice (0: whole).
+func (b *Builder) buildHour(ctx context.Context, settings *Settings, hour time.Time, slice time.Duration) error {
 	started := time.Now()
 	result, err := runScan(b.logs(), scanRequest{
 		projectID: settings.ProjectID, from: hour, to: hour.Add(time.Hour), keysFrom: hour, bucket: time.Hour,
-		options: optionsOf(settings), timeout: hourScanTimeout,
+		options: optionsOf(settings), timeout: hourScanTimeout, slice: slice,
 	})
 	if err != nil {
 		return err
@@ -294,6 +319,20 @@ func sourceOf(projectID uuid.UUID, identity string, agg *totalsAgg, seenAt time.
 		ProjectID: projectID, SourceKey: sourceKey(identity), IdentifiedBy: by, Identity: data, Format: agg.format,
 		FirstSeen: seenAt, LastSeen: seenAt,
 	}
+}
+
+// sliceFor sizes an hour's slices for about rowsPerSlice access lines
+// each, from the busiest of the recently built hours (0: the whole hour).
+func sliceFor(built map[time.Time]Build) time.Duration {
+	var busiest int64
+	for _, build := range built {
+		busiest = max(busiest, build.RowsRead)
+	}
+	if busiest <= rowsPerSlice {
+		return 0
+	}
+	slices := (busiest + rowsPerSlice - 1) / rowsPerSlice
+	return max((time.Hour / time.Duration(slices)).Truncate(time.Minute), minScanSlice)
 }
 
 func optionsOf(settings *Settings) scanOptions {

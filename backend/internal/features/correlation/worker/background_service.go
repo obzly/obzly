@@ -155,7 +155,7 @@ func (s *CorrelationBackgroundService) correlateAllProjects() error {
 		s.logger.Error("Failed to end quiet incidents", slog.String("error", err.Error()))
 	}
 
-	s.logger.Info("Correlation scan completed",
+	s.logger.Debug("Correlation scan completed",
 		slog.Int("processedProjects", processed),
 		slog.Int("failures", failures))
 

@@ -1,10 +1,23 @@
 import { DeleteOutlined, EditOutlined, LoadingOutlined, TeamOutlined } from '@ant-design/icons';
-import { App, Button, Input, Modal, Select, Spin, Switch, Table, Tooltip } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Input,
+  Modal,
+  Radio,
+  Select,
+  Spin,
+  Switch,
+  Table,
+  Tooltip,
+} from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 
 import { IS_CONTROL_PLANE, getOAuthRedirectUri } from '../../../constants';
 import { mfaApi, userApi } from '../../../entity/users';
+import type { SSOMFATrust } from '../../../entity/users';
 import { ssoApi } from '../../../entity/users/api/ssoApi';
 import type { CreateSSOConnectorRequest } from '../../../entity/users/model/CreateSSOConnectorRequest';
 import type { SSOConnector } from '../../../entity/users/model/SSOConnector';
@@ -12,6 +25,12 @@ import { SSOProviderType } from '../../../entity/users/model/SSOProviderType';
 import type { UpdateSSOConnectorRequest } from '../../../entity/users/model/UpdateSSOConnectorRequest';
 import { MFAConfirmModal } from '../../../shared/ui/MFAConfirmModal';
 import { Card } from '../../../shared/ui/v2';
+import {
+  ALWAYS_TRUST_WARNING,
+  MFA_TRUST_OPTIONS,
+  connectorMFATrust,
+  mfaTrustOption,
+} from '../lib/ssoMfaTrust';
 import { SSOGroupMappingsModal } from './SSOGroupMappingsModal';
 import { SSOSiteGroupMappingsModal } from './SSOSiteGroupMappingsModal';
 
@@ -33,7 +52,7 @@ interface FormValues {
   scopes: string;
   groupsClaim: string;
   requireVerifiedEmail: boolean;
-  trustIdpMfa: boolean;
+  mfaTrust: SSOMFATrust;
   buttonLabel: string;
   enabled: boolean;
 }
@@ -52,7 +71,7 @@ const initialFormValues: FormValues = {
   scopes: 'openid email profile',
   groupsClaim: '',
   requireVerifiedEmail: true,
-  trustIdpMfa: false,
+  mfaTrust: 'off',
   buttonLabel: '',
   enabled: true,
 };
@@ -119,7 +138,7 @@ export const SSOSettingsComponent = () => {
       scopes: connector.scopes,
       groupsClaim: connector.groupsClaim,
       requireVerifiedEmail: connector.requireVerifiedEmail,
-      trustIdpMfa: connector.trustIdpMfa,
+      mfaTrust: connectorMFATrust(connector),
       buttonLabel: connector.buttonLabel,
       enabled: connector.enabled,
     });
@@ -194,7 +213,7 @@ export const SSOSettingsComponent = () => {
           scopes: formValues.scopes,
           groupsClaim: formValues.groupsClaim,
           requireVerifiedEmail: formValues.requireVerifiedEmail,
-          trustIdpMfa: formValues.trustIdpMfa,
+          mfaTrust: formValues.mfaTrust,
           buttonLabel: formValues.buttonLabel,
           enabled: formValues.enabled,
         };
@@ -210,7 +229,7 @@ export const SSOSettingsComponent = () => {
           scopes: formValues.scopes,
           groupsClaim: formValues.groupsClaim,
           requireVerifiedEmail: formValues.requireVerifiedEmail,
-          trustIdpMfa: formValues.trustIdpMfa,
+          mfaTrust: formValues.mfaTrust,
           buttonLabel: formValues.buttonLabel,
           enabled: formValues.enabled,
         };
@@ -258,6 +277,26 @@ export const SSOSettingsComponent = () => {
       key: 'issuerUrl',
       ellipsis: true,
       render: (url: string) => <span className="font-mono text-xs">{url}</span>,
+    },
+    {
+      title: 'MFA',
+      key: 'mfaTrust',
+      render: (_: unknown, record: SSOConnector) => {
+        const mode = connectorMFATrust(record);
+        return (
+          <Tooltip title={mfaTrustOption(mode).description}>
+            <span
+              className={
+                mode === 'always'
+                  ? `${PILL} bg-amber-500/15 text-amber-700 dark:text-amber-300`
+                  : `${PILL} bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300`
+              }
+            >
+              {mfaTrustOption(mode).shortLabel}
+            </span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Enabled',
@@ -485,21 +524,34 @@ export const SSOSettingsComponent = () => {
           </div>
 
           <div>
-            <div className="flex items-center gap-2">
-              <Switch
-                checked={formValues.trustIdpMfa}
-                onChange={(checked) => updateFormValue('trustIdpMfa', checked)}
-              />
-              <span className="text-sm">Provider enforces MFA</span>
-            </div>
+            <label className="mb-1 block text-sm font-medium">Trust the provider&apos;s MFA</label>
+            <Radio.Group
+              className="flex! flex-col gap-2"
+              value={formValues.mfaTrust}
+              onChange={(e) => updateFormValue('mfaTrust', e.target.value as SSOMFATrust)}
+            >
+              {MFA_TRUST_OPTIONS.map((option) => (
+                <Radio key={option.value} value={option.value}>
+                  <span className="text-sm">{option.label}</span>
+                  <span className="block text-xs text-gray-500 dark:text-gray-300">
+                    {option.description}
+                  </span>
+                </Radio>
+              ))}
+            </Radio.Group>
+            {formValues.mfaTrust === 'always' && (
+              <Alert className="mt-2" type="warning" showIcon title={ALWAYS_TRUST_WARNING} />
+            )}
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-              When on, a sign-in whose ID token shows the provider used a second factor (an{' '}
-              <code>amr</code> claim with <code>mfa</code>, <code>otp</code>, <code>hwk</code>,{' '}
-              <code>swk</code>, <code>sms</code> or <code>fido</code>) is not asked for an Obzly
-              authenticator code, and admins are not asked to set one up. Sign-ins without such a
-              claim still need Obzly MFA - many providers (Entra ID v2 tokens, Cognito, Google) only
-              send it when configured to. Password sign-ins to the same account always need Obzly
-              MFA. Off by default.
+              Password sign-ins to the same account always need Obzly MFA.
+              {formValues.providerType === SSOProviderType.COGNITO && (
+                <>
+                  {' '}
+                  Cognito reports MFA in <code>amr</code> only with managed login and MFA
+                  configured; Google-federated users show <code>fed</code>, so choose &quot;Always
+                  trust the provider&quot; only if every sign-in path through the pool enforces MFA.
+                </>
+              )}
             </div>
           </div>
 

@@ -12,6 +12,7 @@ import (
 	"obzly/internal/authz"
 	logs_core "obzly/internal/features/logs/core"
 	users_models "obzly/internal/features/users/models"
+	"obzly/internal/util/logger"
 
 	"github.com/google/uuid"
 )
@@ -31,7 +32,14 @@ const (
 	// sourceListWindow: sources not seen for this long leave the picker.
 	sourceListWindow = 30 * 24 * time.Hour
 	liveScanTimeout  = time.Minute
-	dbipAttribution  = "IP geolocation by DB-IP"
+	// liveScanBudget bounds a report's whole raw read (every slice, under
+	// the UI's 30 s request timeout); what doesn't fit is left out and the
+	// report says its live part is partial.
+	liveScanBudget = 20 * time.Second
+	// liveScanSlice: a live read goes an hour at a time, newest first, so
+	// the current hour comes first when the budget runs out.
+	liveScanSlice   = time.Hour
+	dbipAttribution = "IP geolocation by DB-IP"
 )
 
 var (
@@ -509,7 +517,9 @@ func selectBuckets(from, to time.Time, hours, days map[time.Time]Build, wholeDay
 }
 
 // liveScan reads the plan's live part from raw logs (cached 30 s, so Live
-// mode and several viewers share one read).
+// mode and several viewers share one read), within liveScanBudget: a slice
+// that fails or doesn't fit is left out and the live part marked partial,
+// so the report still has the rollups.
 func (s *Service) liveScan(ctx context.Context, settings *Settings, plan *rangePlan, now time.Time,
 ) (*rollup, LiveInfoDTO, error) {
 	info := LiveInfoDTO{From: plan.liveFrom, To: now}
@@ -518,14 +528,21 @@ func (s *Service) liveScan(ctx context.Context, settings *Settings, plan *rangeP
 	}
 	request := scanRequest{
 		projectID: settings.ProjectID, from: plan.liveFrom, to: now, keysFrom: plan.keysFrom, bucket: plan.liveBucket,
-		options: optionsOf(settings), timeout: liveScanTimeout,
+		options: optionsOf(settings), timeout: liveScanTimeout, slice: liveScanSlice, partial: true,
 	}
 	key := fmt.Sprintf("%s|%d|%d|%d|%d|%d", settings.ProjectID, plan.liveFrom.Unix(), now.Unix()/30,
 		int64(plan.liveBucket), plan.keysFrom.Unix(), settings.UpdatedAt.UnixNano())
 	entry, cached, err := s.live.get(ctx, key, func() (*rollup, error) {
+		started := time.Now()
+		request.deadline = started.Add(liveScanBudget)
 		result, err := runScan(s.logs(), request)
-		if err != nil {
+		if result == nil {
 			return nil, err
+		}
+		if err != nil {
+			logger.GetLogger().Warn("web analytics live read is partial", "projectId", settings.ProjectID,
+				"from", request.from.Format(time.RFC3339), "to", request.to.Format(time.RFC3339),
+				"rowsRead", result.rowsRead, "durationMs", time.Since(started).Milliseconds(), "error", err)
 		}
 		geo := s.geo
 		if !settings.GeoEnabled {
@@ -538,6 +555,7 @@ func (s *Service) liveScan(ctx context.Context, settings *Settings, plan *rangeP
 		return nil, info, err
 	}
 	info.To, info.Rows, info.DurationMs, info.Cached = entry.to, entry.result.rowsRead, entry.durationMs, cached
+	info.Partial = entry.result.partial
 	return entry.result, info, nil
 }
 

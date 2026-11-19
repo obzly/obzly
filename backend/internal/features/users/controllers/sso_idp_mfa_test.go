@@ -10,6 +10,7 @@ import (
 	users_middleware "obzly/internal/features/users/middleware"
 	users_repositories "obzly/internal/features/users/repositories"
 	users_services "obzly/internal/features/users/services"
+	sso_models "obzly/internal/features/users/sso/models"
 	users_testing "obzly/internal/features/users/testing"
 	test_utils "obzly/internal/util/testing"
 
@@ -100,6 +101,7 @@ func Test_CreateConnector_WithoutTrustIdPMFA_DefaultsToUntrusted(t *testing.T) {
 	fake := newFakeOIDCServer(t, "client-1")
 	connector := createCognitoConnectorWithMFATrust(t, router, fake, nil)
 	assert.False(t, connector.TrustIdPMFA)
+	assert.Equal(t, sso_models.MFATrustOff, connector.MFATrust)
 }
 
 // Trusting the provider is not enough on its own: an ID token whose amr

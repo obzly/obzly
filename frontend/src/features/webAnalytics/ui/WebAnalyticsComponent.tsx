@@ -221,6 +221,7 @@ export const WebAnalyticsComponent = ({ projectId, onOpenLogs }: Props): JSX.Ele
     `${short ? 'the whole range' : `${clockTime(report.live.from)}–${clockTime(report.live.to)}`} read from raw logs ` +
     `(${formatCount(report.live.rows)} requests, ${(report.live.durationMs / 1000).toFixed(1)} s` +
     `${report.live.cached ? ', shared' : ''})` +
+    (report.live.partial ? ', partial: some of it took too long to read and is left out' : '') +
     (live ? ', refreshing every 30 s' : '');
 
   const kpis = (

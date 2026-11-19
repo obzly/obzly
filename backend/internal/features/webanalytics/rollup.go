@@ -107,6 +107,8 @@ type rollup struct {
 	totals   map[bucketKey]*totalsAgg
 	keys     map[srcHost]keySet
 	rowsRead int64
+	// partial: part of the window couldn't be read (see runScan).
+	partial bool
 }
 
 // fieldMap is a source's format: the dialect and each field's alias.
@@ -117,6 +119,31 @@ type fieldMap struct {
 
 func newRollup() *rollup {
 	return &rollup{totals: map[bucketKey]*totalsAgg{}, keys: map[srcHost]keySet{}}
+}
+
+// merge adds other (another slice of the same scan, not yet finished) to r.
+func (r *rollup) merge(other *rollup) {
+	for key, totals := range other.totals {
+		if existing := r.totals[key]; existing != nil {
+			existing.merge(totals)
+		} else {
+			r.totals[key] = totals
+		}
+	}
+	for sh, set := range other.keys {
+		target := r.keys[sh]
+		if target == nil {
+			r.keys[sh] = set
+			continue
+		}
+		for dim, list := range set {
+			for key, agg := range list {
+				target.add(dim, key, agg)
+			}
+		}
+	}
+	r.rowsRead += other.rowsRead
+	r.partial = r.partial || other.partial
 }
 
 func newTotals() *totalsAgg {

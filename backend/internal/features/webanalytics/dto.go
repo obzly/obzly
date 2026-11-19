@@ -45,6 +45,9 @@ type LiveInfoDTO struct {
 	Rows       int64     `json:"rows"`
 	DurationMs int64     `json:"durationMs"`
 	Cached     bool      `json:"cached"`
+	// Partial: part of the range couldn't be read in time (or at all); the
+	// counts leave it out.
+	Partial bool `json:"partial"`
 }
 
 // SourceDTO is one access-log source (after merges) with its share of the

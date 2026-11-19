@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	logs_core "obzly/internal/features/logs/core"
@@ -56,6 +57,9 @@ type LogQuerier struct {
 	tail segments.TailSource
 	// partitionCache keeps time-bucketed aggregations per partition (nil: off).
 	partitionCache *partcache.Cache
+	// mergedRows counts aggregation rows read back from merges into Go:
+	// tests hold it to a top N rather than every group.
+	mergedRows atomic.Int64
 }
 
 type QuerierOption func(*LogQuerier)

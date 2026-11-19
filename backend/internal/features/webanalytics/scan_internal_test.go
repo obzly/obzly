@@ -1,6 +1,8 @@
 package webanalytics
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +15,30 @@ import (
 
 const chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
 	"Chrome/118.0.0.0 Safari/537.36"
+
+// cappedRepository fails a read longer than maxWindow as DuckDB does past
+// its spill cap, and one starting before brokenUntil as a timed-out read,
+// and records the windows it was asked for.
+type cappedRepository struct {
+	logs_core.LogRepository
+	maxWindow   time.Duration
+	brokenUntil time.Time
+	windows     []time.Duration
+}
+
+func (r *cappedRepository) ExecuteScopedSQL(projectID uuid.UUID, request *logs_core.ScopedSQLRequestDTO,
+) ([]*logs_core.SQLQueryResponseDTO, error) {
+	window := request.To.Sub(request.From) + time.Nanosecond
+	r.windows = append(r.windows, window)
+	if request.From.Before(r.brokenUntil) {
+		return nil, errors.New("failed to prepare logs table: context deadline exceeded\nINTERRUPT Error: Interrupted!")
+	}
+	if window > r.maxWindow {
+		return nil, errors.New("failed to prepare logs table: Out of Memory Error: failed to offload data block of " +
+			"size 256.0 KiB (7.4 GiB/7.4 GiB used). This limit was set by the 'max_temp_directory_size' setting.")
+	}
+	return r.LogRepository.ExecuteScopedSQL(projectID, request)
+}
 
 func Test_Scan_ForEachWebServerFormat_MapsFieldsToTheNormalizedSchema(t *testing.T) {
 	projectID := uuid.New()
@@ -277,7 +303,12 @@ func Test_Scan_WhenMostLinesAreNotJSON_StillCountsTheAccessLogs(t *testing.T) {
 		case 3:
 			items = append(items, accessLog(at, `{broken json`, map[string]any{"service_name": "web"}))
 		case 4:
-			items = append(items, accessLog(at, `[1,2]`, map[string]any{"service_name": "web"}))
+			// Past the raw pre-filter (a "{" and the keys, or `] "`), but not JSON or a log line.
+			message := `{"status":200,"path":"/x" broken`
+			if i%12 == 4 {
+				message = `[worker] "GET is not a request line`
+			}
+			items = append(items, accessLog(at, message, map[string]any{"service_name": "web"}))
 		default:
 			items = append(items, accessLog(at, "", map[string]any{"service_name": "nginx", "host_name": "web-1",
 				"remote_addr": "198.51.100.23", "method": "GET", "path": "/catalog", "status": "200"}))
@@ -290,4 +321,107 @@ func Test_Scan_WhenMostLinesAreNotJSON_StillCountsTheAccessLogs(t *testing.T) {
 	result.finish(nil, true)
 
 	assert.Equal(t, int64(1000), totalsFor(t, result, "service\n\nnginx\nweb-1").requests)
+}
+
+func Test_Scan_WhenTheStatusAndPathComeFromDifferentPlaces_CountsTheRequest(t *testing.T) {
+	projectID := uuid.New()
+	hour := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	storeLogs(t, projectID,
+		// The status in the fields, the path in a JSON message.
+		accessLog(hour.Add(time.Minute), `{"path":"/mixed","remote_addr":"192.0.2.1"}`,
+			map[string]any{"service_name": "api", "host_name": "app-1", "status": "200"}),
+		// The status in a JSON message, the method in the fields.
+		accessLog(hour.Add(2*time.Minute), `{"status":503}`,
+			map[string]any{"service_name": "api", "host_name": "app-1", "method": "GET"}),
+		// A JSON message with a status and nothing else is not a request.
+		accessLog(hour.Add(3*time.Minute), `{"status":200}`, map[string]any{"service_name": "api", "host_name": "app-1"}),
+	)
+
+	result := scanHour(t, projectID, hour, scanOptions{ipMode: ipModeTruncate})
+	result.finish(nil, true)
+
+	api := totalsFor(t, result, "service\n\napi\napp-1")
+	assert.Equal(t, int64(2), api.requests)
+	assert.Equal(t, int64(1), api.s2)
+	assert.Equal(t, int64(1), api.s5)
+}
+
+func Test_Scan_WhenAWindowRunsOutOfMemory_SplitsItAndCountsEveryRequest(t *testing.T) {
+	projectID := uuid.New()
+	hour := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	var items []*logs_core.LogItem
+	for i := range 240 {
+		items = append(items, accessLog(hour.Add(time.Duration(i)*15*time.Second), "",
+			nginxRequest(fmt.Sprintf("198.51.100.%d", i%60), fmt.Sprintf("/p/%d", i%3), "200", "web-1")))
+	}
+	storeLogs(t, projectID, items...)
+	request := scanRequest{projectID: projectID, from: hour, to: hour.Add(time.Hour), keysFrom: hour,
+		bucket: time.Hour, options: scanOptions{ipMode: ipModeTruncate}, timeout: time.Minute}
+	whole, err := runScan(logs_core.GetLogCoreRepository(), request)
+	require.NoError(t, err)
+
+	capped := &cappedRepository{LogRepository: logs_core.GetLogCoreRepository(), maxWindow: 20 * time.Minute}
+	split, err := runScan(capped, request)
+	require.NoError(t, err)
+
+	assert.Equal(t, []time.Duration{time.Hour, 30 * time.Minute, 15 * time.Minute, 15 * time.Minute,
+		30 * time.Minute, 15 * time.Minute, 15 * time.Minute}, capped.windows, "halves, newest first")
+	assert.False(t, split.partial)
+	assert.Equal(t, int64(240), split.rowsRead)
+	wholeTotals := totalsFor(t, whole, "service\n\nnginx\nweb-1")
+	splitTotals := totalsFor(t, split, "service\n\nnginx\nweb-1")
+	assert.Equal(t, wholeTotals.requests, splitTotals.requests)
+	assert.Equal(t, wholeTotals.bytes, splitTotals.bytes)
+	assert.Equal(t, wholeTotals.visitors.estimate(), splitTotals.visitors.estimate(),
+		"the same 60 visitors in every slice merge, not add up")
+	split.finish(nil, true)
+	pages := keysFor(split, "service\n\nnginx\nweb-1")[dimPage]
+	require.Contains(t, pages, "/p/:id")
+	assert.Equal(t, int64(240), pages["/p/:id"].hits)
+}
+
+func Test_Scan_WhenASliceStillFailsAndPartialIsAllowed_ReturnsTheOtherSlices(t *testing.T) {
+	projectID := uuid.New()
+	hour := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	storeLogs(t, projectID,
+		accessLog(hour.Add(10*time.Minute), "", nginxRequest("198.51.100.1", "/", "200", "web-1")),
+		accessLog(hour.Add(70*time.Minute), "", nginxRequest("198.51.100.2", "/", "200", "web-1")),
+	)
+	// Reads of the first hour time out; the 30 minutes after it read fine.
+	capped := &cappedRepository{LogRepository: logs_core.GetLogCoreRepository(), maxWindow: time.Hour,
+		brokenUntil: hour.Add(time.Hour)}
+	request := scanRequest{projectID: projectID, from: hour, to: hour.Add(90 * time.Minute), keysFrom: hour,
+		bucket: time.Hour, options: scanOptions{ipMode: ipModeTruncate}, timeout: time.Minute, slice: time.Hour}
+
+	_, err := runScan(capped, request)
+	var scanErr *scanError
+	require.ErrorAs(t, err, &scanErr, "without partial a failed slice fails the scan")
+	assert.Equal(t, hour, scanErr.from)
+	assert.Equal(t, int64(1), scanErr.rowsRead, "what the slices before it read")
+	assert.Equal(t, []time.Duration{30 * time.Minute, time.Hour}, capped.windows, "a timeout isn't split")
+
+	request.partial = true
+	result, err := runScan(capped, request)
+	require.ErrorAs(t, err, &scanErr, "the first failure comes back with the partial rollup")
+	require.NotNil(t, result)
+	assert.True(t, result.partial)
+	assert.Equal(t, int64(1), result.rowsRead, "the 30 minutes after the hour")
+
+	request.deadline = time.Now().Add(-time.Second)
+	result, err = runScan(logs_core.GetLogCoreRepository(), request)
+	require.Error(t, err)
+	assert.True(t, result.partial, "past the deadline nothing is read")
+	assert.Zero(t, result.rowsRead)
+}
+
+func Test_SliceWindows_SplitsAtMultiplesOfTheSliceNewestFirst(t *testing.T) {
+	at := func(hour, minute int) time.Time { return time.Date(2026, 11, 18, hour, minute, 0, 0, time.UTC) }
+
+	assert.Equal(t, []timeWindow{{at(10, 0), at(11, 0)}}, sliceWindows(at(10, 0), at(11, 0), 0))
+	assert.Equal(t, []timeWindow{{at(10, 0), at(11, 0)}}, sliceWindows(at(10, 0), at(11, 0), time.Hour))
+	assert.Equal(t, []timeWindow{{at(12, 0), at(12, 20)}, {at(11, 0), at(12, 0)}, {at(10, 40), at(11, 0)}},
+		sliceWindows(at(10, 40), at(12, 20), time.Hour))
+	assert.Equal(t, time.Duration(0), sliceFor(map[time.Time]Build{at(9, 0): {RowsRead: rowsPerSlice}}))
+	assert.Equal(t, 20*time.Minute, sliceFor(map[time.Time]Build{at(9, 0): {RowsRead: 2*rowsPerSlice + 1}}))
+	assert.Equal(t, minScanSlice, sliceFor(map[time.Time]Build{at(9, 0): {RowsRead: 40 * rowsPerSlice}}))
 }

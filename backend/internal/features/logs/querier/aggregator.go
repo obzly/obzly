@@ -88,7 +88,23 @@ func (q *LogQuerier) executeAggregation(
 		}
 		request = restricted
 	}
+	limit := request.Limit
+	if limit <= 0 {
+		limit = defaultAggregationLimit
+	}
+	if limit > maxAggregationLimit {
+		limit = maxAggregationLimit
+	}
 	from, to := resolveTimeRange(request.TimeRange)
+	// A top N the per-minute counts answer is picked in the merge (it plans
+	// its own inputs): only its N rows reach Go.
+	if topN := topNWindowsRequest(request, from, to, limit); topN != nil && q.windowRollupsApply(topN) {
+		response, err := q.aggregateTopN(ctx, projectID, topN)
+		if err == nil && emit != nil && len(response.Buckets) > 0 {
+			err = emit(response.Buckets)
+		}
+		return response, err
+	}
 	records, err := q.segmentRepo.PlanSegments(projectID, q.stream, from, to, hintsFor(request.Query))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list segments for project: %w", err)
@@ -113,13 +129,6 @@ func (q *LogQuerier) executeAggregation(
 
 	plan := buildAggregationPlan(request, builder)
 
-	limit := request.Limit
-	if limit <= 0 {
-		limit = defaultAggregationLimit
-	}
-	if limit > maxAggregationLimit {
-		limit = maxAggregationLimit
-	}
 	// Partitions add their counts up, so only a count (of lines or bands)
 	// can be read by partition.
 	if request.BucketMs > 0 && request.Measure.IsCount() &&
@@ -127,15 +136,6 @@ func (q *LogQuerier) executeAggregation(
 		partitionedAggregationFits(request, from, to, tail, ordered) {
 		return q.aggregateByPartition(ctx, projectID, request, from, to, tail, ordered,
 			whereClause, whereArgs, plan, limit, emit)
-	}
-	if topN := hourlyTopNRequest(request); topN != nil && (q.partitionCache != nil || q.rollupsApply(topN)) &&
-		partitionedAggregationFits(topN, from, to, tail, ordered) {
-		response, err := q.aggregateTopNByPartition(ctx, projectID, topN, from, to, tail, ordered,
-			whereClause, whereArgs, buildAggregationPlan(topN, builder), limit)
-		if err == nil && emit != nil && len(response.Buckets) > 0 {
-			err = emit(response.Buckets)
-		}
-		return response, err
 	}
 
 	// Fragments count per bucket/group without a limit (a top-N must see
@@ -165,6 +165,7 @@ func (q *LogQuerier) executeAggregation(
 				return fmt.Errorf("failed to scan aggregation row: %w", err)
 			}
 			buckets = append(buckets, bucket)
+			q.mergedRows.Add(1)
 		}
 		return nil
 	})

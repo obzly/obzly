@@ -2675,6 +2675,10 @@ definitions:
     properties:
       attributes:
         $ref: '#/definitions/inventory.Attributes'
+      childCount:
+        description: 'ChildCount is how many assets have this one as parent: only
+          with childCounts=true.'
+        type: integer
       cluster:
         type: string
       firstSeen:
@@ -2744,12 +2748,20 @@ definitions:
     type: object
   inventory.AssetListDTO:
     properties:
+      ancestors:
+        description: |-
+          Ancestors: only with ancestors=true. The parents, up to the top, of Assets that are not in
+          Assets themselves, so a tree can show where each match sits.
+        items:
+          $ref: '#/definitions/inventory.AssetDTO'
+        type: array
       assets:
         items:
           $ref: '#/definitions/inventory.AssetDTO'
         type: array
       total:
-        description: Total is how many matched; Assets holds at most the limit.
+        description: Total is how many matched; Assets holds the page of them from
+          offset, at most limit.
         type: integer
     type: object
   inventory.AssetRefDTO:
@@ -2794,6 +2806,9 @@ definitions:
     type: object
   inventory.ChangeDTO:
     properties:
+      assetId:
+        description: AssetID is the asset's id while it is still in the inventory.
+        type: string
       assetKey:
         type: string
       assetName:
@@ -2878,6 +2893,13 @@ definitions:
         type: integer
       id:
         type: string
+      live:
+        additionalProperties:
+          format: int64
+          type: integer
+        description: Live counts the project's assets that are not terminated, by
+          health.
+        type: object
       name:
         type: string
     type: object
@@ -2888,8 +2910,32 @@ definitions:
       text:
         type: string
     type: object
+  inventory.RegionCountDTO:
+    properties:
+      assets:
+        type: integer
+      critical:
+        type: integer
+      projects:
+        description: Projects are the names of the projects with assets there.
+        items:
+          type: string
+        type: array
+      provider:
+        description: Provider is cloud_provider, "" when not reported.
+        type: string
+      region:
+        type: string
+      warning:
+        type: integer
+    type: object
   inventory.SummaryDTO:
     properties:
+      clusters:
+        description: Clusters are the names of the cluster assets, sorted.
+        items:
+          type: string
+        type: array
       health:
         additionalProperties:
           format: int64
@@ -2907,9 +2953,20 @@ definitions:
           type: object
         description: Kinds counts assets by kind, then health.
         type: object
+      live:
+        additionalProperties:
+          format: int64
+          type: integer
+        description: Live counts the assets that are not terminated, by health.
+        type: object
       projects:
         items:
           $ref: '#/definitions/inventory.ProjectCountDTO'
+        type: array
+      regions:
+        description: 'Regions: most assets first.'
+        items:
+          $ref: '#/definitions/inventory.RegionCountDTO'
         type: array
       states:
         additionalProperties:
@@ -6417,6 +6474,16 @@ definitions:
         type: string
       issuerUrl:
         type: string
+      mfaTrust:
+        allOf:
+        - $ref: '#/definitions/sso_models.MFATrustMode'
+        description: |-
+          MFATrust: off (always Obzly's MFA), amr (skip it when the ID token's amr
+          shows a second factor) or always (skip it for every sign-in through this connector).
+        enum:
+        - "off"
+        - amr
+        - always
       name:
         type: string
       providerType:
@@ -6426,6 +6493,7 @@ definitions:
       scopes:
         type: string
       trustIdpMfa:
+        description: 'TrustIdPMFA is deprecated: mfaTrust != "off".'
         type: boolean
       updatedAt:
         type: string
@@ -6447,6 +6515,15 @@ definitions:
         type: string
       issuerUrl:
         type: string
+      mfaTrust:
+        allOf:
+        - $ref: '#/definitions/sso_models.MFATrustMode'
+        description: MFATrust defaults to "off" when omitted (and trustIdpMfa is omitted
+          too).
+        enum:
+        - "off"
+        - amr
+        - always
       name:
         maxLength: 100
         minLength: 1
@@ -6459,7 +6536,8 @@ definitions:
       scopes:
         type: string
       trustIdpMfa:
-        description: TrustIdPMFA defaults to false when omitted.
+        description: 'TrustIdPMFA is deprecated, read only when mfaTrust is omitted:
+          true = "amr".'
         type: boolean
     required:
     - buttonLabel
@@ -6566,6 +6644,15 @@ definitions:
         type: string
       issuerUrl:
         type: string
+      mfaTrust:
+        allOf:
+        - $ref: '#/definitions/sso_models.MFATrustMode'
+        description: MFATrust keeps the current value when omitted (and trustIdpMfa
+          is omitted too).
+        enum:
+        - "off"
+        - amr
+        - always
       name:
         maxLength: 100
         minLength: 1
@@ -6578,7 +6665,9 @@ definitions:
       scopes:
         type: string
       trustIdpMfa:
-        description: TrustIdPMFA keeps the current value when omitted.
+        description: |-
+          TrustIdPMFA is deprecated, read only when mfaTrust is omitted: false =
+          "off"; true = "amr", or keeps a current "always".
         type: boolean
     required:
     - buttonLabel
@@ -6587,6 +6676,16 @@ definitions:
     - name
     - providerType
     type: object
+  sso_models.MFATrustMode:
+    enum:
+    - "off"
+    - amr
+    - always
+    type: string
+    x-enum-varnames:
+    - MFATrustOff
+    - MFATrustAMR
+    - MFATrustAlways
   sso_models.ProviderType:
     enum:
     - cognito
@@ -7792,6 +7891,11 @@ definitions:
     properties:
       email:
         type: string
+      idpMfaNotReported:
+        description: |-
+          IdPMFANotReported: an SSO sign-in asked for Obzly's MFA and the
+          provider's ID token reported no second factor (amr), so the UI can say why.
+        type: boolean
       isNewUser:
         type: boolean
       mfaRequired:
@@ -8177,6 +8281,11 @@ definitions:
         type: integer
       from:
         type: string
+      partial:
+        description: |-
+          Partial: part of the range couldn't be read in time (or at all); the
+          counts leave it out.
+        type: boolean
       rows:
         type: integer
       to:
@@ -10507,15 +10616,17 @@ paths:
       - downdetect
   /inventory/assets:
     get:
-      description: Worst health first. kind, health and state take comma-separated
-        values.
+      description: |-
+        A page of the matching assets, worst health first unless sort says otherwise; total is how many
+        matched. kind, health and state take comma-separated values. Without offset and limit it
+        returns the first 2000.
       parameters:
       - description: Only this project
         in: query
         name: projectId
         type: string
       - description: cluster, node, host, namespace, workload, pod, container, docker_container,
-          service
+          service, load_balancer, database, bucket, function, scaling_group
         in: query
         name: kind
         type: string
@@ -10535,14 +10646,44 @@ paths:
         in: query
         name: namespace
         type: string
-      - description: Search name, node and attributes
+      - description: Only the assets right under this asset key (use with projectId)
+        in: query
+        name: parent
+        type: string
+      - description: Only the assets without a parent in the inventory
+        in: query
+        name: roots
+        type: boolean
+      - description: Search name, node, attribute values and project name
         in: query
         name: q
         type: string
+      - description: health (default), kind, name, cpu, memory, restarts, age, lastSeen
+          or attention
+        in: query
+        name: sort
+        type: string
+      - description: 'asc (default: worst health, newest, least first) or desc (the
+          reverse)'
+        in: query
+        name: order
+        type: string
+      - description: Skip this many matches (default 0)
+        in: query
+        name: offset
+        type: integer
       - description: At most this many (default 2000, max 5000)
         in: query
         name: limit
         type: integer
+      - description: Add each asset's childCount
+        in: query
+        name: childCounts
+        type: boolean
+      - description: Add the ancestors of the returned assets that are not among them
+        in: query
+        name: ancestors
+        type: boolean
       produces:
       - application/json
       responses:
@@ -10550,6 +10691,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/inventory.AssetListDTO'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "403":
           description: Forbidden
           schema:

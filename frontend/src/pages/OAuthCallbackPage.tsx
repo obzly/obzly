@@ -13,9 +13,11 @@ export function OAuthCallbackPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [error, setError] = useState<string>('');
-  const [mfaChallenge, setMfaChallenge] = useState<{ mfaToken: string; isSetup: boolean } | null>(
-    null,
-  );
+  const [mfaChallenge, setMfaChallenge] = useState<{
+    mfaToken: string;
+    isSetup: boolean;
+    idpMfaNotReported: boolean;
+  } | null>(null);
   // The stored state is one-shot; StrictMode's second effect run must not
   // consume it again (and fail) or redeem the code twice.
   const handled = useRef(false);
@@ -66,7 +68,11 @@ export function OAuthCallbackPage() {
         }
 
         if (response.mfaToken) {
-          setMfaChallenge({ mfaToken: response.mfaToken, isSetup: !!response.mfaSetupRequired });
+          setMfaChallenge({
+            mfaToken: response.mfaToken,
+            isSetup: !!response.mfaSetupRequired,
+            idpMfaNotReported: !!response.idpMfaNotReported,
+          });
           return;
         }
 
@@ -85,6 +91,7 @@ export function OAuthCallbackPage() {
         <MFALoginComponent
           mfaToken={mfaChallenge.mfaToken}
           isSetup={mfaChallenge.isSetup}
+          idpMfaNotReported={mfaChallenge.idpMfaNotReported}
           onBack={() => navigate('/')}
           onSuccess={() => navigate(consumeReturnTo() ?? '/', { replace: true })}
         />

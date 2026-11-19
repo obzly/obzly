@@ -260,7 +260,7 @@ func (s *LogCleanupBackgroundService) compactAllProjects(owned func(uuid.UUID) b
 		processedProjects++
 	}
 
-	s.logger.Info("Compaction completed",
+	s.logger.Debug("Compaction completed",
 		slog.Int("processedProjects", processedProjects),
 		slog.Int("compactionFailures", compactionFailures))
 
@@ -327,7 +327,7 @@ func (s *LogCleanupBackgroundService) enforceAllProjectQuotas() error {
 		return fmt.Errorf("failed to get all projects: %w", err)
 	}
 
-	s.logger.Info(fmt.Sprintf("Enforcing quota for %d projects", len(projects)))
+	s.logger.Debug(fmt.Sprintf("Enforcing quota for %d projects", len(projects)))
 
 	quotaViolations := 0
 	processedProjects := 0
@@ -342,7 +342,7 @@ func (s *LogCleanupBackgroundService) enforceAllProjectQuotas() error {
 		processedProjects++
 	}
 
-	s.logger.Info("Quota enforcement completed",
+	s.logger.Debug("Quota enforcement completed",
 		slog.Int("processedProjects", processedProjects),
 		slog.Int("quotaViolations", quotaViolations))
 
@@ -384,7 +384,12 @@ func (s *LogCleanupBackgroundService) enforceAllProjectsRetention() error {
 		processedProjects++
 	}
 
-	s.logger.Info("Retention cleanup completed",
+	// Routine passes log at debug; a pass that deleted data stays visible.
+	logRetention := s.logger.Debug
+	if totalCleaned > 0 {
+		logRetention = s.logger.Info
+	}
+	logRetention("Retention cleanup completed",
 		slog.Int("processedProjects", processedProjects),
 		slog.Int("cleanupFailures", cleanupFailures),
 		slog.Int("projectsCleaned", totalCleaned))

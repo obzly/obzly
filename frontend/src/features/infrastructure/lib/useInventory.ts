@@ -1,25 +1,21 @@
 import { useEffect, useState } from 'react';
 
 import { IS_CONTROL_PLANE } from '../../../constants';
-import {
-  type SiteAsset,
-  type SiteChange,
-  type SiteRef,
-  inventoryApi,
-} from '../../../entity/inventory';
+import { type SiteChange, type SiteRef, inventoryApi } from '../../../entity/inventory';
 import { sitesApi } from '../../../entity/sites';
 import { type KindHistory, mergeHistories } from './history';
+import type { SiteSummary } from './paging';
 
 export interface SiteResult extends SiteRef {
   /** Why the Site's inventory couldn't be read. */
   error?: string;
+  /** Every asset of the Site, from its summary. */
   assets: number;
-  /** More matched than were returned (the API caps at 5000). */
-  truncated: boolean;
 }
 
 export interface InventoryData {
-  assets: SiteAsset[];
+  /** The Sites that answered, with their counts. */
+  summaries: SiteSummary[];
   changes: SiteChange[];
   sites: SiteResult[];
   /** Kind counts over time, from the Sites' inventory history. */
@@ -31,10 +27,13 @@ export interface InventoryData {
 
 const CHANGE_HOURS = 24;
 
-/** On a control plane, a Site that fails to answer is reported, not fatal. */
+/**
+ * The Overview's counts and change feed from every Site; asset lists are paged by the views that
+ * show them. On a control plane, a Site that fails to answer is reported, not fatal.
+ */
 export const useInventory = (refresh: number): InventoryData => {
   const [data, setData] = useState<InventoryData>({
-    assets: [],
+    summaries: [],
     changes: [],
     sites: [],
     history: { trend: {} },
@@ -68,45 +67,34 @@ export const useInventory = (refresh: number): InventoryData => {
       const results = await Promise.all(
         targets.map(async (target) => {
           try {
-            const [list, changes, summary] = await Promise.all([
-              inventoryApi.assets(target.siteId, controller.signal),
+            const [summary, changes] = await Promise.all([
+              inventoryApi.summary(target.siteId, controller.signal, true),
               inventoryApi.changes(target.siteId, CHANGE_HOURS, controller.signal),
-              // Only for pills and sparklines: a Site without it still shows its assets.
-              inventoryApi.summary(target.siteId, controller.signal, true).catch(() => undefined),
             ]);
             return {
-              site: {
-                ...target,
-                assets: list.total,
-                truncated: list.total > list.assets.length,
-              } as SiteResult,
-              assets: list.assets.map((asset) => ({ ...asset, ...target })),
+              site: { ...target, assets: summary.total } as SiteResult,
+              summary: { ...target, summary } as SiteSummary,
               changes: changes.map((change) => ({ ...change, ...target })),
-              history: summary?.history,
-              failed: false,
             };
           } catch (reason) {
             return {
-              site: { ...target, assets: 0, truncated: false, error: (reason as Error).message },
-              assets: [] as SiteAsset[],
+              site: { ...target, assets: 0, error: (reason as Error).message } as SiteResult,
+              summary: undefined,
               changes: [] as SiteChange[],
-              history: undefined,
-              failed: true,
             };
           }
         }),
       );
       if (controller.signal.aborted) return;
+      const summaries = results.flatMap((result) => (result.summary ? [result.summary] : []));
       setData({
-        assets: results.flatMap((result) => result.assets),
+        summaries,
         changes: results
           .flatMap((result) => result.changes)
           .sort((a, b) => b.at.localeCompare(a.at)),
         sites: results.map((result) => result.site),
         // Sites that couldn't be read add no assets, so they don't need a history either.
-        history: mergeHistories(
-          results.filter((result) => !result.failed).map((result) => result.history),
-        ),
+        history: mergeHistories(summaries.map((site) => site.summary.history)),
         loading: false,
       });
     };

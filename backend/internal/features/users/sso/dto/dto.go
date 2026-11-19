@@ -20,11 +20,15 @@ type ConnectorResponseDTO struct {
 	Scopes               string                  `json:"scopes"`
 	GroupsClaim          string                  `json:"groupsClaim"`
 	RequireVerifiedEmail bool                    `json:"requireVerifiedEmail"`
-	TrustIdPMFA          bool                    `json:"trustIdpMfa"`
-	ButtonLabel          string                  `json:"buttonLabel"`
-	Enabled              bool                    `json:"enabled"`
-	CreatedAt            time.Time               `json:"createdAt"`
-	UpdatedAt            time.Time               `json:"updatedAt"`
+	// MFATrust: off (always Obzly's MFA), amr (skip it when the ID token's amr
+	// shows a second factor) or always (skip it for every sign-in through this connector).
+	MFATrust sso_models.MFATrustMode `json:"mfaTrust" enums:"off,amr,always"`
+	// TrustIdPMFA is deprecated: mfaTrust != "off".
+	TrustIdPMFA bool      `json:"trustIdpMfa"`
+	ButtonLabel string    `json:"buttonLabel"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 func ToConnectorResponseDTO(c *sso_models.Connector) *ConnectorResponseDTO {
@@ -38,7 +42,8 @@ func ToConnectorResponseDTO(c *sso_models.Connector) *ConnectorResponseDTO {
 		Scopes:               c.Scopes,
 		GroupsClaim:          c.GroupsClaim,
 		RequireVerifiedEmail: c.RequireVerifiedEmail,
-		TrustIdPMFA:          c.TrustIdPMFA,
+		MFATrust:             c.MFATrust,
+		TrustIdPMFA:          c.MFATrust != sso_models.MFATrustOff,
 		ButtonLabel:          c.ButtonLabel,
 		Enabled:              c.Enabled,
 		CreatedAt:            c.CreatedAt,
@@ -62,7 +67,9 @@ type CreateConnectorRequestDTO struct {
 	GroupsClaim  string                  `json:"groupsClaim"  binding:"max=100"`
 	// RequireVerifiedEmail defaults to true when omitted.
 	RequireVerifiedEmail *bool `json:"requireVerifiedEmail"`
-	// TrustIdPMFA defaults to false when omitted.
+	// MFATrust defaults to "off" when omitted (and trustIdpMfa is omitted too).
+	MFATrust *sso_models.MFATrustMode `json:"mfaTrust" enums:"off,amr,always"`
+	// TrustIdPMFA is deprecated, read only when mfaTrust is omitted: true = "amr".
 	TrustIdPMFA *bool  `json:"trustIdpMfa"`
 	ButtonLabel string `json:"buttonLabel" binding:"required,min=1,max=100"`
 	Enabled     bool   `json:"enabled"`
@@ -78,7 +85,10 @@ type UpdateConnectorRequestDTO struct {
 	GroupsClaim  string                  `json:"groupsClaim"  binding:"max=100"`
 	// RequireVerifiedEmail keeps the current value when omitted.
 	RequireVerifiedEmail *bool `json:"requireVerifiedEmail"`
-	// TrustIdPMFA keeps the current value when omitted.
+	// MFATrust keeps the current value when omitted (and trustIdpMfa is omitted too).
+	MFATrust *sso_models.MFATrustMode `json:"mfaTrust" enums:"off,amr,always"`
+	// TrustIdPMFA is deprecated, read only when mfaTrust is omitted: false =
+	// "off"; true = "amr", or keeps a current "always".
 	TrustIdPMFA *bool  `json:"trustIdpMfa"`
 	ButtonLabel string `json:"buttonLabel" binding:"required,min=1,max=100"`
 	Enabled     bool   `json:"enabled"`

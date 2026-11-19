@@ -647,7 +647,9 @@ func amrHasMFA(value any) bool {
 	}
 }
 
-// oauthTokenOptions marks a session whose provider enforced MFA.
+// oauthTokenOptions marks a session whose provider enforced MFA (an SSO
+// connector whose MFA trust this sign-in satisfied: "always", or "amr" with a
+// second factor in amr).
 func oauthTokenOptions(idpMFATrusted bool) AccessTokenOptions {
 	if !idpMFATrusted {
 		return AccessTokenOptions{}
@@ -1391,10 +1393,17 @@ func (s *UserService) HandleSSOCallback(
 
 	emailTrusted := claims.EmailVerified || !claims.RequireVerifiedEmail
 
-	return s.getOrCreateUserFromOAuth(
+	response, err := s.getOrCreateUserFromOAuth(
 		claims.Subject, claims.Email, claims.Name, "sso", &claims.ConnectorID, emailTrusted, onIdentified,
 		s.ssoGroupsGrantAccess(claims), claims.IdPMFAVerified,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if response.MFAToken != "" && !claims.AMRShowsMFA {
+		response.IdPMFANotReported = true
+	}
+	return response, nil
 }
 
 // ssoGroupsGrantAccess reports whether the user's IdP groups match a mapping.

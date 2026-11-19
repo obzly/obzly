@@ -201,3 +201,33 @@ func Test_ExecuteScopedSQL_WithAShapedTable_FiltersOnItsDerivedColumnsAndDropsRa
 	})
 	require.Error(t, err, "statements see only the shaped table")
 }
+
+func Test_ExecuteScopedSQL_WithRawColumnsRawFilterAndTableFilter_ReadsOnlyWhatTheyKeep(t *testing.T) {
+	now := time.Now().UTC()
+	projectID, querier := seedProject(t, []*logs_core.LogItem{
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "a", Fields: map[string]any{"status": "200"}},
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "b", Fields: map[string]any{"status": "503"}},
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "c", Fields: map[string]any{"other": "x"}},
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "d", Fields: map[string]any{"status": "x"}},
+	})
+	// No WHERE in the table: the raw filter narrows the scan, the table filter the shaped rows.
+	table := "SELECT message, TRY_CAST(json_extract_string(fields, '$.status') AS INTEGER) AS status FROM raw"
+	request := &logs_core.ScopedSQLRequestDTO{
+		From: now.Add(-time.Hour), To: now.Add(time.Hour), Table: table,
+		RawColumns: []string{"message", "fields"}, RawFilter: `contains(fields, '"status"')`,
+		TableFilter: "status >= 500",
+		Statements:  []logs_core.ScopedSQLStatement{{SQL: "SELECT message, status FROM logs"}},
+	}
+	results, err := querier.ExecuteScopedSQL(projectID, request)
+	require.NoError(t, err)
+	assert.Equal(t, [][]any{{"b", int32(503)}}, results[0].Rows)
+
+	request.Table = "SELECT level FROM raw"
+	request.TableFilter = ""
+	_, err = querier.ExecuteScopedSQL(projectID, request)
+	require.Error(t, err, "raw has only the raw columns asked for")
+
+	request.RawColumns = []string{"message; DROP TABLE x"}
+	_, err = querier.ExecuteScopedSQL(projectID, request)
+	require.ErrorContains(t, err, "unknown raw column")
+}

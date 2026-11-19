@@ -13,10 +13,18 @@ interface Props {
   onBack: () => void;
   /** The OAuth callback route stays mounted after sign-in, so it must navigate away itself. */
   onSuccess?: () => void;
+  /** An SSO sign-in whose provider reported no second factor: say why Obzly asks. */
+  idpMfaNotReported?: boolean;
 }
 
 /** Second step of an MFA-gated login; the auth listeners switch the app to signed-in. */
-export function MFALoginComponent({ mfaToken, isSetup, onBack, onSuccess }: Props): JSX.Element {
+export function MFALoginComponent({
+  mfaToken,
+  isSetup,
+  onBack,
+  onSuccess,
+  idpMfaNotReported,
+}: Props): JSX.Element {
   const { message } = App.useApp();
   const [setup, setSetup] = useState<MFASetupResponse | null>(null);
   const [code, setCode] = useState('');
@@ -66,6 +74,12 @@ export function MFALoginComponent({ mfaToken, isSetup, onBack, onSuccess }: Prop
       <div className="mb-5 text-center text-2xl font-bold">
         {isSetup ? 'Set up two-factor authentication' : 'Enter your code'}
       </div>
+
+      {idpMfaNotReported && (
+        <div className="mb-3 text-center text-sm text-gray-600 dark:text-gray-300">
+          Your sign-in provider didn&apos;t report a second factor, so Obzly asks for its own.
+        </div>
+      )}
 
       {isSetup && (
         <div className="mb-4 text-center text-sm text-gray-600 dark:text-gray-300">

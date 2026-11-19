@@ -276,9 +276,51 @@ func sanitizeStaticExtensions(raw string) []string {
 	return out
 }
 
+// accessFilterSQL keeps the access logs among tableSQL's rows: a status and
+// a method or path. It is the table's filter (ScopedSQLRequestDTO.TableFilter),
+// not tableSQL's WHERE: DuckDB pushes a WHERE down through the projections.
+const accessFilterSQL = "status BETWEEN 100 AND 599 AND (method IS NOT NULL OR path IS NOT NULL)"
+
+// rawColumns are the raw columns tableSQL reads.
+var rawColumns = []string{"timestamp", "message", "fields"}
+
+// rawFilterSQL is a cheap pre-filter over the raw rows, evaluated inside the
+// segment scan, that keeps every row tableSQL can count and few others, so
+// an hour of host logs isn't read into the table at all. Plain string
+// predicates only (no JSON functions or casts, which fail or get copied when
+// pushed down). It follows tableSQL's sources:
+//   - a status from the fields means a status alias key ("status") in the
+//     fields JSON; from a JSON message, a message that starts with "{" and
+//     holds the key; from a text line, a message with `] "` (the only lines
+//     tableSQL runs accessLineRegex on), which also gives the method and path.
+//   - a method or path likewise from the fields or a JSON message (the text
+//     line is read only when no status came from the fields or JSON).
+//
+// So: text line OR (status from fields or JSON AND method/path from fields
+// or JSON). A key spelt with JSON escapes (\u0073tatus) would be missed;
+// the ingest and web servers don't write those.
+func rawFilterSQL() string {
+	hasKey := func(column string, fieldNames ...string) string {
+		var parts []string
+		for _, name := range fieldNames {
+			for _, alias := range fieldByName(name).aliases {
+				parts = append(parts, "contains("+column+", "+sqlString(`"`+alias.name+`"`)+")")
+			}
+		}
+		return "(" + strings.Join(parts, " OR ") + ")"
+	}
+	jsonMessage := "starts_with(message, '{')"
+	known := func(fieldNames ...string) string {
+		return "(" + hasKey("fields", fieldNames...) + " OR (" + jsonMessage + " AND " +
+			hasKey("message", fieldNames...) + "))"
+	}
+	return `(contains(message, '] "') OR (` + known(fieldStatus) + " AND " + known(fieldMethod, fieldPath) + "))"
+}
+
 // tableSQL is the trusted SELECT over "raw" that materializes the
 // normalized access logs (one row per request), with its bind arguments.
-// Only rows with a status and a method or path count as access logs.
+// Only rows with a status and a method or path count as access logs
+// (accessFilterSQL, applied to the table).
 func tableSQL(opts scanOptions) (string, []any) {
 	layout := newSQLLayout()
 	fieldList := sqlStringList(layout.fieldPaths)
@@ -409,8 +451,7 @@ func tableSQL(opts scanOptions) (string, []any) {
 	for _, field := range accessFields {
 		final = append(final, "ai_"+shortName(field.name))
 	}
-	return "SELECT " + strings.Join(final, ", ") + " FROM (" + level5SQL + ") l5 " +
-		"WHERE status BETWEEN 100 AND 599 AND (method IS NOT NULL OR path IS NOT NULL)", args
+	return "SELECT " + strings.Join(final, ", ") + " FROM (" + level5SQL + ") l5", args
 }
 
 // fieldValueSQL is a field's value: the first alias found in the fields,

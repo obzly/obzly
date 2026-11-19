@@ -276,6 +276,14 @@ func (s *LogParquetStore) ExecutePatternChanges(
 	return s.querier.ExecutePatternChanges(ctx, projectID, request)
 }
 
+func (s *LogParquetStore) ExecuteGroupWindows(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *logs_core.GroupWindowsRequestDTO,
+) (*logs_core.GroupWindowsResponseDTO, error) {
+	return s.querier.ExecuteGroupWindows(ctx, projectID, request)
+}
+
 func (s *LogParquetStore) ExecutePatternSamples(
 	ctx context.Context,
 	projectID uuid.UUID,

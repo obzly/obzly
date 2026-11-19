@@ -1,3 +1,4 @@
+import type { SSOMFATrust } from './SSOMFATrust';
 import type { SSOProviderType } from './SSOProviderType';
 
 export interface SSOConnector {
@@ -11,7 +12,9 @@ export interface SSOConnector {
   // ID-token claim holding the user's groups; empty = group mapping off.
   groupsClaim: string;
   requireVerifiedEmail: boolean;
-  // The provider enforces MFA, so sign-ins here skip Obzly's own TOTP step.
+  // When sign-ins here skip Obzly's own TOTP step; absent from servers before v1.2.2.
+  mfaTrust?: SSOMFATrust;
+  // Deprecated: mfaTrust !== 'off'.
   trustIdpMfa: boolean;
   buttonLabel: string;
   enabled: boolean;
