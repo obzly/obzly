@@ -164,6 +164,10 @@ api:
   replicas: 2
   # Seconds a stopping pod keeps serving with readiness failing.
   drainSeconds: 15
+  # Seconds in-flight requests may then finish (after the buffered rows are
+  # flushed): above the 170 s Logs query deadline, so a rollout or scale-down
+  # doesn't cut queries off. The pod's termination grace covers it.
+  requestGraceSeconds: 180
   dataSizeLimit: 20Gi
   nodeSelector: {}
   tolerations: []
@@ -178,6 +182,8 @@ api:
     minReplicas: 2
     maxReplicas: 6
     targetCPUUtilizationPercentage: 70
+    # Wait this long below target before removing a replica (one per 2 min).
+    scaleDownStabilizationSeconds: 600
   pdb:
     enabled: true
     maxUnavailable: 1
@@ -241,6 +247,8 @@ single:
 controlPlane:
   replicas: 2
   drainSeconds: 15
+  # Seconds proxied Site requests may then finish (SHUTDOWN_REQUEST_GRACE_SECONDS).
+  requestGraceSeconds: 180
   resources:
     requests: {cpu: 250m, memory: 256Mi}
     limits: {cpu: "1", memory: 1Gi}

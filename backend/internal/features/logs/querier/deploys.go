@@ -64,36 +64,27 @@ func (q *LogQuerier) ExecuteDeploys(
 		}
 	}
 
-	var uncovered []*segments.SegmentRecord
-	var rollupRecords []*segments.SegmentRecord
+	// Pods' first minutes come from logs_1m_pods or logs_1m where a segment
+	// has them (a count's timestamp is its minute's start), else raw.
+	sources := []tieredSource{{stream: q.stream, records: ordered, tail: tail, kind: wholeRange}}
 	if q.stream == logs_core.StreamLogs {
-		rollups, err := q.segmentRepo.PlanSegments(projectID, logs_core.StreamLogsRollup, from, to,
-			segments.PruningHints{})
+		sources, err = q.tieredSources(projectID, from, to, tail, ordered, countTiersFor(queryFields(filter), false))
 		if err != nil {
-			return nil, fmt.Errorf("failed to list log rollups: %w", err)
+			return nil, err
 		}
-		bySource := q.readableRollups(rollups)
-		for _, record := range ordered {
-			if rollup := bySource[record.ID.String()]; rollup != nil {
-				rollupRecords = append(rollupRecords, rollup)
-			} else {
-				uncovered = append(uncovered, record)
-			}
+	}
+	for _, source := range sources {
+		builder := newWhereBuilder(projectID)
+		builder.rollup = source.rollup
+		sourceFrom := from
+		switch {
+		case source.rollup:
+			sourceFrom = from.Truncate(time.Minute)
+		case source.kind != wholeRange:
+			continue // the edges of segments a rollup covers whole
 		}
-	} else {
-		uncovered = ordered
-	}
-
-	raw := newWhereBuilder(projectID)
-	if err := q.firstSeenPods(ctx, q.stream, raw, projectID, filter, from, to, tail, uncovered, add); err != nil {
-		return nil, err
-	}
-	if len(rollupRecords) > 0 {
-		rollup := newWhereBuilder(projectID)
-		rollup.rollup = true
-		// A per-minute count's timestamp is its minute's start.
-		if err := q.firstSeenPods(ctx, logs_core.StreamLogsRollup, rollup, projectID, filter,
-			from.Truncate(time.Minute), to, nil, rollupRecords, add); err != nil {
+		if err := q.firstSeenPods(ctx, source.stream, builder, projectID, filter, sourceFrom, to, source.tail,
+			source.records, add); err != nil {
 			return nil, err
 		}
 	}

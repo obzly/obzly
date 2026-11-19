@@ -35,6 +35,9 @@ spec:
       {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
     spec:
       {{- include "obzly.podSpec" (dict "root" . "tier" .Values.single) | nindent 6 }}
+      # Buffered rows are flushed first; then running queries (up to 170 s)
+      # get SHUTDOWN_REQUEST_GRACE_SECONDS (180) to finish.
+      terminationGracePeriodSeconds: 240
       containers:
         - name: obzly
           {{- include "obzly.containerBase" . | nindent 10 }}

@@ -81,6 +81,10 @@ type PatternTrendsResponseDTO struct {
 	Patterns   []PatternTrendDTO `json:"patterns"`
 	// Partial: more patterns than one query counts; the smallest are left out.
 	Partial bool `json:"partial"`
+	// PatternVersionSince is set when the 24 h or 7 day comparison reaches
+	// back before the current pattern version started: patterns it regrouped
+	// are left out of the new and dropping ones.
+	PatternVersionSince *time.Time `json:"patternVersionSince,omitempty"`
 }
 
 // ExplainRequestDTO asks what is over-represented in Current against

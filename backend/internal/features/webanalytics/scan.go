@@ -41,6 +41,10 @@ type scanRequest struct {
 	// partial leaves out a slice that fails or doesn't fit before the
 	// deadline instead of failing the scan (see runScan).
 	partial bool
+	// memoryLimit (bytes) and threads size the scan's DuckDB handle (0: the
+	// querier's search caps).
+	memoryLimit int64
+	threads     int
 }
 
 // minScanSlice: a slice that runs out of memory or spill is split in
@@ -203,6 +207,8 @@ func scanSlice(repository logs_core.LogRepository, request scanRequest) (*rollup
 		Timeout:     request.timeout,
 		MaxRows:     scanMaxRows,
 		Deadline:    request.deadline,
+		MemoryLimit: request.memoryLimit,
+		Threads:     request.threads,
 	})
 	if err != nil {
 		return nil, err

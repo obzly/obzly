@@ -231,3 +231,23 @@ func Test_ExecuteScopedSQL_WithRawColumnsRawFilterAndTableFilter_ReadsOnlyWhatTh
 	_, err = querier.ExecuteScopedSQL(projectID, request)
 	require.ErrorContains(t, err, "unknown raw column")
 }
+
+// A trusted caller (Web analytics' hour build) sizes the table's handle
+// itself instead of taking the querier's search caps.
+func Test_ExecuteScopedSQL_WithAMemoryLimit_SizesTheHandle(t *testing.T) {
+	now := time.Now().UTC()
+	projectID, querier := seedProject(t, []*logs_core.LogItem{
+		{Timestamp: now, Level: logs_core.LogLevelInfo, Message: "a"},
+	})
+	results, err := querier.ExecuteScopedSQL(projectID, &logs_core.ScopedSQLRequestDTO{
+		From: now.Add(-time.Hour), To: now.Add(time.Hour), Table: "SELECT message FROM raw",
+		MemoryLimit: 700_000_000, Threads: 1,
+		Statements: []logs_core.ScopedSQLStatement{
+			{SQL: "SELECT current_setting('memory_limit'), current_setting('threads') FROM logs"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, results[0].Rows, 1)
+	assert.Equal(t, "667.5 MiB", results[0].Rows[0][0])
+	assert.EqualValues(t, 1, results[0].Rows[0][1])
+}

@@ -418,6 +418,40 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
   - **Verify:** no `web analytics rollups failed` or `web analytics hour failed` lines in the
     worker logs after an hour, and Logs › Patterns and Volume & noise answer without the API's
     memory jumping past its usual working set.
+- **v1.2.3** - message patterns version 2, smaller log rollups, web analytics memory, safer
+  API shutdown.
+  - **Migrations:** two, additive. `log_pattern_versions` records when pattern version 2 started
+    (only on a Site that already has logs; a new Site has no version 1 hashes). `stream_segments`
+    gains list partitions for the new `logs_1m_pods` and `logs_1h_patterns` streams.
+  - **Patterns version 2:** IDs, names, emails, Kubernetes pod suffixes, JSON string values and
+    `key=value` values no longer make a pattern each, and long messages are masked before they are
+    cut to 1,024 characters. A pattern the new rules don't change keeps its hash, so its history,
+    sampling rules and saved filters carry on; logs stored before the upgrade keep their hashes.
+    For 7 days, Patterns, Anomalies and log pattern alerts leave regrouped patterns out of *new*
+    and *dropped* (Logs shows why), and the Anomalies badge counts spikes only while its baseline
+    is from before the upgrade. Sampling rules saved with a version 1 pattern hash still match.
+  - **Rollups:** each compacted segment's `logs_1m` is rolled up again into `logs_1m_pods` (per
+    minute, no pattern) and `logs_1h_patterns` (per hour by level, service and pattern). Workers
+    build them for existing segments in the background (50 segments per project per pass, from
+    the `logs_1m` files, not the raw logs), so Volume & noise, Patterns and Health map get faster
+    as the backfill finishes; until then they read `logs_1m` as before. Object storage grows by a
+    few percent of `logs_1m`.
+  - **Web analytics:** an hour build's DuckDB handle gets 3/16 of the worker's memory (512 MB to
+    1 GB) and one thread instead of the worker's 256 MB search cap.
+  - **Shutdown:** a stopping replica now stops accepting requests, gives ingest calls 10 s,
+    flushes and uploads its buffered rows, and only then lets running queries finish, up to
+    `SHUTDOWN_REQUEST_GRACE_SECONDS` (new, default 180; a Logs query runs up to 170 s). Before,
+    queries got 10 s, so a rollout or an HPA scale-down cut them off (502 through the control
+    plane). Live Tail streams end when the replica stops serving and reconnect elsewhere. Nothing
+    to set, but a query only gets the time Kubernetes allows: set `terminationGracePeriodSeconds`
+    to drain + 180 + 45 (chart 0.7.3 and the HA manifests use 240; with 60 a query gets about 45
+    s). Chart 0.7.3 also waits 10 minutes before the API HPA removes a replica, one at a time;
+    copy that `behavior` into your own chart if you have one.
+  - **Request log:** successful OTLP ingest calls and health checks under a second log at debug;
+    5xx responses log at warn.
+  - **Verify:** no `web analytics hour failed` lines after an hour; `logs_1m_pods` and
+    `logs_1h_patterns` segments appear (Settings › Storage) and Logs › Volume & noise answers in
+    seconds once the backfill is done.
 
 ## Order
 

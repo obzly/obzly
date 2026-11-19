@@ -37,6 +37,7 @@ data:
   {{- if eq .Values.mode "control-plane" }}
   SERVICE_MODE: "control-plane"
   SHUTDOWN_DRAIN_SECONDS: {{ .Values.controlPlane.drainSeconds | quote }}
+  SHUTDOWN_REQUEST_GRACE_SECONDS: {{ .Values.controlPlane.requestGraceSeconds | quote }}
   {{- else }}
   SELF_TRACING_SAMPLE_RATE: {{ .Values.config.selfTracingSampleRate | quote }}
   {{- with .Values.config.objectStorageUrl }}

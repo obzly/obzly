@@ -19,7 +19,9 @@ spec:
       {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
     spec:
       {{- include "obzly.podSpec" (dict "root" . "tier" .Values.controlPlane) | nindent 6 }}
-      terminationGracePeriodSeconds: {{ add .Values.controlPlane.drainSeconds 45 }}
+      # Above the drain + in-flight request grace (it proxies Site queries of
+      # up to 170 s) + the HTTP shutdown.
+      terminationGracePeriodSeconds: {{ add .Values.controlPlane.drainSeconds .Values.controlPlane.requestGraceSeconds 45 }}
       containers:
         - name: obzly
           {{- include "obzly.containerBase" . | nindent 10 }}

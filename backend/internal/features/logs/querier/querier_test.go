@@ -23,6 +23,7 @@ import (
 // (write, catalog, read end to end) and returns the project ID and a querier.
 func seedProject(t *testing.T, logItems []*logs_core.LogItem) (uuid.UUID, *logs_querier.LogQuerier) {
 	t.Helper()
+	logs_core.SetPatternVersionSinceForTest(time.Time{})
 
 	ingester, err := logs_ingester.NewLogIngester(t.TempDir(), segments.WithMaxRows(1_000_000))
 	require.NoError(t, err)

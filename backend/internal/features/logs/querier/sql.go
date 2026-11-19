@@ -115,7 +115,8 @@ func (q *LogQuerier) ExecuteScopedSQL(
 	prepareCtx, cancelPrepare := context.WithTimeout(parent, sqlPrepareTimeout)
 	defer cancelPrepare()
 	shape := tableShape{messagePrefix: request.MessagePrefix, table: request.Table, tableArgs: request.TableArgs,
-		tableFilter: request.TableFilter, rawColumns: request.RawColumns, rawFilter: request.RawFilter}
+		tableFilter: request.TableFilter, rawColumns: request.RawColumns, rawFilter: request.RawFilter,
+		memoryLimit: request.MemoryLimit, threads: request.Threads}
 	if err := shape.validate(); err != nil {
 		return nil, err
 	}
@@ -170,6 +171,9 @@ type tableShape struct {
 	tableFilter   string
 	rawColumns    []string
 	rawFilter     string
+	// memoryLimit (bytes) and threads replace the querier's caps when set.
+	memoryLimit int64
+	threads     int
 }
 
 // rawColumn is a column of "raw" (the segment scan) and its type.
@@ -250,9 +254,16 @@ func (q *LogQuerier) openLogsSandbox(
 	sandboxDB.SetMaxOpenConns(1)
 	// Before prepareLogsTable turns off external access (temp_directory
 	// can't be set after that). Each sandbox spills to its own directory.
-	spillDir, err := segments.ConfigureMemory(sandboxDB, q.memoryLimit, filepath.Join(q.queryDir, "spill"))
+	limit, threads := q.memoryLimit, q.threads
+	if shape.memoryLimit > 0 {
+		limit = fmt.Sprintf("%dMB", shape.memoryLimit/1_000_000)
+	}
+	if shape.threads > 0 {
+		threads = shape.threads
+	}
+	spillDir, err := segments.ConfigureMemory(sandboxDB, limit, filepath.Join(q.queryDir, "spill"))
 	if err == nil {
-		err = segments.SetHandleLimits(sandboxDB, "", q.threads)
+		err = segments.SetHandleLimits(sandboxDB, "", threads)
 	}
 	if err != nil {
 		_ = sandboxDB.Close()

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -362,12 +363,30 @@ func (s *LogQueryService) patternTrends(
 	if counted.Selections[1].Truncated() {
 		c.partial = true
 	}
+	dropCount := int(counted.Selections[3].Matched)
+	// Regrouped by the current pattern version: neither new nor dropping.
+	unchanged := map[string]bool{}
+	since, regrouped := logs_core.PatternBaselineRegrouped(from.Add(-7 * day))
+	if regrouped {
+		keptAdded, keptFalling, err := s.withoutRegroupedPatterns(ctx, projectID, request.Query, added, falling,
+			from, end)
+		if err != nil {
+			return nil, err
+		}
+		for _, hash := range append(append([]string{}, added...), falling...) {
+			unchanged[hash] = !slices.Contains(keptAdded, hash) && !slices.Contains(keptFalling, hash)
+		}
+		added, falling, dropCount = keptAdded, keptFalling, len(keptFalling)
+	}
 
 	response := &logs_core.PatternTrendsResponseDTO{
 		BucketMs: request.BucketMs, Patterns: []logs_core.PatternTrendDTO{},
 		Total: counted.Totals[0], Distinct: int(counted.Selections[0].Matched),
 		NewCount: len(added), SpikeCount: int(counted.Selections[2].Matched),
-		DropCount: int(counted.Selections[3].Matched),
+		DropCount: dropCount,
+	}
+	if regrouped {
+		response.PatternVersionSince = &since
 	}
 	for start := from.Truncate(bucket); start.Before(to); start = start.Add(bucket) {
 		response.Buckets = append(response.Buckets, start)
@@ -384,7 +403,9 @@ func (s *LogQueryService) patternTrends(
 	}
 	changes := map[string]string{}
 	for _, hash := range listed {
-		changes[hash] = trendChange(current[hash], yesterday[hash], week[hash])
+		if !unchanged[hash] {
+			changes[hash] = trendChange(current[hash], yesterday[hash], week[hash])
+		}
 	}
 	if len(listed) == 0 {
 		response.Other = make([]int64, len(response.Buckets))
@@ -492,6 +513,41 @@ func (s *LogQueryService) patternTrends(
 
 type patternMeta struct {
 	levels, services map[string]int64
+}
+
+// withoutRegroupedPatterns drops, when the comparison reaches back before the
+// current pattern version, the new patterns it regrouped (described from
+// [from, end]: they had another hash before) and the dropping ones it
+// retired (described from 24 h earlier: their logs now have another hash).
+func (s *LogQueryService) withoutRegroupedPatterns(
+	ctx context.Context, projectID uuid.UUID, query *logs_core.QueryNode, added, falling []string, from, end time.Time,
+) ([]string, []string, error) {
+	samplesOf := func(hashes []string, from, to time.Time) (map[string]logs_core.PatternSampleDTO, error) {
+		if len(hashes) == 0 {
+			return nil, nil
+		}
+		return logs_core.GetLogCoreRepository().ExecutePatternSamples(ctx, projectID,
+			&logs_core.PatternSamplesRequestDTO{
+				Query: query, TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to}, Hashes: hashes,
+			})
+	}
+	current, err := samplesOf(added, from, end)
+	if err != nil {
+		return nil, nil, err
+	}
+	before, err := samplesOf(falling, from.Add(-day), end.Add(-day))
+	if err != nil {
+		return nil, nil, err
+	}
+	added = slices.DeleteFunc(slices.Clone(added), func(hash string) bool {
+		sample, ok := current[hash]
+		return ok && logs_core.PatternRegrouped(sample.Sample)
+	})
+	falling = slices.DeleteFunc(slices.Clone(falling), func(hash string) bool {
+		sample, ok := before[hash]
+		return ok && logs_core.PatternHash(sample.Sample) != hash
+	})
+	return added, falling, nil
 }
 
 func (s *LogQueryService) volume(

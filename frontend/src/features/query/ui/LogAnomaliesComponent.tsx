@@ -148,6 +148,13 @@ export const LogAnomaliesComponent = ({
           Message patterns of the last search, against the baseline scaled to the same length.
         </div>
         {error && <Alert type="error" showIcon message={error} />}
+        {data?.patternVersionSince && (
+          <Alert
+            type="info"
+            showIcon
+            message="The baseline is from before patterns were regrouped (IDs, names and JSON values no longer make a pattern each), so new and dropped patterns leave out the ones that changed."
+          />
+        )}
         {isLoading && (
           <div className="flex justify-center py-6">
             <Spin size="small" />

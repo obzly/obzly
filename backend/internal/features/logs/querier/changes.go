@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -91,7 +92,15 @@ func (q *LogQuerier) ExecutePatternChanges(
 		NewCount: int(counted.Selections[0].Matched), SpikeCount: int(counted.Selections[1].Matched),
 		DropCount: int(counted.Selections[2].Matched),
 	}
+	since, regrouped := logs_core.PatternBaselineRegrouped(baseFrom)
+	if regrouped {
+		response.PatternVersionSince = &since
+	}
 	if request.CountOnly {
+		if regrouped {
+			// Without samples a regrouped pattern looks new (or dropped).
+			response.NewCount, response.DropCount = 0, 0
+		}
 		return response, nil
 	}
 	changes := func(selection logs_core.GroupSelectionResultDTO, kind string) []logs_core.PatternChangeDTO {
@@ -136,6 +145,15 @@ func (q *LogQuerier) ExecutePatternChanges(
 	}
 	if err := describe(falling, baseFrom, baseTo); err != nil {
 		return nil, err
+	}
+	if regrouped {
+		grown, falling = withoutRegrouped(grown, falling)
+		response.NewCount, response.DropCount = 0, len(falling)
+		for _, change := range grown {
+			if change.Change == logs_core.PatternChangeNew {
+				response.NewCount++
+			}
+		}
 	}
 	response.Changes = append(grown, falling...)
 	return response, nil
@@ -239,4 +257,21 @@ func (q *LogQuerier) patternSamples(
 		}
 	}
 	return samples, nil
+}
+
+// withoutRegrouped drops, from changes against a baseline older than the
+// current pattern version, the new patterns that version regrouped (they
+// had another hash in the baseline) and the dropped ones it retired (their
+// logs now have another hash). Changes without a sample stay.
+func withoutRegrouped(grown, falling []logs_core.PatternChangeDTO) (
+	[]logs_core.PatternChangeDTO, []logs_core.PatternChangeDTO,
+) {
+	grown = slices.DeleteFunc(grown, func(change logs_core.PatternChangeDTO) bool {
+		return change.Change == logs_core.PatternChangeNew && change.Sample != "" &&
+			logs_core.PatternRegrouped(change.Sample)
+	})
+	falling = slices.DeleteFunc(falling, func(change logs_core.PatternChangeDTO) bool {
+		return change.Sample != "" && logs_core.PatternHash(change.Sample) != change.Hash
+	})
+	return grown, falling
 }

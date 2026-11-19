@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,10 +144,13 @@ func (p *Project) EffectiveRetentionDays(policy RetentionPolicy) int {
 }
 
 // RateFor is the share of logs of service at level to keep: the first
-// matching rule's, else 1. level is matched case-insensitively; patternHash
-// (the log's pattern_hash) is only called when a rule has a pattern.
-func (r LogSampleRules) RateFor(service, level string, patternHash func() string) float64 {
-	hash, hashed := "", false
+// matching rule's, else 1. level is matched case-insensitively;
+// patternHashes (the log's pattern_hash under each pattern version, so a
+// rule made before a version regrouped its pattern still matches) is only
+// called when a rule has a pattern.
+func (r LogSampleRules) RateFor(service, level string, patternHashes func() []string) float64 {
+	var hashes []string
+	hashed := false
 	for _, rule := range r {
 		if (rule.Service != "" && rule.Service != service) ||
 			(rule.Level != "" && !strings.EqualFold(rule.Level, level)) {
@@ -154,9 +158,9 @@ func (r LogSampleRules) RateFor(service, level string, patternHash func() string
 		}
 		if rule.Pattern != "" {
 			if !hashed {
-				hash, hashed = patternHash(), true
+				hashes, hashed = patternHashes(), true
 			}
-			if rule.Pattern != hash {
+			if !slices.Contains(hashes, rule.Pattern) {
 				continue
 			}
 		}

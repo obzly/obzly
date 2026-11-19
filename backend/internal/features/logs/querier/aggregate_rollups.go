@@ -2,7 +2,6 @@ package logs_querier
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -14,9 +13,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Bucketed aggregations read logs_1m per-minute counts where they can (whole
-// minutes, counts' dimensions only). Partial edge minutes, segments without
-// counts and the tail are read raw; the three are summed per bucket.
+// Bucketed aggregations read rollups where they can (whole minutes or hours,
+// counts' dimensions only). Partial edge minutes, segments without rollups
+// and the tail are read raw; all inputs are summed per bucket.
 
 // rollupFields are logs_1m's dimensions.
 var rollupFields = map[string]bool{
@@ -61,8 +60,8 @@ func onRollupFields(node *logs_core.QueryNode) bool {
 	return true
 }
 
-// computeWithRollups is computePartitions over ranges using logs_1m for the
-// whole minutes of segments that have per-minute counts.
+// computeWithRollups is computePartitions over ranges reading, per segment,
+// the smallest rollup tier that can count it (rollup_tiers.go).
 func (q *LogQuerier) computeWithRollups(
 	ctx context.Context,
 	projectID uuid.UUID,
@@ -78,28 +77,51 @@ func (q *LogQuerier) computeWithRollups(
 ) (map[int64][]partitionCount, error) {
 	grouped := request.GroupField != ""
 	tokens := requiredTokens(request.Query)
-	rollups, err := q.segmentRepo.PlanSegments(projectID, logs_core.StreamLogsRollup, from, to, segments.PruningHints{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list log rollups: %w", err)
-	}
-	bySource := q.readableRollups(rollups)
-	var covered, uncovered, rollupRecords []*segments.SegmentRecord
-	for _, record := range ordered {
-		if rollup := bySource[record.ID.String()]; rollup != nil {
-			covered = append(covered, record)
-			rollupRecords = append(rollupRecords, rollup)
-		} else {
-			uncovered = append(uncovered, record)
+	var fields []string
+	if grouped {
+		for _, field := range strings.Split(request.GroupField, logs_core.GroupFieldsSeparator) {
+			fields = append(fields, attrnames.Normalize(field))
 		}
 	}
-	if len(covered) == 0 {
+	fields = append(fields, queryFields(request.Query)...)
+	// Hourly counts fit only buckets of whole hours (epoch-aligned, as hours are).
+	hoursMerge := request.BucketMs%time.Hour.Milliseconds() == 0
+	sources, err := q.tieredSources(projectID, from, to, tail, ordered, countTiersFor(fields, hoursMerge))
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 1 {
 		return q.queryRanges(ctx, q.stream, grouped, tail, ordered, whereClause, whereArgs, plan, size, ranges,
 			request.ScanBudget, tokens)
 	}
 
-	inner, edges := splitWholeMinutes(ranges)
+	builder := newWhereBuilder(projectID)
+	builder.rollup = true
+	querySQL, queryArgs := builder.Build(request.Query)
+	rollupWhere := "project_id = ?"
+	rollupArgs := append([]any{projectID.String()}, queryArgs...)
+	if querySQL != "" {
+		rollupWhere += " AND " + querySQL
+	}
+	rollupPlan := buildAggregationPlanCounting(request, builder, "sum(cnt)")
+
 	totals := map[int64]map[partitionCount]int64{}
-	add := func(computed map[int64][]partitionCount) {
+	for _, source := range sources {
+		sourceRanges := rangesOf(source.kind, ranges)
+		if len(sourceRanges) == 0 {
+			continue
+		}
+		var computed map[int64][]partitionCount
+		if source.rollup {
+			computed, err = q.queryRanges(ctx, source.stream, grouped, nil, source.records, rollupWhere, rollupArgs,
+				rollupPlan, size, sourceRanges, request.ScanBudget, nil)
+		} else {
+			computed, err = q.queryRanges(ctx, q.stream, grouped, source.tail, source.records, whereClause, whereArgs,
+				plan, size, sourceRanges, request.ScanBudget, tokens)
+		}
+		if err != nil {
+			return nil, err
+		}
 		for part, counts := range computed {
 			if totals[part] == nil {
 				totals[part] = map[partitionCount]int64{}
@@ -109,36 +131,6 @@ func (q *LogQuerier) computeWithRollups(
 			}
 		}
 	}
-
-	// Segments without counts, and the tail, over the whole ranges.
-	raw, err := q.queryRanges(ctx, q.stream, grouped, tail, uncovered, whereClause, whereArgs, plan, size, ranges,
-		request.ScanBudget, tokens)
-	if err != nil {
-		return nil, err
-	}
-	add(raw)
-	// Segments with counts: their partial edge minutes raw...
-	edgeCounts, err := q.queryRanges(ctx, q.stream, grouped, nil, covered, whereClause, whereArgs, plan, size, edges,
-		request.ScanBudget, tokens)
-	if err != nil {
-		return nil, err
-	}
-	add(edgeCounts)
-	// ...and their whole minutes from logs_1m.
-	builder := newWhereBuilder(projectID)
-	builder.rollup = true
-	querySQL, queryArgs := builder.Build(request.Query)
-	rollupWhere := "project_id = ?"
-	rollupArgs := append([]any{projectID.String()}, queryArgs...)
-	if querySQL != "" {
-		rollupWhere += " AND " + querySQL
-	}
-	rollupCounts, err := q.queryRanges(ctx, logs_core.StreamLogsRollup, grouped, nil, rollupRecords, rollupWhere,
-		rollupArgs, buildAggregationPlanCounting(request, builder, "sum(cnt)"), size, inner, request.ScanBudget, nil)
-	if err != nil {
-		return nil, err
-	}
-	add(rollupCounts)
 
 	result := make(map[int64][]partitionCount, len(totals))
 	for part, counts := range totals {
@@ -163,32 +155,4 @@ func (q *LogQuerier) readableRollups(rollups []*segments.SegmentRecord) map[stri
 		bySource[rollup.Stats.Source] = rollup
 	}
 	return bySource
-}
-
-// splitWholeMinutes splits ranges into the whole minutes they hold (which
-// per-minute counts answer exactly) and the partial minutes at their edges.
-func splitWholeMinutes(ranges []timeRange) (inner, edges []timeRange) {
-	for _, r := range ranges {
-		end := r.end
-		if r.includeEnd {
-			end = end.Add(time.Nanosecond)
-		}
-		first := r.start.Truncate(time.Minute)
-		if first.Before(r.start) {
-			first = first.Add(time.Minute)
-		}
-		last := end.Truncate(time.Minute)
-		if !first.Before(last) {
-			edges = append(edges, r)
-			continue
-		}
-		inner = append(inner, timeRange{start: first, end: last})
-		if r.start.Before(first) {
-			edges = append(edges, timeRange{start: r.start, end: first})
-		}
-		if last.Before(end) {
-			edges = append(edges, timeRange{start: last, end: r.end, includeEnd: r.includeEnd})
-		}
-	}
-	return inner, edges
 }

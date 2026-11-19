@@ -162,6 +162,26 @@ func Test_DropEmptyPastPartitions_DropsOnlyEmptyEndedMonths(t *testing.T) {
 		"a later backfill for a dropped month lands in the default partition")
 }
 
+// Stream names with digits (logs_1m, metrics_5m) were never matched as
+// month partitions, so their empty months piled up.
+func Test_DropEmptyPastPartitions_StreamNameWithDigits_DropsEmptyEndedMonths(t *testing.T) {
+	repo := &segments.SegmentRepository{}
+	month := time.Date(2001, 4, 15, 0, 0, 0, 0, time.UTC)
+	for _, stream := range []string{"logs_1m", "logs_1m_pods", "logs_1h_patterns"} {
+		dropPartition(t, monthPartition(stream, month))
+		t.Cleanup(func() { dropPartition(t, monthPartition(stream, month)) })
+		require.NoError(t, repo.EnsurePartition(stream, month))
+	}
+
+	dropped, err := repo.DropEmptyPastPartitions(time.Now().UTC())
+
+	require.NoError(t, err)
+	for _, stream := range []string{"logs_1m", "logs_1m_pods", "logs_1h_patterns"} {
+		require.Contains(t, dropped, monthPartition(stream, month))
+		require.False(t, tableExists(t, monthPartition(stream, month)))
+	}
+}
+
 // Queries on a stream queue behind a waiting lock, so the drop gives up
 // quickly instead of stalling them behind a long-running reader.
 func Test_DropEmptyPastPartitions_WhenStreamIsBusy_TimesOutInsteadOfWaiting(t *testing.T) {

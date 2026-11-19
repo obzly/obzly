@@ -91,6 +91,35 @@ var LogRollupSchema = segments.Schema{
 	},
 }
 
+// LogPodRollupSchema is logs_1m_pods' schema: logs_1m without the pattern.
+var LogPodRollupSchema = segments.Schema{
+	Stream: logs_core.StreamLogsPodRollup,
+	Columns: []segments.ColumnDef{
+		{Name: "project_id", Type: "VARCHAR"},
+		{Name: "timestamp", Type: "TIMESTAMP"},
+		{Name: "level", Type: "VARCHAR"},
+		{Name: "service_name", Type: "VARCHAR"},
+		{Name: "k8s_namespace_name", Type: "VARCHAR"},
+		{Name: "k8s_container_name", Type: "VARCHAR"},
+		{Name: "k8s_pod_name", Type: "VARCHAR"},
+		{Name: "cnt", Type: "BIGINT"},
+	},
+}
+
+// LogPatternRollupSchema is logs_1h_patterns' schema: per-hour log counts
+// (timestamp: the hour's start) by level, service and message pattern.
+var LogPatternRollupSchema = segments.Schema{
+	Stream: logs_core.StreamLogsPatternRollup,
+	Columns: []segments.ColumnDef{
+		{Name: "project_id", Type: "VARCHAR"},
+		{Name: "timestamp", Type: "TIMESTAMP"},
+		{Name: "level", Type: "VARCHAR"},
+		{Name: "service_name", Type: "VARCHAR"},
+		{Name: "pattern_hash", Type: "VARCHAR"},
+		{Name: "cnt", Type: "BIGINT"},
+	},
+}
+
 func init() {
 	for _, stream := range []string{logs_core.StreamLogs, logs_core.StreamAILogs} {
 		schema := LogSchema
@@ -98,6 +127,8 @@ func init() {
 		segments.RegisterSchemaAnchor(schema)
 	}
 	segments.RegisterSchemaAnchor(LogRollupSchema)
+	segments.RegisterSchemaAnchor(LogPodRollupSchema)
+	segments.RegisterSchemaAnchor(LogPatternRollupSchema)
 }
 
 type LogIngester struct {

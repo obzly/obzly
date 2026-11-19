@@ -35,15 +35,16 @@ spec:
         prometheus.io/path: /metrics
     spec:
       serviceAccountName: obzly
-      # Above SHUTDOWN_DRAIN_SECONDS + the HTTP (10s) and gRPC (10s)
-      # shutdown deadlines + the final segment flush.
-      terminationGracePeriodSeconds: 60
+      # Above SHUTDOWN_DRAIN_SECONDS + SHUTDOWN_REQUEST_GRACE_SECONDS (in-flight
+      # requests, after the final segment flush; Logs queries run up to 170s)
+      # + the ingest wait and gRPC deadline.
+      terminationGracePeriodSeconds: 240
       # See ../deployment.yaml's comment on this pin.
       nodeSelector:
         kubernetes.io/arch: arm64
       containers:
         - name: obzly
-          image: ghcr.io/obzly/obzly:v1.2.2
+          image: ghcr.io/obzly/obzly:v1.2.3
           imagePullPolicy: Always
           # Starts as root only to chown /obzly-data and write
           # runtime-config.js, then drops to uid 1000 with no capabilities.
@@ -66,6 +67,8 @@ spec:
             # so the Service/LB stops routing here before connections close.
             - name: SHUTDOWN_DRAIN_SECONDS
               value: "15"
+            - name: SHUTDOWN_REQUEST_GRACE_SECONDS
+              value: "180"
           ports:
             - name: http
               containerPort: 4005

@@ -87,6 +87,10 @@ type ScopedSQLRequestDTO struct {
 	Timeout  time.Duration
 	MaxRows  int
 	Deadline time.Time
+	// MemoryLimit (bytes) and Threads, from trusted callers, size the
+	// table's DuckDB handle instead of the querier's search caps (0: those).
+	MemoryLimit int64
+	Threads     int
 }
 
 type ScopedSQLStatement struct {
@@ -635,4 +639,8 @@ type PatternChangesResponseDTO struct {
 	DropCount  int `json:"dropCount"`
 	// Counted is false when a CountOnly request wasn't answered (its query needs raw logs).
 	Counted bool `json:"counted"`
+	// PatternVersionSince is set when the baseline reaches back before the
+	// current pattern version started: patterns it regrouped are left out of
+	// the new and dropped ones (a CountOnly answer counts neither).
+	PatternVersionSince *time.Time `json:"patternVersionSince,omitempty"`
 }

@@ -21,9 +21,10 @@ import (
 // each group key per window, the merge sums them and keeps only the keys each
 // selection asks for. Go then holds the selections' rows, never every group
 // (a top N read back whole, every group of every hour, OOM-killed API pods on
-// high-cardinality patterns and pods). Whole minutes come from logs_1m where
-// segments have it; there is no partition cache: per-partition group lists
-// are the unbounded part, and per-minute counts make a rerun cheap.
+// high-cardinality patterns and pods). Whole minutes and hours come from the
+// smallest rollup tier segments have; there is no partition cache:
+// per-partition group lists are the unbounded part, and rollups make a rerun
+// cheap.
 const (
 	// maxCountWindows: Volume & noise counts one window per day (31 at most).
 	maxCountWindows = 40
@@ -119,9 +120,9 @@ func (q *LogQuerier) groupWindows(
 	return response, nil
 }
 
-// windowSources splits the planned inputs: with per-minute counts, segments
-// without them (and the tail) over the whole windows, the rest's partial edge
-// minutes raw and their whole minutes from logs_1m; else everything raw.
+// windowSources splits the planned inputs: with rollups, each segment's
+// time among its smallest tiers that can count it (rollup_tiers.go); else
+// everything raw.
 func (q *LogQuerier) windowSources(
 	projectID uuid.UUID,
 	request *logs_core.GroupWindowsRequestDTO,
@@ -130,64 +131,58 @@ func (q *LogQuerier) windowSources(
 	tail []segments.ResolvedFile,
 	ordered []*segments.SegmentRecord,
 ) ([]windowSource, error) {
-	whole := make([][]timeRange, len(windows))
-	for i, window := range windows {
-		whole[i] = []timeRange{window}
-	}
-	raw := windowSource{stream: q.stream, records: ordered, tail: tail, ranges: whole}
-	if !q.windowRollupsApply(request) {
-		return []windowSource{raw}, nil
-	}
-	rollups, err := q.segmentRepo.PlanSegments(projectID, logs_core.StreamLogsRollup, from, to, segments.PruningHints{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list log rollups: %w", err)
-	}
-	bySource := q.readableRollups(rollups)
-	var covered, uncovered, rollupRecords []*segments.SegmentRecord
-	for _, record := range ordered {
-		if rollup := bySource[record.ID.String()]; rollup != nil {
-			covered = append(covered, record)
-			rollupRecords = append(rollupRecords, rollup)
-		} else {
-			uncovered = append(uncovered, record)
+	fields, ok := q.windowRollupFields(request)
+	if !ok {
+		whole := make([][]timeRange, len(windows))
+		for i, window := range windows {
+			whole[i] = []timeRange{window}
 		}
+		return []windowSource{{stream: q.stream, records: ordered, tail: tail, ranges: whole}}, nil
 	}
-	if len(covered) == 0 {
-		return []windowSource{raw}, nil
+	tiered, err := q.tieredSources(projectID, from, to, tail, ordered, countTiersFor(fields, true))
+	if err != nil {
+		return nil, err
 	}
-	inner := make([][]timeRange, len(windows))
-	edges := make([][]timeRange, len(windows))
-	anyEdge := false
-	for i, window := range windows {
-		inner[i], edges[i] = splitWholeMinutes([]timeRange{window})
-		anyEdge = anyEdge || len(edges[i]) > 0
+	sources := make([]windowSource, 0, len(tiered))
+	for i, source := range tiered {
+		ranges := make([][]timeRange, len(windows))
+		reads := false
+		for w, window := range windows {
+			ranges[w] = rangesOf(source.kind, []timeRange{window})
+			reads = reads || len(ranges[w]) > 0
+		}
+		// The first is the main input, kept even when empty.
+		if i > 0 && !reads {
+			continue
+		}
+		sources = append(sources, windowSource{
+			stream: source.stream, records: source.records, tail: source.tail, rollup: source.rollup, ranges: ranges,
+		})
 	}
-	raw.records = uncovered
-	sources := []windowSource{raw}
-	if anyEdge {
-		sources = append(sources, windowSource{stream: q.stream, records: covered, ranges: edges})
-	}
-	return append(sources, windowSource{
-		stream: logs_core.StreamLogsRollup, records: rollupRecords, rollup: true, ranges: inner,
-	}), nil
+	return sources, nil
 }
 
-// windowRollupsApply reports whether logs_1m can answer request's counts:
-// the logs stream, grouped and filtered on its dimensions only.
+// windowRollupsApply reports whether logs_1m can answer request's counts.
 func (q *LogQuerier) windowRollupsApply(request *logs_core.GroupWindowsRequestDTO) bool {
+	_, ok := q.windowRollupFields(request)
+	return ok
+}
+
+// windowRollupFields returns the fields request's counts use, as the rollups
+// hold them, and whether logs_1m can answer them: the logs stream, grouped
+// and filtered on its dimensions only.
+func (q *LogQuerier) windowRollupFields(request *logs_core.GroupWindowsRequestDTO) ([]string, bool) {
 	if q.stream != logs_core.StreamLogs {
-		return false
+		return nil, false
 	}
+	var fields []string
 	for _, field := range groupWindowFields(request) {
-		field = attrnames.Normalize(field)
-		if field == logs_core.WorkloadField || field == logs_core.ReplicaSetField {
-			field = "k8s_pod_name"
-		}
-		if field != "" && !rollupFields[field] {
-			return false
+		if field = countField(field); field != "" {
+			fields = append(fields, field)
 		}
 	}
-	return onRollupFields(request.Query)
+	fields = append(fields, queryFields(request.Query)...)
+	return fields, fieldsIn(fields, rollupFields)
 }
 
 // windowFragment counts each key per window over source's rows: the key

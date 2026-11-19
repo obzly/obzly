@@ -7,6 +7,7 @@ package logs_testsupport
 import (
 	"fmt"
 	"os"
+	"time"
 
 	logs_core "obzly/internal/features/logs/core"
 	logs_parquetstore "obzly/internal/features/logs/parquetstore"
@@ -24,6 +25,9 @@ func SetupRepository() {
 	}
 
 	logs_core.SetRepository(repository)
+	// Tests seed logs at any time; none of them is from before a pattern
+	// version unless a test pins one.
+	logs_core.SetPatternVersionSinceForTest(time.Time{})
 
 	aiRepository, err := logs_parquetstore.New(dataDir, logs_parquetstore.WithStream(logs_core.StreamAILogs))
 	if err != nil {

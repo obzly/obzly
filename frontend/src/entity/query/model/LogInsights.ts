@@ -42,6 +42,8 @@ export interface PatternTrendsResponse {
   dropCount: number;
   patterns: PatternTrend[];
   partial: boolean;
+  /** Set when the comparison reaches back before the current pattern version: regrouped patterns are left out of new and dropping. */
+  patternVersionSince?: string;
 }
 
 export interface ExplainRequest {

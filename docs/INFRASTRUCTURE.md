@@ -30,7 +30,8 @@ Obzly.
 - **Lifecycle is already recorded:**
   - the `metrics_series` stream has one row per series with `first_seen` / `last_seen`;
   - `metric_label_index` in Postgres has each label value with first / last seen;
-  - the `logs_1m` rollup counts lines per minute by pod, container, namespace and service.
+  - the `logs_1m_pods` rollup (else `logs_1m`) counts lines per minute by pod, container, namespace and
+    service.
 - Existing derivations to reuse: pod → ReplicaSet → workload from the pod-name hash
   (`logs/querier/deploys.go`, used by K8s Rollouts); service → namespace / deployment / node
   (`spans/querier/k8s_metadata.go`); the node key `host_name` and the PromQL of the K8s Cluster
@@ -112,8 +113,8 @@ evaluator. Each run:
 
 1. reads resource label combinations with first / last seen from `metrics_series` for a few anchor
    metrics (node and pod memory, container, host memory, pod phase...);
-2. reads pod, container and service activity and error counts from `logs_1m`, and services from
-   the traces;
+2. reads pod, container and service activity and error counts from `logs_1m_pods` (else
+   `logs_1m`), and services from the traces;
 3. runs one batch of instant PromQL queries for CPU, memory, disk, restarts, phase and replicas
    (both the newer `*_usage` and older `*_utilization` metric names); a pod's restarts are its
    containers' summed, and the 24 h restart counts are refreshed at most hourly;

@@ -16,7 +16,7 @@ const (
 )
 
 // signals maps segment streams to what Settings shows; streams derived
-// from others (logs_1m) aren't data that arrived.
+// from others (logs_1m and its tiers) aren't data that arrived.
 var signals = map[string]string{
 	"logs":           "logs",
 	"ai_logs":        "logs",
