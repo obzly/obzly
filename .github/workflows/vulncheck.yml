@@ -7,29 +7,52 @@ name: Vulnerability check
 # advisories published after a dependency was merged, without touching the
 # release jobs, and a newly published advisory can't block a release of an
 # already-merged fix.
+# Not on pushes to main: a merged PR already passed this check on a branch
+# up to date with main.
 on:
   pull_request:
-    paths-ignore: &no-build-paths
-      - ".claude/**"
-      - "docs/**"
-      - "deploy/**"
-      - "tests/**"
-      - "assets/**"
-      - "**.md"
-      - "LICENSE"
-  push:
-    branches: ["main"]
-    paths-ignore: *no-build-paths
   schedule:
     - cron: "0 5 * * 1" # Mondays 05:00 UTC, ahead of Renovate's Monday window
   workflow_dispatch:
+
+concurrency:
+  group: vulncheck-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  # A required check: it skips on docs-only PRs instead of not reporting
+  # (see ci-release.yml).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Did the PR change code?
+        id: diff
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] ||
+            git diff --name-only HEAD^1 HEAD |
+              grep -qvE '^(\.claude/|docs/|deploy/|tests/|assets/)|\.md$|^LICENSE$'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   govulncheck-backend:
     runs-on: ubuntu-latest
+    needs: [changes]
+    # Runs when code changed, and also if the changes job failed (fail safe).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

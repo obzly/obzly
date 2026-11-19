@@ -1,21 +1,22 @@
 name: CI
 
-# Files that never reach the image or the tests don't trigger a run;
-# workflow_dispatch still forces one.
+# main only takes squash merges of PRs whose required checks passed on a
+# branch up to date with main (ruleset: strict required checks), so the
+# merged tree is the one the PR already tested and a push to main doesn't
+# run it again. The exception is a dependency change: that run refreshes
+# the Go, npm and golangci-lint caches PRs restore from main (a PR can only
+# read its own and main's caches).
 on:
-  push:
-    branches: ["main"]
-    paths-ignore: &no-build-paths
-      - ".claude/**"
-      - "docs/**"
-      - "deploy/**"
-      - "tests/**"
-      - "assets/**"
-      - "**.md"
-      - "LICENSE"
   # Every PR, whatever its base branch.
   pull_request:
-    paths-ignore: *no-build-paths
+  push:
+    branches: ["main"]
+    paths:
+      - "backend/go.mod"
+      - "backend/go.sum"
+      - "backend/.golangci.yml"
+      - "frontend/package-lock.json"
+      - ".github/workflows/ci-release.yml"
   workflow_dispatch:
 
 # A newer push to the same branch or PR replaces a run still in progress.
@@ -27,8 +28,38 @@ permissions:
   contents: read
 
 jobs:
+  # Required checks must report on every PR, so docs-only PRs can't skip the
+  # whole workflow (they would wait forever, or need an admin bypass). The
+  # jobs below skip instead, and a skipped required check counts as passed.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Did the PR change code?
+        id: diff
+        run: |
+          set -euo pipefail
+          # Anything but these paths is code; deploy/helm has helm.yml.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] ||
+            git diff --name-only HEAD^1 HEAD |
+              grep -qvE '^(\.claude/|docs/|deploy/|tests/|assets/)|\.md$|^LICENSE$'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   lint-backend:
     runs-on: ubuntu-latest
+    needs: [changes]
+    # Runs when code changed, and also if the changes job failed (fail safe).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -40,9 +71,23 @@ jobs:
           cache: true
           cache-dependency-path: backend/go.sum
 
+      # The linter binary (built from source, ~45 s) and its analysis cache
+      # (most of the 2.5 min run) carry over between runs.
+      - name: Cache golangci-lint
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/bin/golangci-lint
+            ~/.cache/golangci-lint
+          key: golangci-lint-v2.15.0-${{ runner.os }}-${{ hashFiles('backend/go.sum', 'backend/.golangci.yml') }}-${{ github.sha }}
+          restore-keys: |
+            golangci-lint-v2.15.0-${{ runner.os }}-${{ hashFiles('backend/go.sum', 'backend/.golangci.yml') }}-
+            golangci-lint-v2.15.0-${{ runner.os }}-
+
       - name: Install golangci-lint
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          [ -x "$(go env GOPATH)/bin/golangci-lint" ] ||
+            go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Install swag for swagger generation
@@ -73,6 +118,9 @@ jobs:
 
   lint-frontend:
     runs-on: ubuntu-latest
+    needs: [changes]
+    # Runs when code changed, and also if the changes job failed (fail safe).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -118,9 +166,13 @@ jobs:
           docker run --rm -v "$out:/work" ghcr.io/yannh/kubeconform:v0.7.0 -strict -summary \
             -kubernetes-version 1.31.0 /work
 
+  # Not after lint-backend: in parallel the PR waits for the slower of the
+  # two, not both.
   test-backend:
     runs-on: ubuntu-latest
-    needs: [lint-backend]
+    needs: [changes]
+    # Runs when code changed, and also if the changes job failed (fail safe).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     env:
       COMPOSE_PROJECT_NAME: obzly-ci-${{ github.run_id }}
     steps:
