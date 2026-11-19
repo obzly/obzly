@@ -14,10 +14,20 @@ const (
 	// StreamLogsRollup holds per-minute log counts of compacted logs
 	// segments, one rollup segment per source (logs_compactor).
 	StreamLogsRollup = "logs_1m"
+	// StreamLogsPodRollup and StreamLogsPatternRollup are derived from each
+	// logs_1m rollup, with the same source: per-minute counts without the
+	// pattern (whose cardinality makes logs_1m large), and per-hour counts
+	// by level, service and pattern only.
+	StreamLogsPodRollup     = "logs_1m_pods"
+	StreamLogsPatternRollup = "logs_1h_patterns"
 
 	// Claude Code's OTel instrumentation scope, flattened into fields at ingest.
 	claudeCodeScope = "com.anthropic.claude_code"
 )
+
+// LogRollupStreams are the logs stream's rollup streams: built by its
+// compactor, uploaded and deleted with it.
+var LogRollupStreams = []string{StreamLogsRollup, StreamLogsPodRollup, StreamLogsPatternRollup}
 
 // IsAIEvent reports whether a log item belongs in StreamAILogs.
 func IsAIEvent(item *LogItem) bool {

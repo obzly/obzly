@@ -41,9 +41,9 @@ type LogParquetStore struct {
 	// uploader is nil without object storage (WithObjectStore); uploads are then
 	// a no-op.
 	uploader *logs_uploader.LogUploader
-	// rollupUploader uploads the logs stream's per-minute counts (logs_1m,
-	// built by the compactor); nil for other streams.
-	rollupUploader *logs_uploader.LogUploader
+	// rollupUploaders upload the logs stream's rollups (logs_1m and the
+	// tiers derived from it, built by the compactor); none for other streams.
+	rollupUploaders []*logs_uploader.LogUploader
 }
 
 type Option func(*options)
@@ -150,11 +150,15 @@ func New(dataDir string, opts ...Option) (*LogParquetStore, error) {
 		return nil, fmt.Errorf("failed to create log querier: %w", err)
 	}
 
-	var uploader, rollupUploader *logs_uploader.LogUploader
+	var uploader *logs_uploader.LogUploader
+	var rollupUploaders []*logs_uploader.LogUploader
 	if cfg.objectStore != nil {
 		uploader = logs_uploader.NewLogUploaderForStream(cfg.objectStore, cfg.stream)
 		if cfg.stream == logs_core.StreamLogs {
-			rollupUploader = logs_uploader.NewLogUploaderForStream(cfg.objectStore, logs_core.StreamLogsRollup)
+			for _, stream := range logs_core.LogRollupStreams {
+				rollupUploader := logs_uploader.NewLogUploaderForStream(cfg.objectStore, stream)
+				rollupUploaders = append(rollupUploaders, rollupUploader)
+			}
 		}
 		if _, ok := segments.TokenBloomColumns[cfg.stream]; ok {
 			blooms, err := segments.NewTokenBlooms(filepath.Join(dataDir, "spill", "token-bloom-"+cfg.stream))
@@ -166,15 +170,14 @@ func New(dataDir string, opts ...Option) (*LogParquetStore, error) {
 	}
 
 	return &LogParquetStore{
-		dataDir:     dataDir,
-		stream:      cfg.stream,
-		ingester:    ingester,
-		querier:     querier,
-		compactor:   compactor,
-		segmentRepo: &segments.SegmentRepository{},
-		uploader:    uploader,
-
-		rollupUploader: rollupUploader,
+		dataDir:         dataDir,
+		stream:          cfg.stream,
+		ingester:        ingester,
+		querier:         querier,
+		compactor:       compactor,
+		segmentRepo:     &segments.SegmentRepository{},
+		uploader:        uploader,
+		rollupUploaders: rollupUploaders,
 	}, nil
 }
 
@@ -393,12 +396,13 @@ func (s *LogParquetStore) UploadPendingSegments() error {
 	if _, err := s.uploader.UploadPending(ctx, uploadBatchLimit); err != nil {
 		return fmt.Errorf("failed to upload pending segments: %w", err)
 	}
-	if s.rollupUploader != nil {
-		if _, err := s.rollupUploader.UploadPending(ctx, uploadBatchLimit); err != nil {
-			return fmt.Errorf("failed to upload pending log rollups: %w", err)
+	var rollupErr error
+	for _, rollupUploader := range s.rollupUploaders {
+		if _, err := rollupUploader.UploadPending(ctx, uploadBatchLimit); err != nil {
+			rollupErr = errors.Join(rollupErr, fmt.Errorf("failed to upload pending log rollups: %w", err))
 		}
 	}
-	return nil
+	return rollupErr
 }
 
 // ReconcileSegments retires orphaned catalog rows, checks uploaded segments

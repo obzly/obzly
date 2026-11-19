@@ -23,8 +23,8 @@ spec:
       {{- include "obzly.podMetadata" (merge (dict "metrics" true) $ctx) | nindent 6 }}
     spec:
       {{- include "obzly.podSpec" (dict "root" . "tier" .Values.api) | nindent 6 }}
-      # Above the drain + HTTP/gRPC shutdown deadlines + the final flush.
-      terminationGracePeriodSeconds: {{ add .Values.api.drainSeconds 45 }}
+      # Above the drain + in-flight request grace + the final flush.
+      terminationGracePeriodSeconds: {{ add .Values.api.drainSeconds .Values.api.requestGraceSeconds 45 }}
       containers:
         - name: obzly
           {{- include "obzly.containerBase" . | nindent 10 }}
@@ -35,6 +35,8 @@ spec:
               value: "jetstream"
             - name: SHUTDOWN_DRAIN_SECONDS
               value: {{ .Values.api.drainSeconds | quote }}
+            - name: SHUTDOWN_REQUEST_GRACE_SECONDS
+              value: {{ .Values.api.requestGraceSeconds | quote }}
             {{- with include "obzly.otlpTlsEnv" . }}{{ . | nindent 12 }}{{ end }}
             {{- if $resultsTLS }}
             - name: QUERY_RESULTS_TLS_CA_FILE
@@ -110,5 +112,14 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ .Values.api.autoscaling.targetCPUUtilizationPercentage }}
+  # A Logs insight is a CPU burst of a minute or two; scaling down right after
+  # it stopped replicas that were still answering queries.
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.api.autoscaling.scaleDownStabilizationSeconds }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
 {{- end }}
 {{- end }}

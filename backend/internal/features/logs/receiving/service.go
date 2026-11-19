@@ -624,7 +624,9 @@ func sampleLogs(logs []*logs_core.LogItem, rules projects_models.LogSampleRules)
 	kept := logs[:0:0]
 	for _, log := range logs {
 		service, _ := log.Fields["service_name"].(string)
-		rate := rules.RateFor(service, string(log.Level), func() string { return logs_core.PatternHash(log.Message) })
+		rate := rules.RateFor(service, string(log.Level), func() []string {
+			return logs_core.PatternHashes(log.Message)
+		})
 		key := log.TraceID
 		if key == "" {
 			key = log.ID.String()

@@ -13,6 +13,7 @@ import (
 	logs_core "obzly/internal/features/logs/core"
 	projects_models "obzly/internal/features/projects/models"
 	projects_services "obzly/internal/features/projects/services"
+	"obzly/internal/storage/segments"
 	"obzly/internal/util/leaderlock"
 
 	"github.com/google/uuid"
@@ -43,6 +44,15 @@ const (
 	// settleTime: an hour is built this long after it closes (plus the L0
 	// buffer age with JetStream), so rows still being written are in it.
 	settleTime = 4 * time.Minute
+	// hourScanShare/Floor/Cap size an hour scan's DuckDB handle. A worker's
+	// search cap (1/16 of the pod, 256 MB at 4 GiB) ran out of memory on
+	// 5-minute slices of a busy project with multi-KB messages; the builder
+	// runs one scan at a time on one replica, so it can take more.
+	hourScanShare = 3.0 / 16
+	hourScanFloor = 512_000_000
+	hourScanCap   = 1_000_000_000
+	// hourScanThreads: each thread holds its own Parquet row-group buffers.
+	hourScanThreads = 1
 )
 
 // Builder summarises each closed hour of the projects that use Web
@@ -159,6 +169,7 @@ func (b *Builder) buildHour(ctx context.Context, settings *Settings, hour time.T
 	result, err := runScan(b.logs(), scanRequest{
 		projectID: settings.ProjectID, from: hour, to: hour.Add(time.Hour), keysFrom: hour, bucket: time.Hour,
 		options: optionsOf(settings), timeout: hourScanTimeout, slice: slice,
+		memoryLimit: hourScanMemory(), threads: hourScanThreads,
 	})
 	if err != nil {
 		return err
@@ -389,4 +400,10 @@ func logRetentionDays(projectID uuid.UUID) int {
 
 func hexSalt(salt []byte) string {
 	return hex.EncodeToString(salt)
+}
+
+// hourScanMemory is an hour scan's DuckDB memory limit in bytes.
+func hourScanMemory() int64 {
+	return segments.MemoryLimitBytes(
+		segments.ContainerShare(segments.ContainerMemoryLimit(), hourScanShare, hourScanFloor, hourScanCap))
 }

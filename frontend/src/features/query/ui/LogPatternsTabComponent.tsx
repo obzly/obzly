@@ -248,6 +248,14 @@ export const LogPatternsTabComponent = ({
             message="More patterns than one query counts: the smallest are left out."
           />
         )}
+        {response?.patternVersionSince && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-3"
+            message={`Patterns were regrouped on ${formatInTimezone(response.patternVersionSince, 'D MMM YYYY HH:mm', timezone)}: IDs, names and JSON values no longer make a pattern each. Until a week after that, New and Dropping leave out the patterns that changed.`}
+          />
+        )}
         <section aria-label="Patterns" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {kpi(
             'Patterns seen',

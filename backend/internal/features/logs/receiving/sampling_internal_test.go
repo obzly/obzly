@@ -94,3 +94,18 @@ func Test_SampleLogs_RuleWithPattern_SamplesOnlyThatPattern(t *testing.T) {
 	kept := sampleLogs([]*logs_core.LogItem{static, other, otherService}, rules)
 	require.Equal(t, []*logs_core.LogItem{other, otherService}, kept)
 }
+
+// A rule saved with a pattern's version 1 hash still matches the logs that
+// version 2 regrouped, and a rule with the version 2 hash matches them too.
+func Test_SampleLogs_WhenARuleHasAVersion1PatternHash_StillMatchesRegroupedLogs(t *testing.T) {
+	message := `order placed {"customer":"Ada Lovelace","city":"Contoso"}`
+	require.True(t, logs_core.PatternRegrouped(message))
+	for _, hash := range []string{logs_core.PatternHashOf(logs_core.MessagePatternV1(message)), logs_core.PatternHash(message)} {
+		rules := projects_models.LogSampleRules{{Pattern: hash, Rate: 0}}
+		log := &logs_core.LogItem{ID: uuid.New(), Level: logs_core.LogLevelInfo, Message: message}
+		require.Empty(t, sampleLogs([]*logs_core.LogItem{log}, rules), hash)
+	}
+	other := &logs_core.LogItem{ID: uuid.New(), Level: logs_core.LogLevelInfo, Message: "cache warmed"}
+	rules := projects_models.LogSampleRules{{Pattern: logs_core.PatternHash(message), Rate: 0}}
+	require.Len(t, sampleLogs([]*logs_core.LogItem{other}, rules), 1)
+}

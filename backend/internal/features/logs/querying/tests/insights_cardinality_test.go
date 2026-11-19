@@ -229,3 +229,43 @@ func generatedSuffix(i int) string {
 	}
 	return string(suffix)
 }
+
+// Within a week of a pattern version change, a pattern the new version
+// regrouped (it had one hash per name before) isn't new; a pattern that
+// really appeared still is.
+func Test_PatternTrends_WhenTheWeekReachesBeforeThePatternVersion_LeavesRegroupedPatternsOutOfNew(t *testing.T) {
+	router, owner, project, uniqueID := SetupBasicQueryTest(t, "Pattern trends version")
+	unlimited(project, owner.Token, router)
+	since := time.Now().UTC().Add(-2 * time.Hour)
+	logs_core.SetPatternVersionSinceForTest(since)
+	t.Cleanup(func() { logs_core.SetPatternVersionSinceForTest(time.Time{}) })
+	now := time.Now().UTC().Truncate(10 * time.Minute)
+	from := now.Add(-time.Hour)
+	logs := &insightLogs{uniqueID: uniqueID}
+	for i := range 20 {
+		logs.addMessages(from, 5, "event fresh "+letters(i)+" happened", "checkout")
+	}
+	for _, name := range []string{"Ada Lovelace", "Grace Hopper", "Alan Turing"} {
+		logs.addMessages(from, 4, `order placed {"customer":"`+name+`","city":"Contoso"}`, "checkout")
+	}
+	logs.submit(t, router, project.ID, owner.Token)
+
+	var response logs_core.PatternTrendsResponseDTO
+	test_utils.MakePostRequestAndUnmarshal(t, router, insightURL("pattern-trends", project.ID), "Bearer "+owner.Token,
+		logs_core.PatternTrendsRequestDTO{
+			Query:     BuildCondition("test_id", "equals", uniqueID),
+			TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &now},
+			Limit:     50,
+		}, http.StatusOK, &response)
+
+	require.NotNil(t, response.PatternVersionSince)
+	assert.WithinDuration(t, since, *response.PatternVersionSince, time.Second)
+	assert.Equal(t, 21, response.Distinct)
+	assert.Equal(t, 20, response.NewCount, "the order pattern was three patterns before")
+	for _, pattern := range response.Patterns {
+		if strings.HasPrefix(pattern.Sample, "order placed") {
+			assert.Equal(t, int64(12), pattern.Count)
+			assert.Equal(t, "", pattern.Change)
+		}
+	}
+}

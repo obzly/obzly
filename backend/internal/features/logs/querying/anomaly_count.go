@@ -23,8 +23,9 @@ const (
 	patternChangeCountLiveFor = 5 * time.Minute
 )
 
-// countPatternChanges answers a CountOnly request over whole minutes (all from logs_1m
-// where segments have per-minute counts), cached per project, query and ranges.
+// countPatternChanges answers a CountOnly request over whole minutes (all from rollups
+// where segments have them: whole hours hourly, the rest per minute), cached per
+// project, query and ranges.
 func (s *LogQueryService) countPatternChanges(
 	ctx context.Context,
 	projectID uuid.UUID,

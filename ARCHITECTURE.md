@@ -297,10 +297,19 @@ replacement of the structured builder, which stays available as an "Advanced fil
   only / hide logs like this" by message pattern - each row carries its `patternHash`, computed
   per returned row. Export downloads the loaded rows as CSV (visible columns) or JSON.
 - **Message patterns (`pattern_hash`).** `logs_core.PatternRules` masks UUIDs, timestamps, IPs, hex
-  ids and numbers (with an optional unit, so `12.5ms` and `3s` match) in a fixed order over a
-  message's first 1,024 characters (`PatternMaxChars`: the start tells a message's kind apart, and a
-  4 KB pretty-printed JSON message took ~0.35 ms against ~14 µs for a typical line), and the hash is
-  the first 12 hex chars of the MD5 of the result. The ingester stores it once per log in a
+  ids and numbers (with an optional unit, so `12.5ms` and `3s` match) in a fixed order (version 1),
+  then (version 2, `PatternVersion`) emails, words of 6+ characters with a digit (`<id>`),
+  Kubernetes pod suffixes, JSON string values and `key=value` values unless they are upper-case
+  constants with an underscore. Version 2 masks a message's first 4,096 characters and then keeps the
+  template's first 1,024 (`PatternMaxChars`: the start tells a message's kind apart; version 1 cut the
+  message first, so the cut moved with the values before it; a 4 KB pretty-printed JSON message took
+  ~0.35 ms against ~14 µs for a typical line). The hash is the first 12 hex chars of the MD5 of the
+  template, so a template version 2 doesn't change keeps its version 1 hash. Stored logs keep the
+  hash they were written with: `log_pattern_versions` records when version 2 started on a Site (only
+  if it already had logs), and comparisons whose baseline reaches before it (Patterns' 24 h and 7 day
+  baselines, pattern changes, the Anomalies badge, log pattern alerts) drop new patterns whose sample
+  `PatternRegrouped` and dropped ones whose sample now hashes differently; a CountOnly answer counts
+  neither. Sampling rules match a log's hash under both versions (`PatternHashes`). The ingester stores it once per log in a
   `pattern_hash` column (`rowFor`, every write path); rows of segments written before that column
   read it as NULL, and queries use `COALESCE(pattern_hash, <computed>)`
   (`logs_core.StoredPatternHashSQL`, a `systemFieldColumns` entry, so `pattern_hash:<h>` filters and
@@ -1635,6 +1644,17 @@ the audit columns with their consumers (items 6, 10c).
   summed per bucket (`logs_querier/aggregate_rollups.go`); results equal the raw counts exactly.
   Time presets start on a whole minute, so the range's oldest edge needs no raw read. The counts
   also hold the pod, for deploy markers.
+- **Smaller count tiers (`logs_1m_pods`, `logs_1h_patterns`).** `pattern_hash` can leave `logs_1m`
+  only ~8x smaller than the raw logs, so each segment's `logs_1m` file (not the raw segment) is
+  rolled up again, with the same `stats.source`: `logs_1m_pods` is `logs_1m` without the pattern
+  (a few dozen rows a minute), `logs_1h_patterns` counts per hour by level, service and pattern.
+  The same pass builds them after `logs_1m`, with their own budget (50 segments a project a pass,
+  starting none after 30 s), so a backfill of existing segments takes a few passes and never delays
+  `logs_1m`. Counts pick, per segment, the smallest tier that answers (`logs_querier/rollup_tiers.go`):
+  no pattern among the group and filter fields - `logs_1m_pods` for whole minutes; only level,
+  service and pattern - `logs_1h_patterns` for whole hours (in histograms only with whole-hour
+  buckets), `logs_1m` for the other whole minutes; partial minutes raw. A segment lacking a tier
+  falls back to `logs_1m`, then raw, and each segment's time is read from exactly one input.
 - **Grouped counts in the merge.** An unbucketed top N and the Logs insight tabs (Patterns, Volume &
   noise, Health map, Explain, Anomalies) count per group key in one or more time windows
   (`logs_querier/grouped_counts.go`, `ExecuteGroupWindows`): fragments sum each key per window (count

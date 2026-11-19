@@ -1,12 +1,14 @@
 package logs_livetail
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"sync"
 	"time"
 
+	"obzly/internal/config"
 	logs_core "obzly/internal/features/logs/core"
 	users_models "obzly/internal/features/users/models"
 
@@ -156,7 +158,17 @@ func (c *Controller) TailLogs(ctx *gin.Context) {
 		return nil
 	}
 
-	requestCtx := ctx.Request.Context()
+	// A stopping replica ends its tails: the client reconnects (with a
+	// backfill) to another one instead of holding this one's shutdown.
+	requestCtx, endTail := context.WithCancel(ctx.Request.Context())
+	defer endTail()
+	go func() {
+		select {
+		case <-config.ServingStopped():
+			endTail()
+		case <-requestCtx.Done():
+		}
+	}()
 
 	// The heartbeat starts only after "ready" is written, so a heartbeat can never
 	// beat "ready" onto the wire (the client relies on ready being first).

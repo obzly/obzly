@@ -25252,6 +25252,10 @@
                     "description": "NewCount, SpikeCount, DropCount: how many patterns changed each way, before Limit.",
                     "type": "integer"
                 },
+                "patternVersionSince": {
+                    "description": "PatternVersionSince is set when the baseline reaches back before the\ncurrent pattern version started: patterns it regrouped are left out of\nthe new and dropped ones (a CountOnly answer counts neither).",
+                    "type": "string"
+                },
                 "spikeCount": {
                     "type": "integer"
                 }
@@ -25353,6 +25357,10 @@
                 "partial": {
                     "description": "Partial: more patterns than one query counts; the smallest are left out.",
                     "type": "boolean"
+                },
+                "patternVersionSince": {
+                    "description": "PatternVersionSince is set when the 24 h or 7 day comparison reaches\nback before the current pattern version started: patterns it regrouped\nare left out of the new and dropping ones.",
+                    "type": "string"
                 },
                 "patterns": {
                     "type": "array",

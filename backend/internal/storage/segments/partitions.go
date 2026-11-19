@@ -18,6 +18,7 @@ import (
 // any other stream lands in stream_segments_other.
 var PartitionedStreams = []string{
 	"logs", "ai_logs", "spans", "metrics", "metrics_series", "metrics_5m", "metrics_1h", "logs_1m",
+	"logs_1m_pods", "logs_1h_patterns",
 }
 
 // partitionMonthsAhead: months created ahead of time, so new rows never land
@@ -30,7 +31,8 @@ const partitionMonthsAhead = 3
 const dropLockTimeout = "2s"
 
 // monthPartitionName matches a stream's month partition and captures YYYYMM.
-var monthPartitionName = regexp.MustCompile(`^stream_segments_[a-z_]+_(\d{6})$`)
+// Stream names have digits too (logs_1m, metrics_5m).
+var monthPartitionName = regexp.MustCompile(`^stream_segments_[a-z0-9_]+_(\d{6})$`)
 
 // errPartitionNotEmpty makes the drop transaction roll back, releasing the
 // stream's lock without dropping anything.

@@ -40,4 +40,6 @@ export interface PatternChangesResponse {
   dropCount?: number;
   /** False when a countOnly request wasn't answered. */
   counted?: boolean;
+  /** Set when the baseline reaches back before the current pattern version: regrouped patterns are left out of new and dropped (countOnly counts neither). */
+  patternVersionSince?: string;
 }

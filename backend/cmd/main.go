@@ -841,12 +841,18 @@ func startServerWithGracefulShutdown(log *slog.Logger, app *gin.Engine, grpcServ
 	}
 
 	// Stop accepting work in every protocol before flushing: a request arriving
-	// after the flush would write rows that are never flushed. 10s grace for
-	// in-flight requests.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// after the flush would write rows that are never flushed. Ingest requests
+	// are short; shutdownIngestWait covers them. Live Tail streams end here.
+	srv.RegisterOnShutdown(config.StopServing)
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownIngestWait)
 	defer cancel()
+	idle := true
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Error("Server forced to shutdown:", "error", err)
+		idle = false
+		if !errors.Is(err, context.DeadlineExceeded) {
+			log.Error("HTTP server shutdown failed", "error", err)
+		}
 	}
 	// nil on a control plane, which never starts the OTLP gRPC listener.
 	if grpcServer != nil {
@@ -855,25 +861,49 @@ func startServerWithGracefulShutdown(log *slog.Logger, app *gin.Engine, grpcServ
 
 	// A control plane has no ingest pipeline or segment buffers; these steps would
 	// panic on its unwired storage engine.
-	if !config.GetEnv().ServiceMode.RunsSignalStorage() {
-		log.Info("Server gracefully stopped")
-		return
+	if config.GetEnv().ServiceMode.RunsSignalStorage() {
+		// Before the flush below, so buffered self-trace spans land in segments.
+		stopSelfTracing(log)
+
+		// Flush buffered rows, or they are lost. Every producer is stopped by now.
+		flushAllSegmentsOnce(log)
+
+		// Last chance for this replica's newest segments: on an emptyDir they
+		// die with the pod.
+		uploadOwnSegmentsBeforeExit(log)
+
+		stopIngestConsumers(log)
+		broker.ShutdownDefault()
 	}
 
-	// Before the flush below, so buffered self-trace spans land in segments.
-	stopSelfTracing(log)
-
-	// Flush buffered rows, or they are lost. Every producer is stopped by now.
-	flushAllSegmentsOnce(log)
-
-	// Last chance for this replica's newest segments: on an emptyDir they
-	// die with the pod.
-	uploadOwnSegmentsBeforeExit(log)
-
-	stopIngestConsumers(log)
-	broker.ShutdownDefault()
+	// Data is safe now; queries still running (a Logs query takes up to 170 s)
+	// may finish within SHUTDOWN_REQUEST_GRACE_SECONDS. If the pod is killed
+	// first, only they are cut off.
+	if !idle {
+		waitForRequests(log, srv, started)
+	}
 
 	log.Info("Server gracefully stopped")
+}
+
+// shutdownIngestWait: how long in-flight requests get before the buffered
+// rows are flushed; ingest requests finish well within it.
+const shutdownIngestWait = 10 * time.Second
+
+// waitForRequests waits for the HTTP requests still running, until
+// SHUTDOWN_REQUEST_GRACE_SECONDS after the server stopped accepting them.
+func waitForRequests(log *slog.Logger, srv *http.Server, started time.Time) {
+	grace := time.Duration(config.GetEnv().ShutdownRequestGraceSeconds) * time.Second
+	remaining := grace - time.Since(started)
+	if remaining <= 0 {
+		return
+	}
+	log.Info("Waiting for in-flight requests", "upTo", remaining)
+	ctx, cancel := context.WithTimeout(context.Background(), remaining)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Warn("In-flight requests still running at the end of the grace period", "grace", grace)
+	}
 }
 
 // grpcShutdownTimeout bounds GracefulStop, which otherwise waits forever on

@@ -271,6 +271,12 @@ type EnvVariables struct {
 	// (default) suits a single container; behind a load balancer set it above the
 	// readiness probe period, and terminationGracePeriodSeconds above it plus shutdown.
 	ShutdownDrainSeconds int `env:"SHUTDOWN_DRAIN_SECONDS"`
+	// ShutdownRequestGraceSeconds is how long in-flight requests may finish
+	// after the drain (0: DefaultShutdownRequestGraceSeconds). A Logs query
+	// runs up to 170 s; a replica stopped by a rollout or a scale-down cut
+	// them off after 10 s (502 through the control plane). Buffered rows are
+	// flushed first; set terminationGracePeriodSeconds above drain + this.
+	ShutdownRequestGraceSeconds int `env:"SHUTDOWN_REQUEST_GRACE_SECONDS"`
 	// SelfTracingSampleRateRaw is SELF_TRACING_SAMPLE_RATE as given: the fraction (0 to
 	// 1) of this replica's requests and background passes traced into the system
 	// project. Unset means DefaultSelfTracingSampleRate; "0" off. Read it through
@@ -559,6 +565,17 @@ func loadEnvVariables() {
 		os.Exit(1)
 	}
 
+	if env.ShutdownRequestGraceSeconds < 0 || env.ShutdownRequestGraceSeconds > MaxShutdownDrainSeconds {
+		log.Error(
+			"SHUTDOWN_REQUEST_GRACE_SECONDS must be from 0 to 300",
+			"value", env.ShutdownRequestGraceSeconds,
+		)
+		os.Exit(1)
+	}
+	if env.ShutdownRequestGraceSeconds == 0 {
+		env.ShutdownRequestGraceSeconds = DefaultShutdownRequestGraceSeconds
+	}
+
 	// Service mode
 	if env.ServiceMode == "" {
 		env.ServiceMode = ServiceModeAll
@@ -773,6 +790,11 @@ const (
 	// MaxShutdownDrainSeconds caps SHUTDOWN_DRAIN_SECONDS; Kubernetes kills
 	// the pod at terminationGracePeriodSeconds anyway.
 	MaxShutdownDrainSeconds = 300
+	// DefaultShutdownRequestGraceSeconds is above a Logs query's 170 s
+	// deadline. Buffered rows are flushed before the wait, so a container
+	// stopped sooner (Docker's 10 s, a short terminationGracePeriodSeconds)
+	// only cuts the queries off.
+	DefaultShutdownRequestGraceSeconds = 180
 	// DefaultSelfTracingSampleRate: 1% of requests.
 	DefaultSelfTracingSampleRate = 0.01
 )

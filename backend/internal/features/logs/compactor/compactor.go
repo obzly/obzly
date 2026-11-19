@@ -189,12 +189,14 @@ func (c *LogCompactor) DeleteAllForProject(projectID uuid.UUID) (int, error) {
 		return 0, fmt.Errorf("failed to delete segments: %w", err)
 	}
 	if c.stream == logs_core.StreamLogs {
-		rollups, err := c.segmentRepo.DeleteByProject(projectID, logs_core.StreamLogsRollup)
-		if err != nil {
-			return 0, fmt.Errorf("failed to delete log rollups: %w", err)
-		}
-		if err := c.deleteSegmentData(rollups); err != nil {
-			return 0, err
+		for _, stream := range logs_core.LogRollupStreams {
+			rollups, err := c.segmentRepo.DeleteByProject(projectID, stream)
+			if err != nil {
+				return 0, fmt.Errorf("failed to delete %s rollups: %w", stream, err)
+			}
+			if err := c.deleteSegmentData(rollups); err != nil {
+				return 0, err
+			}
 		}
 	}
 

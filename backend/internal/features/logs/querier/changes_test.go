@@ -67,3 +67,40 @@ func Test_ExecutePatternChanges_NewSpikingAndDroppingPatterns(t *testing.T) {
 	require.Len(t, errorsOnly.Changes, 1)
 	assert.Equal(t, logs_core.PatternChangeNew, errorsOnly.Changes[0].Change)
 }
+
+// A baseline from before the current pattern version: the Anomalies count
+// leaves new and dropped patterns out (it can't tell regrouped ones apart)
+// and says why; spikes still count.
+func Test_ExecutePatternChanges_CountOnly_WhenTheBaselineIsBeforeThePatternVersion_CountsSpikesOnly(t *testing.T) {
+	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	var items []*logs_core.LogItem
+	add := func(hour int, n int, format string) {
+		for i := range n {
+			items = append(items, &logs_core.LogItem{
+				Timestamp: base.Add(time.Duration(hour)*time.Hour + time.Duration(i)*time.Minute),
+				Level:     logs_core.LogLevelInfo, Message: fmt.Sprintf(format, i),
+			})
+		}
+	}
+	add(1, 8, "payment %d failed")
+	add(0, 5, "retry %d scheduled")
+	add(1, 20, "retry %d scheduled")
+	add(0, 10, "cache %d warmed")
+	projectID, querier := seedProject(t, items)
+	since := base.Add(30 * time.Minute)
+	logs_core.SetPatternVersionSinceForTest(since)
+	t.Cleanup(func() { logs_core.SetPatternVersionSinceForTest(time.Time{}) })
+
+	response, err := querier.ExecutePatternChanges(context.Background(), projectID, &logs_core.PatternChangesRequestDTO{
+		Current:   &logs_core.TimeRangeDTO{From: new(base.Add(time.Hour)), To: new(base.Add(2*time.Hour - time.Nanosecond))},
+		Baseline:  &logs_core.TimeRangeDTO{From: &base, To: new(base.Add(time.Hour - time.Nanosecond))},
+		CountOnly: true,
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, response.PatternVersionSince)
+	assert.True(t, since.Equal(*response.PatternVersionSince))
+	assert.Equal(t, 0, response.NewCount)
+	assert.Equal(t, 0, response.DropCount)
+	assert.Equal(t, 1, response.SpikeCount)
+}

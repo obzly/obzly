@@ -3552,6 +3552,12 @@ definitions:
         description: 'NewCount, SpikeCount, DropCount: how many patterns changed each
           way, before Limit.'
         type: integer
+      patternVersionSince:
+        description: |-
+          PatternVersionSince is set when the baseline reaches back before the
+          current pattern version started: patterns it regrouped are left out of
+          the new and dropped ones (a CountOnly answer counts neither).
+        type: string
       spikeCount:
         type: integer
     type: object
@@ -3625,6 +3631,12 @@ definitions:
         description: 'Partial: more patterns than one query counts; the smallest are
           left out.'
         type: boolean
+      patternVersionSince:
+        description: |-
+          PatternVersionSince is set when the 24 h or 7 day comparison reaches
+          back before the current pattern version started: patterns it regrouped
+          are left out of the new and dropping ones.
+        type: string
       patterns:
         items:
           $ref: '#/definitions/logs_core.PatternTrendDTO'
