@@ -1,3 +1,4 @@
+import type { SSOMFATrust } from './SSOMFATrust';
 import type { SSOProviderType } from './SSOProviderType';
 
 export interface UpdateSSOConnectorRequest {
@@ -10,7 +11,7 @@ export interface UpdateSSOConnectorRequest {
   scopes: string;
   groupsClaim: string;
   requireVerifiedEmail: boolean;
-  trustIdpMfa: boolean;
+  mfaTrust: SSOMFATrust;
   buttonLabel: string;
   enabled: boolean;
 }

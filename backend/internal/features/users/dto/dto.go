@@ -221,6 +221,9 @@ type OAuthCallbackResponseDTO struct {
 	MFARequired      bool   `json:"mfaRequired,omitempty"`
 	MFASetupRequired bool   `json:"mfaSetupRequired,omitempty"`
 	MFAToken         string `json:"mfaToken,omitempty"`
+	// IdPMFANotReported: an SSO sign-in asked for Obzly's MFA and the
+	// provider's ID token reported no second factor (amr), so the UI can say why.
+	IdPMFANotReported bool `json:"idpMfaNotReported,omitempty"`
 }
 
 // SiteExchangeRequestDTO is the body of POST /api/v1/auth/site/exchange.

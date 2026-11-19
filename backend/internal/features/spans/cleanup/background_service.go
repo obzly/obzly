@@ -199,7 +199,7 @@ func (s *SpanCleanupBackgroundService) compactAllProjects(owned func(uuid.UUID) 
 		processedProjects++
 	}
 
-	s.logger.Info("Compaction completed",
+	s.logger.Debug("Compaction completed",
 		slog.Int("processedProjects", processedProjects),
 		slog.Int("compactionFailures", compactionFailures))
 
@@ -284,7 +284,7 @@ func (s *SpanCleanupBackgroundService) enforceAllProjectsRetention() error {
 		processedProjects++
 	}
 
-	s.logger.Info("Span retention cleanup completed",
+	s.logger.Debug("Span retention cleanup completed",
 		slog.Int("processedProjects", processedProjects),
 		slog.Int("cleanupFailures", cleanupFailures))
 

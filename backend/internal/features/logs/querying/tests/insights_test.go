@@ -263,11 +263,14 @@ func (l *insightLogs) add(
 	}
 }
 
-// submit sends the logs in one batch and waits until the recent ones can
-// be searched (the older ones are flushed with them).
+// submit sends the logs in batches the receiver accepts and waits until the
+// recent ones can be searched (the older ones are flushed with them).
 func (l *insightLogs) submit(t *testing.T, router *gin.Engine, projectID uuid.UUID, token string) {
-	test_utils.MakePostRequest(t, router, fmt.Sprintf("/api/v1/logs/receiving/%s", projectID.String()), "",
-		&logs_receiving.SubmitLogsRequestDTO{Logs: l.items}, http.StatusAccepted)
+	for start := 0; start < len(l.items); start += logs_receiving.MaxBatchSize {
+		batch := l.items[start:min(start+logs_receiving.MaxBatchSize, len(l.items))]
+		test_utils.MakePostRequest(t, router, fmt.Sprintf("/api/v1/logs/receiving/%s", projectID.String()), "",
+			&logs_receiving.SubmitLogsRequestDTO{Logs: batch}, http.StatusAccepted)
+	}
 	WaitForLogsToBeIndexed(t, router, projectID, min(l.recent, 50), l.uniqueID, "Bearer "+token)
 }
 

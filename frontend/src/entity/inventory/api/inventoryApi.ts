@@ -4,7 +4,14 @@ import { getApplicationServer } from '../../../constants';
 import RequestOptions from '../../../shared/api/RequestOptions';
 import { apiHelper } from '../../../shared/api/apiHelper';
 import type { PromQLRequest, PromQLResponse } from '../../synthetics';
-import type { AssetChange, AssetDetail, AssetList, InventorySummary } from '../model/Inventory';
+import type {
+  AssetChange,
+  AssetDetail,
+  AssetList,
+  AssetQuery,
+  InventorySummary,
+} from '../model/Inventory';
+import { assetSearchParams } from './assetSearchParams';
 
 const base = (siteId: string) =>
   siteId
@@ -21,9 +28,12 @@ export const inventoryApi = {
       withSignal(signal),
     ),
 
-  /** Up to 5000 assets, worst health first. */
-  assets: (siteId: string, signal?: AbortSignal): Promise<AssetList> =>
-    apiHelper.fetchGetJson(`${base(siteId)}/inventory/assets?limit=5000`, withSignal(signal)),
+  /** A page of the matching assets (worst health first unless sorted) and how many matched. */
+  assets: (siteId: string, query: AssetQuery, signal?: AbortSignal): Promise<AssetList> =>
+    apiHelper.fetchGetJson(
+      `${base(siteId)}/inventory/assets?${assetSearchParams(query).toString()}`,
+      withSignal(signal),
+    ),
 
   asset: (siteId: string, id: string, signal?: AbortSignal): Promise<AssetDetail> =>
     apiHelper.fetchGetJson(`${base(siteId)}/inventory/assets/${id}`, withSignal(signal)),

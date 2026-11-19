@@ -397,6 +397,27 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
     very large hours or series files.
   - **Verify:** no "inventory build failed" or "web analytics rollups failed" lines in the worker
     logs, and the inventory-build query above is about 12 again.
+- **v1.2.2** - SSO connectors get a three-way MFA trust (`mfaTrust`: `off`, `amr`, `always`) in
+  place of the on/off "Provider enforces MFA" switch.
+  - **Migration:** one, additive: `oauth_connectors.mfa_trust` (default `off`); connectors that
+    trusted the provider's MFA become `amr`, so sign-ins behave as before. `trust_idp_mfa` stays
+    and is kept in step (`mfa_trust <> 'off'`), so a v1.2.1 pod mid-rollout or after a rollback
+    treats an `always` connector as `amr` - stricter, never looser.
+  - **API:** `trustIdpMfa` is still accepted and returned (`true` = `amr` on create; `true` keeps
+    an existing `always`); prefer `mfaTrust`. An unknown `mfaTrust` is a 400.
+  - **Infrastructure API:** `GET /inventory/assets` adds `offset`, `sort`, `order`, `parent`,
+    `roots`, `childCounts` and `ancestors`; an unknown `sort` or `order` is now a 400, and `q` no
+    longer matches attribute keys. A v1.2.2 control plane in front of a v1.2.1 Site still works, but
+    that Site ignores paging and sorting (rows can repeat across pages) and its summary has no
+    regions or clusters, so upgrade the Sites first as usual.
+  - **Logs insights:** Patterns, Volume & noise, Health map, Explain and the Anomalies badge pick
+    their top rows in the merge query. The new fragments travel in the existing wire format, but
+    upgrade a Site's api and queriers together.
+  - **Web analytics:** no new settings. Hours that failed before are built again on the next
+    passes (oldest last); a failure now logs `web analytics hour failed` with the hour and slice.
+  - **Verify:** no `web analytics rollups failed` or `web analytics hour failed` lines in the
+    worker logs after an hour, and Logs › Patterns and Volume & noise answer without the API's
+    memory jumping past its usual working set.
 
 ## Order
 

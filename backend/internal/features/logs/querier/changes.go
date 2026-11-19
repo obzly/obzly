@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -53,65 +52,64 @@ func (q *LogQuerier) ExecutePatternChanges(
 
 	curFrom, curTo := resolveTimeRange(request.Current)
 	baseFrom, baseTo := resolveTimeRange(request.Baseline)
-	current, err := q.patternCounts(ctx, projectID, request.Query, curFrom, curTo, request.ScanBudget)
-	if err != nil {
-		return nil, err
-	}
-	baseline, err := q.patternCounts(ctx, projectID, request.Query, baseFrom, baseTo, request.ScanBudget)
-	if err != nil {
-		return nil, err
-	}
 	scale := 1.0
 	if baseLen := baseTo.Sub(baseFrom); baseLen > 0 {
 		scale = float64(curTo.Sub(curFrom)) / float64(baseLen)
 	}
+	selectLimit := limit
+	if request.CountOnly {
+		selectLimit = 0
+	}
+	// The kinds are told apart in the merge (w0: current, w1: baseline,
+	// expected = w1 * scale), so only the listed patterns reach Go.
+	expected := "(w1 * ?::DOUBLE)"
+	counted, err := q.groupWindows(ctx, projectID, &logs_core.GroupWindowsRequestDTO{
+		Query: request.Query, GroupField: logs_core.PatternHashField,
+		Windows: []logs_core.CountWindowDTO{{From: curFrom, To: curTo}, {From: baseFrom, To: baseTo}},
+		Selections: []logs_core.GroupSelectionDTO{
+			{Where: "w1 = 0 AND w0 >= ?", WhereArgs: []any{minCount}, OrderBy: "w0 DESC", Limit: selectLimit},
+			{
+				Where:     "w1 > 0 AND w0 >= ? AND w0 >= ?::DOUBLE * " + expected,
+				WhereArgs: []any{minCount, spikeFactor, scale},
+				OrderBy:   "w0 / " + expected + " DESC, w0 DESC", OrderArgs: []any{scale}, Limit: selectLimit,
+			},
+			{
+				Where:     expected + " >= ? AND w0 <= ?::DOUBLE * " + expected,
+				WhereArgs: []any{scale, minCount, dropFactor, scale},
+				OrderBy:   "w0 / " + expected + " ASC, w1 DESC", OrderArgs: []any{scale}, Limit: selectLimit,
+			},
+		},
+		ScanBudget: request.ScanBudget,
+	})
+	if err != nil {
+		return nil, err
+	}
 
-	response := &logs_core.PatternChangesResponseDTO{Changes: []logs_core.PatternChangeDTO{}, Counted: true}
-	var added, rising, falling []logs_core.PatternChangeDTO
-	hashes := map[string]bool{}
-	for hash := range current {
-		hashes[hash] = true
+	response := &logs_core.PatternChangesResponseDTO{
+		Changes: []logs_core.PatternChangeDTO{}, Counted: true,
+		CurrentTotal: counted.Totals[0], BaselineTotal: counted.Totals[1],
+		NewCount: int(counted.Selections[0].Matched), SpikeCount: int(counted.Selections[1].Matched),
+		DropCount: int(counted.Selections[2].Matched),
 	}
-	for hash := range baseline {
-		hashes[hash] = true
-	}
-	for hash := range hashes {
-		now, before := current[hash], baseline[hash]
-		response.CurrentTotal += now
-		response.BaselineTotal += before
-		expected := float64(before) * scale
-		change := logs_core.PatternChangeDTO{Hash: hash, Current: now, Baseline: before}
-		switch {
-		case before == 0 && now >= minCount:
-			change.Change, change.Ratio = logs_core.PatternChangeNew, NewPatternRatio
-			added = append(added, change)
-		case before > 0 && now >= minCount && float64(now) >= spikeFactor*expected:
-			change.Change, change.Ratio = logs_core.PatternChangeSpike, float64(now)/expected
-			rising = append(rising, change)
-		case expected >= float64(minCount) && float64(now) <= dropFactor*expected:
-			change.Change, change.Ratio = logs_core.PatternChangeDrop, float64(now)/expected
-			falling = append(falling, change)
-		}
-	}
-	response.NewCount, response.SpikeCount, response.DropCount = len(added), len(rising), len(falling)
 	if request.CountOnly {
 		return response, nil
 	}
-	sort.Slice(added, func(i, j int) bool { return byCountThenHash(added[i], added[j]) })
-	sort.Slice(rising, func(i, j int) bool {
-		if rising[i].Ratio != rising[j].Ratio {
-			return rising[i].Ratio > rising[j].Ratio
+	changes := func(selection logs_core.GroupSelectionResultDTO, kind string) []logs_core.PatternChangeDTO {
+		result := make([]logs_core.PatternChangeDTO, 0, len(selection.Rows))
+		for _, row := range selection.Rows {
+			change := logs_core.PatternChangeDTO{
+				Hash: row.Key, Current: row.Counts[0], Baseline: row.Counts[1], Change: kind, Ratio: NewPatternRatio,
+			}
+			if kind != logs_core.PatternChangeNew {
+				change.Ratio = float64(change.Current) / (float64(change.Baseline) * scale)
+			}
+			result = append(result, change)
 		}
-		return byCountThenHash(rising[i], rising[j])
-	})
-	sort.Slice(falling, func(i, j int) bool {
-		if falling[i].Ratio != falling[j].Ratio {
-			return falling[i].Ratio < falling[j].Ratio
-		}
-		return falling[i].Baseline > falling[j].Baseline
-	})
-	added, rising, falling = added[:min(len(added), limit)], rising[:min(len(rising), limit)],
-		falling[:min(len(falling), limit)]
+		return result
+	}
+	added := changes(counted.Selections[0], logs_core.PatternChangeNew)
+	rising := changes(counted.Selections[1], logs_core.PatternChangeSpike)
+	falling := changes(counted.Selections[2], logs_core.PatternChangeDrop)
 
 	// New and rising patterns are described from the current range, dropped
 	// ones from the baseline.
@@ -141,35 +139,6 @@ func (q *LogQuerier) ExecutePatternChanges(
 	}
 	response.Changes = append(grown, falling...)
 	return response, nil
-}
-
-func byCountThenHash(a, b logs_core.PatternChangeDTO) bool {
-	if a.Current != b.Current {
-		return a.Current > b.Current
-	}
-	return a.Hash < b.Hash
-}
-
-// patternCounts is each pattern's count of logs matching filter in [from, to].
-func (q *LogQuerier) patternCounts(
-	ctx context.Context, projectID uuid.UUID, filter *logs_core.QueryNode, from, to time.Time, scanBudget int64,
-) (map[string]int64, error) {
-	// One time bucket as wide as the range, in whole minutes: answered from
-	// per-minute counts where segments have them.
-	width := to.Sub(from).Truncate(time.Minute) + time.Minute
-	response, err := q.ExecuteAggregation(ctx, projectID, &logs_core.AggregationRequestDTO{
-		Query: filter, TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to},
-		GroupField: logs_core.PatternHashField, BucketMs: width.Milliseconds(), Limit: maxAggregationLimit,
-		ScanBudget: scanBudget,
-	})
-	if err != nil {
-		return nil, err
-	}
-	counts := map[string]int64{}
-	for _, bucket := range response.Buckets {
-		counts[bucket.GroupKey] += bucket.Count
-	}
-	return counts, nil
 }
 
 // ExecutePatternSamples is the template, newest log and level of each of

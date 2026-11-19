@@ -95,7 +95,10 @@ func Test_InventoryAPI_BuildThenRead_OnlyShowsTheUsersProjects(t *testing.T) {
 	test_utils.MakeGetRequestAndUnmarshal(t, router, "/api/v1/inventory/summary", auth, http.StatusOK, &summary)
 	assert.Equal(t, int64(len(list.Assets)), summary.Total)
 	assert.Equal(t, int64(4), sum(summary.Kinds[KindPod]))
-	assert.Equal(t, []ProjectCountDTO{{ID: project.ID, Name: "Inventory A", Assets: summary.Total}}, summary.Projects)
+	require.Len(t, summary.Projects, 1)
+	assert.Equal(t, ProjectCountDTO{ID: project.ID, Name: "Inventory A", Assets: summary.Total,
+		Live: summary.Projects[0].Live}, summary.Projects[0])
+	assert.Equal(t, summary.Live, summary.Projects[0].Live, "one project: its live counts are the total's")
 
 	// A later build records what changed.
 	now = testNow.Add(15 * time.Minute)

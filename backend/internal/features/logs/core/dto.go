@@ -64,13 +64,29 @@ type ScopedSQLRequestDTO struct {
 	// Table, when set, shapes the "logs" table: a trusted SELECT over the
 	// relation "raw" (timestamp, level, message, client_ip, trace_id,
 	// span_id, fields), so only the rows and columns the statements read
-	// are materialized. TableArgs bind its placeholders.
+	// are materialized. TableArgs bind its placeholders. It streams from
+	// the segment scan in one statement, so it must not have a WHERE of its
+	// own (DuckDB pushes one down through the shape's projections, copying
+	// their expressions): TableFilter is applied to the result instead.
 	Table     string
 	TableArgs []any
+	// TableFilter, with Table, is a trusted predicate over Table's columns;
+	// rows it doesn't hold for are removed once the table exists.
+	TableFilter string
+	// RawColumns, with Table, are the raw columns Table reads (default:
+	// all); a segment scan reads only these.
+	RawColumns []string
+	// RawFilter, with Table, is a trusted predicate over the raw columns
+	// added to the segment scan, so rows Table would drop are never read
+	// into it. Plain column predicates only (string functions, no JSON or
+	// casts that can fail): DuckDB evaluates it inside the Parquet scan.
+	RawFilter string
 	// Timeout bounds the statements (0: the default); MaxRows caps each
-	// statement's rows (0: the default).
-	Timeout time.Duration
-	MaxRows int
+	// statement's rows (0: the default). Deadline, when set, ends preparing
+	// the table and the statements by then, whatever the timeouts.
+	Timeout  time.Duration
+	MaxRows  int
+	Deadline time.Time
 }
 
 type ScopedSQLStatement struct {

@@ -144,6 +144,21 @@ type Request struct {
 	// Tokens every matching row holds (ID-like search terms): executors
 	// skip segments whose token filter lacks one (segments.SkipByTokens).
 	Tokens []string
+	// Sources are more inputs with their own stream, files and fragment SQL
+	// (same result columns); FinalSQL merges their results with the main
+	// ones. Per-minute counts and raw rows add up in one merge this way, so
+	// only its final rows reach the caller. Not with Slices.
+	Sources []Source
+}
+
+// Source is one more input of a Request (see Request.Sources).
+type Source struct {
+	Stream       string
+	Segments     []*segments.SegmentRecord
+	LocalFiles   []segments.ResolvedFile
+	FragmentSQL  string
+	FragmentArgs []any
+	Tokens       []string
 }
 
 // Slice is one whole fragment of a sliced Request. It runs in-process when
@@ -193,13 +208,28 @@ func (c *Coordinator) Query(ctx context.Context, request Request, scan func(*sql
 			planned += record.SizeBytes
 		}
 	}
+	for _, source := range request.Sources {
+		for _, record := range source.Segments {
+			planned += record.SizeBytes
+		}
+	}
 	telemetry.QueryPlannedBytes.WithLabelValues(request.Stream).Observe(float64(planned))
 	if request.ScanBudget > 0 && planned > request.ScanBudget {
 		telemetry.QueryRejected.WithLabelValues(request.Stream, "scan_budget").Inc()
 		return &ScanBudgetError{Planned: planned, Budget: request.ScanBudget}
 	}
 
+	if len(request.Sources) > 0 && len(request.Slices) > 0 {
+		return errors.New("a query can't have both sources and slices")
+	}
 	parts := c.plan(request)
+	for i := range request.Sources {
+		source := &request.Sources[i]
+		for _, p := range c.plan(Request{Stream: source.Stream, Segments: source.Segments, LocalFiles: source.LocalFiles}) {
+			p.source = source
+			parts = append(parts, p)
+		}
+	}
 	if len(parts) == 0 {
 		return ErrNoData
 	}
@@ -215,7 +245,8 @@ func (c *Coordinator) Query(ctx context.Context, request Request, scan func(*sql
 	// it, so that holds only in-process.
 	fragmentSQL, fragmentArgs := request.FragmentSQL, request.FragmentArgs
 	finalSQL, finalArgs := request.FinalSQL, request.FinalArgs
-	if len(parts) == 1 && (parts[0].executor == nil || parts[0].fallback != nil) && len(request.Slices) == 0 {
+	if len(parts) == 1 && (parts[0].executor == nil || parts[0].fallback != nil) && len(request.Slices) == 0 &&
+		parts[0].source == nil {
 		if request.SingleSQL != "" {
 			fragmentSQL, fragmentArgs = request.SingleSQL, request.SingleArgs
 		} else {
@@ -309,12 +340,14 @@ func Ranked(record *segments.SegmentRecord, executors []Executor) []Executor {
 // part is one fragment to run: on a remote executor, or in-process when
 // executor is nil. A slice's part has its own SQL and is never split. A
 // part with a fallback runs that (in-process, whole) if its executor fails.
+// A source's part runs the source's stream and SQL.
 type part struct {
 	executor   Executor
 	segments   []*segments.SegmentRecord
 	localFiles []segments.ResolvedFile
 	slice      *Slice
 	fallback   *part
+	source     *Source
 }
 
 // fragmentRun collects one query's fragment results.
@@ -472,6 +505,10 @@ func (r *fragmentRun) execute(ctx context.Context, p part, failed map[string]boo
 	if p.slice != nil {
 		fragment.SQL, fragment.Args = p.slice.SQL, p.slice.Args
 	}
+	if p.source != nil {
+		fragment.Stream, fragment.SQL, fragment.Args, fragment.Tokens =
+			p.source.Stream, p.source.FragmentSQL, p.source.FragmentArgs, p.source.Tokens
+	}
 	executor, where := p.executor, telemetry.QueryWhereRemote
 	if executor == nil {
 		executor, where = r.coordinator.local, telemetry.QueryWhereLocal
@@ -519,7 +556,7 @@ func (r *fragmentRun) execute(ctx context.Context, p part, failed map[string]boo
 			live = append(live, candidate)
 		}
 	}
-	retries := []part{{segments: p.segments, slice: p.slice}}
+	retries := []part{{segments: p.segments, slice: p.slice, source: p.source}}
 	if p.slice != nil {
 		if len(failed) < maxRemoteAttempts && len(live) > 0 {
 			retries[0].executor = Ranked(largest(p.segments), live)[0]
@@ -527,7 +564,7 @@ func (r *fragmentRun) execute(ctx context.Context, p part, failed map[string]boo
 	} else if len(failed) < maxRemoteAttempts && len(live) > 0 {
 		retries = nil
 		for _, assigned := range Assign(p.segments, live) {
-			retries = append(retries, part{executor: assigned.Executor, segments: assigned.Segments})
+			retries = append(retries, part{executor: assigned.Executor, segments: assigned.Segments, source: p.source})
 		}
 	}
 	var wg sync.WaitGroup

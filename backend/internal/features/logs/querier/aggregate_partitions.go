@@ -268,6 +268,7 @@ func (q *LogQuerier) queryRanges(
 			}
 			count.Bucket = bucket.UnixMilli()
 			result[partID] = append(result[partID], count)
+			q.mergedRows.Add(1)
 		}
 		return nil
 	})

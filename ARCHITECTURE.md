@@ -273,9 +273,9 @@ replacement of the structured builder, which stays available as an "Advanced fil
   counts' dimensions.
 - **Log anomalies.** A drawer from the histogram ("Anomalies") compares the last search's message patterns with
   the previous period, the same time yesterday or last week (`POST /logs/query/changes/{projectId}`,
-  `logs_querier.ExecutePatternChanges`): counts per pattern from aggregations grouped by
-  `pattern_hash` over each range (per-minute counts where segments have them), the baseline scaled
-  to the current range's length; new (none in the baseline), spiking (at least 2x) and dropping (at
+  `logs_querier.ExecutePatternChanges`): one grouped count per pattern over both ranges
+  (per-minute counts where segments have them), classified in the merge with the baseline scaled
+  to the current range's length, so only the listed patterns and the counts reach Go; new (none in the baseline), spiking (at least 2x) and dropping (at
   most half) patterns, each with its template, newest log and level (read newest-first until every
   listed pattern is found); a row filters the search to its pattern.
 - **Log to trace.** A log with a `trace_id` shows it (and `span_id`) in the detail drawer and the
@@ -1635,6 +1635,16 @@ the audit columns with their consumers (items 6, 10c).
   summed per bucket (`logs_querier/aggregate_rollups.go`); results equal the raw counts exactly.
   Time presets start on a whole minute, so the range's oldest edge needs no raw read. The counts
   also hold the pod, for deploy markers.
+- **Grouped counts in the merge.** An unbucketed top N and the Logs insight tabs (Patterns, Volume &
+  noise, Health map, Explain, Anomalies) count per group key in one or more time windows
+  (`logs_querier/grouped_counts.go`, `ExecuteGroupWindows`): fragments sum each key per window (count
+  `FILTER`s), from per-minute counts for whole minutes and raw logs for the rest as sources of one
+  coordinator query, and the merge's SQL keeps only what each selection asks for - a top N, or the
+  keys a comparison flags (new, spiking, dropping) with how many matched. Go holds those rows, never
+  every group: reading every group of every hour back for a top N OOM-killed API pods on
+  high-cardinality patterns and pods. The Patterns tab checks the 7 days before the range only for
+  the patterns it needs (an IN list); Health map groups pods into workloads in SQL. Top Ns are not
+  partition-cached (per-partition group lists are the unbounded part).
 - **Streamed aggregations.** `POST /projects/dashboards/{projectId}/query/stream` answers a panel
   query as NDJSON frames (after OpenObserve's streaming search): a time-bucketed logs panel reads
   its uncached partitions in groups newest first - one partition, then 4, 16... - and sends each

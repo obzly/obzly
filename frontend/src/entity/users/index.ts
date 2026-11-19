@@ -37,6 +37,7 @@ export { UserPlanType } from './model/UserPlanType';
 export type { CreatePlanRequest } from './model/CreatePlanRequest';
 export type { UpdatePlanRequest } from './model/UpdatePlanRequest';
 export type { SSOConnector } from './model/SSOConnector';
+export type { SSOMFATrust } from './model/SSOMFATrust';
 export type { SSOGroupMapping } from './model/SSOGroupMapping';
 export type { CreateSSOGroupMappingRequest } from './model/CreateSSOGroupMappingRequest';
 export { SSOProviderType } from './model/SSOProviderType';

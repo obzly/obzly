@@ -3,9 +3,12 @@ package logs_querier
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	logs_core "obzly/internal/features/logs/core"
@@ -103,9 +106,19 @@ func (q *LogQuerier) ExecuteScopedSQL(
 ) ([]*logs_core.SQLQueryResponseDTO, error) {
 	from := clampToRepresentableRange(request.From)
 	to := clampToRepresentableRange(request.To)
-	prepareCtx, cancelPrepare := context.WithTimeout(context.Background(), sqlPrepareTimeout)
+	parent := context.Background()
+	if !request.Deadline.IsZero() {
+		var cancelDeadline context.CancelFunc
+		parent, cancelDeadline = context.WithDeadline(parent, request.Deadline)
+		defer cancelDeadline()
+	}
+	prepareCtx, cancelPrepare := context.WithTimeout(parent, sqlPrepareTimeout)
 	defer cancelPrepare()
-	shape := tableShape{messagePrefix: request.MessagePrefix, table: request.Table, tableArgs: request.TableArgs}
+	shape := tableShape{messagePrefix: request.MessagePrefix, table: request.Table, tableArgs: request.TableArgs,
+		tableFilter: request.TableFilter, rawColumns: request.RawColumns, rawFilter: request.RawFilter}
+	if err := shape.validate(); err != nil {
+		return nil, err
+	}
 	sandbox, err := q.openLogsSandbox(prepareCtx, projectID, from, to, shape, request.ScanBudget)
 	if err != nil {
 		return nil, err
@@ -120,7 +133,7 @@ func (q *LogQuerier) ExecuteScopedSQL(
 	if request.MaxRows > 0 {
 		maxRows = request.MaxRows
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	results := make([]*logs_core.SQLQueryResponseDTO, 0, len(request.Statements))
@@ -148,11 +161,55 @@ func (q *LogQuerier) ExecuteScopedSQL(
 }
 
 // tableShape narrows the materialized "logs" table: rows whose message
-// starts with messagePrefix, or table, a trusted SELECT over "raw".
+// starts with messagePrefix, or table, a trusted SELECT over "raw" (only
+// rawColumns, rows rawFilter holds for), then rows tableFilter holds for.
 type tableShape struct {
 	messagePrefix string
 	table         string
 	tableArgs     []any
+	tableFilter   string
+	rawColumns    []string
+	rawFilter     string
+}
+
+// rawColumn is a column of "raw" (the segment scan) and its type.
+type rawColumn struct{ name, sqlType string }
+
+// rawColumnTypes are raw's columns, in order.
+var rawColumnTypes = []rawColumn{
+	{"timestamp", "TIMESTAMP_NS"},
+	{"level", "VARCHAR"},
+	{"message", "VARCHAR"},
+	{"client_ip", "VARCHAR"},
+	{"trace_id", "VARCHAR"},
+	{"span_id", "VARCHAR"},
+	{"fields", "VARCHAR"},
+}
+
+func (s tableShape) validate() error {
+	if s.table == "" && (s.tableFilter != "" || s.rawFilter != "" || len(s.rawColumns) > 0) {
+		return errors.New("a table filter, raw columns or raw filter needs a table")
+	}
+	for _, column := range s.rawColumns {
+		if !slices.ContainsFunc(rawColumnTypes, func(c rawColumn) bool { return c.name == column }) {
+			return fmt.Errorf("unknown raw column %q", column)
+		}
+	}
+	return nil
+}
+
+// columns are the raw columns the scan reads, with their types.
+func (s tableShape) columns() []rawColumn {
+	if len(s.rawColumns) == 0 {
+		return rawColumnTypes
+	}
+	var columns []rawColumn
+	for _, column := range rawColumnTypes {
+		if slices.Contains(s.rawColumns, column.name) {
+			columns = append(columns, column)
+		}
+	}
+	return columns
 }
 
 // logsSandbox is a single-use DuckDB handle holding the "logs" table.
@@ -231,18 +288,24 @@ func (q *LogQuerier) prepareLogsTable(
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("failed to prepare logs table: %w", err)
 	}
-	rawSQL := "SELECT CAST(NULL AS TIMESTAMP_NS) AS timestamp, CAST(NULL AS VARCHAR) AS level, " +
-		"CAST(NULL AS VARCHAR) AS message, CAST(NULL AS VARCHAR) AS client_ip, CAST(NULL AS VARCHAR) AS trace_id, " +
-		"CAST(NULL AS VARCHAR) AS span_id, CAST(NULL AS VARCHAR) AS fields WHERE false"
+	var empty, names []string
+	for _, column := range shape.columns() {
+		empty = append(empty, "CAST(NULL AS "+column.sqlType+") AS "+column.name)
+		names = append(names, column.name)
+	}
+	rawSQL := "SELECT " + strings.Join(empty, ", ") + " WHERE false"
 	var rawArgs []any
 	if len(paths) > 0 {
 		fromExpr, fileArgs := segments.SourceExpr(q.stream, paths)
-		rawSQL = "SELECT timestamp, level, message, client_ip, trace_id, span_id, fields FROM " + fromExpr +
+		rawSQL = "SELECT " + strings.Join(names, ", ") + " FROM " + fromExpr +
 			" WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?"
 		rawArgs = append(append([]any{}, fileArgs...), projectID.String(), from, to)
 		if shape.messagePrefix != "" {
 			rawSQL += " AND starts_with(message, ?)"
 			rawArgs = append(rawArgs, shape.messagePrefix)
+		}
+		if shape.rawFilter != "" {
+			rawSQL += " AND (" + shape.rawFilter + ")"
 		}
 	}
 	if shape.table == "" {
@@ -263,29 +326,25 @@ func (q *LogQuerier) prepareLogsTable(
 	return nil
 }
 
-// createShapedTable materializes the raw rows first (filters pushed into the
-// Parquet scan), then shape.table over them with filter pushdown off. In one
+// createShapedTable materializes shape.table straight from the segment
+// scan in one statement, so neither the raw rows nor columns the shape
+// doesn't read are ever held: memory and spill follow the shaped rows.
+// shape.rawFilter narrows the scan itself. shape.table has no WHERE (in one
 // statement DuckDB pushed the shape's final WHERE down through its
 // projections, inlining every column it reads: Web analytics' filter became
 // 432 copies of an 87-path json_extract_string per row, past 4 GB for one
-// thread where the two steps fit in 256 MB.
+// thread), so shape.tableFilter is applied by deleting the rows it rejects.
 func createShapedTable(ctx context.Context, sandboxDB *sql.DB, rawSQL string, rawArgs []any, shape tableShape) error {
-	statements := []struct {
-		sql  string
-		args []any
-	}{
-		{"CREATE TEMP TABLE raw AS " + rawSQL, rawArgs},
-		{"SET disabled_optimizers = 'filter_pushdown'", nil},
-		{"CREATE TEMP TABLE logs AS " + shape.table, shape.tableArgs},
-		{"RESET disabled_optimizers", nil},
-		{"DROP TABLE raw", nil},
+	create := "CREATE TEMP TABLE logs AS WITH raw AS NOT MATERIALIZED (" + rawSQL + ") " + shape.table
+	args := append(append([]any{}, rawArgs...), shape.tableArgs...)
+	if _, err := sandboxDB.ExecContext(ctx, create, args...); err != nil {
+		return err
 	}
-	for _, statement := range statements {
-		if _, err := sandboxDB.ExecContext(ctx, statement.sql, statement.args...); err != nil {
-			return err
-		}
+	if shape.tableFilter == "" {
+		return nil
 	}
-	return nil
+	_, err := sandboxDB.ExecContext(ctx, "DELETE FROM logs WHERE NOT coalesce(("+shape.tableFilter+"), false)")
+	return err
 }
 
 func scanSQLRows(rows *sql.Rows, maxRows int) ([]string, [][]any, bool, error) {

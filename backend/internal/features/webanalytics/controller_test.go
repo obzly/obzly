@@ -2,6 +2,7 @@ package webanalytics
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -255,12 +256,71 @@ func Test_BuildDays_WhenEveryHourOfADayIsBuilt_MergesThemIntoADay(t *testing.T) 
 	assert.Equal(t, int64(86400), report.BucketSeconds)
 }
 
+func Test_BuildProject_WhenTheProjectHasNoAccessLogs_ClosesItsHoursAndTheReportReadsOnlyTheOpenHourLive(
+	t *testing.T,
+) {
+	env := newTestEnv(t)
+	liveStart := env.now().Truncate(time.Hour)
+	var items []*logs_core.LogItem
+	for hour := liveStart.Add(-3 * time.Hour); !hour.After(liveStart); hour = hour.Add(time.Hour) {
+		for i := range 50 {
+			items = append(items,
+				accessLog(hour.Add(time.Duration(i)*time.Second), fmt.Sprintf("Nov 18 vm-1 systemd[1]: Started session %d", i),
+					map[string]any{"host_name": "vm-1", "log_file_path": "/var/log/syslog"}),
+				accessLog(hour.Add(time.Duration(i)*time.Second), `{"level":"info","msg":"job done","status":"ok"}`,
+					map[string]any{"service_name": "worker", "host_name": "vm-1"}))
+		}
+	}
+	storeLogs(t, env.project.ID, items...)
+	settings := env.settings(t)
+
+	require.NoError(t, env.builder.BuildProject(context.Background(), settings))
+
+	lastClosed := lastBuildableHour(env.now())
+	builds, err := repo.builds(context.Background(), env.project.ID, granularityHour, lastClosed.Add(-2*time.Hour),
+		lastClosed.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, builds, 3, "hours without access logs are built too")
+	for _, build := range builds {
+		assert.Zero(t, build.RowsRead)
+	}
+
+	report := env.report(t, liveStart.Add(-3*time.Hour), time.Time{}, "")
+	assert.Equal(t, lastClosed.Add(time.Hour), report.Live.From, "only hours not closed yet are read live")
+	assert.Zero(t, report.Rollups.Missing)
+	assert.Zero(t, report.Totals.Requests)
+	assert.False(t, report.Live.Partial)
+}
+
+func Test_GetReport_WhenTheLiveReadFails_ReturnsTheRollupsWithTheLivePartMarkedPartial(t *testing.T) {
+	env := newTestEnv(t)
+	liveStart := env.now().Truncate(time.Hour)
+	closed := liveStart.Add(-2 * time.Hour)
+	storeLogs(t, env.project.ID,
+		accessLog(closed.Add(5*time.Minute), "", nginxRequest("198.51.100.1", "/", "200", "web-1")),
+		accessLog(closed.Add(6*time.Minute), "", nginxRequest("198.51.100.2", "/cart", "500", "web-1")),
+		accessLog(liveStart, "", nginxRequest("198.51.100.1", "/", "200", "web-1")),
+	)
+	require.NoError(t, env.builder.BuildHour(context.Background(), env.settings(t), closed))
+	// Every raw read times out, as a project's live read past its budget does.
+	env.useLogs(&cappedRepository{LogRepository: logs_core.GetLogCoreRepository(), maxWindow: time.Hour,
+		brokenUntil: liveStart.Add(2 * time.Hour)})
+
+	report := env.report(t, liveStart.Add(-3*time.Hour), time.Time{}, "")
+
+	assert.True(t, report.Live.Partial)
+	assert.Zero(t, report.Live.Rows)
+	assert.Equal(t, 1, report.Rollups.Hours)
+	assert.Equal(t, int64(2), report.Totals.Requests, "the built hour still counts")
+}
+
 type testEnv struct {
 	router     *gin.Engine
 	project    *projects_models.Project
 	ownerToken string
 	builder    *Builder
 	now        func() time.Time
+	service    *Service
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -275,7 +335,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	project, token := projects_testing.CreateTestProjectWithToken("Web analytics "+uuid.NewString()[:8], owner.Token,
 		router)
 	return &testEnv{router: router, project: project, ownerToken: token, now: now,
-		builder: &Builder{repo, logs_core.GetLogCoreRepository, geoOff, slog.Default(), now}}
+		builder: &Builder{repo, logs_core.GetLogCoreRepository, geoOff, slog.Default(), now}, service: testService}
+}
+
+// useLogs makes the report (not the builder) read raw logs from repository.
+func (e *testEnv) useLogs(repository logs_core.LogRepository) {
+	e.service.logs = func() logs_core.LogRepository { return repository }
 }
 
 func (e *testEnv) url(path string) string {

@@ -728,8 +728,11 @@ export const MainScreenComponent = () => {
                 const renderTab = (tab: SidebarTab) => (
                   <div key={tab.text} className="flex justify-center">
                     <Tooltip title={tab.text} placement="right">
-                      <div
-                        className={`my-0.5 flex h-[44px] w-[44px] cursor-pointer items-center justify-center rounded-xl ${isActive(tab) ? 'bg-accent-600' : 'hover:bg-accent-50 dark:hover:bg-gray-700'}`}
+                      <button
+                        type="button"
+                        aria-label={tab.text}
+                        aria-current={isActive(tab) ? 'page' : undefined}
+                        className={`focus-visible:outline-accent-500 my-0.5 flex h-[44px] w-[44px] cursor-pointer items-center justify-center rounded-xl border-0 p-0 focus-visible:outline-2 focus-visible:outline-offset-1 ${isActive(tab) ? 'bg-accent-600' : 'hover:bg-accent-50 bg-transparent dark:hover:bg-gray-700'}`}
                         onClick={tab.onClick}
                       >
                         <div className="mb-1">
@@ -739,12 +742,12 @@ export const MainScreenComponent = () => {
                               // The gray icons are drawn for a dark rail; darken them on light.
                               className={isActive(tab) ? '' : 'brightness-50 dark:brightness-100'}
                               width={20}
-                              alt={tab.text}
+                              alt=""
                               loading="lazy"
                             />
                           </div>
                         </div>
-                      </div>
+                      </button>
                     </Tooltip>
                   </div>
                 );

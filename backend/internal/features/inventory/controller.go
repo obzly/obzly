@@ -45,19 +45,29 @@ func (c *Controller) GetSummary(ctx *gin.Context) {
 
 // ListAssets
 // @Summary List inventory assets
-// @Description Worst health first. kind, health and state take comma-separated values.
+// @Description A page of the matching assets, worst health first unless sort says otherwise; total is how many
+// @Description matched. kind, health and state take comma-separated values. Without offset and limit it
+// @Description returns the first 2000.
 // @Tags inventory
 // @Produce json
 // @Security BearerAuth
 // @Param projectId query string false "Only this project"
-// @Param kind query string false "cluster, node, host, namespace, workload, pod, container, docker_container, service"
+// @Param kind query string false "cluster, node, host, namespace, workload, pod, container, docker_container, service, load_balancer, database, bucket, function, scaling_group"
 // @Param health query string false "healthy, warning, critical, inactive, unknown"
 // @Param state query string false "new, active, not_reporting, terminated"
 // @Param cluster query string false "Cluster name"
 // @Param namespace query string false "Namespace"
-// @Param q query string false "Search name, node and attributes"
+// @Param parent query string false "Only the assets right under this asset key (use with projectId)"
+// @Param roots query bool false "Only the assets without a parent in the inventory"
+// @Param q query string false "Search name, node, attribute values and project name"
+// @Param sort query string false "health (default), kind, name, cpu, memory, restarts, age, lastSeen or attention"
+// @Param order query string false "asc (default: worst health, newest, least first) or desc (the reverse)"
+// @Param offset query int false "Skip this many matches (default 0)"
 // @Param limit query int false "At most this many (default 2000, max 5000)"
+// @Param childCounts query bool false "Add each asset's childCount"
+// @Param ancestors query bool false "Add the ancestors of the returned assets that are not among them"
 // @Success 200 {object} inventory.AssetListDTO
+// @Failure 400 {object} map[string]string
 // @Failure 403 {object} map[string]string
 // @Router /inventory/assets [get]
 func (c *Controller) ListAssets(ctx *gin.Context) {
@@ -66,6 +76,12 @@ func (c *Controller) ListAssets(ctx *gin.Context) {
 		return
 	}
 	limit, _ := strconv.Atoi(ctx.Query("limit"))
+	offset, _ := strconv.Atoi(ctx.Query("offset"))
+	order := strings.TrimSpace(ctx.Query("order"))
+	if order != "" && order != "asc" && order != "desc" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "order must be asc or desc"})
+		return
+	}
 	filter := assetFilter{
 		kinds:     list(ctx.Query("kind")),
 		health:    list(ctx.Query("health")),
@@ -73,8 +89,18 @@ func (c *Controller) ListAssets(ctx *gin.Context) {
 		cluster:   ctx.Query("cluster"),
 		namespace: ctx.Query("namespace"),
 		search:    strings.TrimSpace(ctx.Query("q")),
+		parent:    ctx.Query("parent"),
+		roots:     ctx.Query("roots") == "true",
 	}
-	assets, err := c.service.ListAssets(user, ctx.Query("projectId"), filter, limit)
+	page := assetPage{
+		sort:        strings.TrimSpace(ctx.Query("sort")),
+		descending:  order == "desc",
+		offset:      offset,
+		limit:       limit,
+		childCounts: ctx.Query("childCounts") == "true",
+		ancestors:   ctx.Query("ancestors") == "true",
+	}
+	assets, err := c.service.ListAssets(user, ctx.Query("projectId"), filter, page)
 	respond(ctx, assets, err)
 }
 
@@ -135,6 +161,8 @@ func respond(ctx *gin.Context, body any, err error) {
 	switch {
 	case err == nil:
 		ctx.JSON(http.StatusOK, body)
+	case errors.Is(err, ErrBadRequest):
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, ErrForbidden):
 		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, ErrNotFound):

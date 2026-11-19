@@ -408,9 +408,21 @@ The user signs in with their password and, being an admin, is asked to set MFA u
 written to the audit log. On a control plane use its container and login, for example
 `docker exec -it obzly-control-plane ./main --email="superadmin" --reset-mfa`.
 
-SSO users don't need this when their connector has **Provider enforces MFA** turned on (off by
-default) and the provider's ID token says a second factor was used (`amr` with `mfa`, `otp`,
-`hwk`, `swk`, `sms` or `fido`): such sign-ins skip Obzly's own authenticator step.
+SSO users may not need this, depending on their connector's **Trust the provider's MFA** setting
+(API field `mfaTrust`):
+
+- **Always use Obzly's MFA** (`off`, the default): Obzly asks for its own code wherever policy
+  requires MFA.
+- **When the provider reports it** (`amr`): a sign-in whose ID token says a second factor was used
+  (`amr` with `mfa`, `otp`, `hwk`, `swk`, `sms`, `fido` or `email_otp`) skips Obzly's code; one
+  without it is asked for Obzly's, with a note that the provider didn't report a second factor.
+- **Always trust the provider** (`always`): every sign-in through the connector skips Obzly's code.
+  Choose it only when the provider requires MFA for every user who can sign in through it.
+
+A password sign-in to the same account still needs Obzly's MFA. AWS Cognito reports MFA in `amr`
+only with managed login and MFA configured on the user pool; users federated from Google show
+`fed`, so pick `always` for a Cognito connector only if every sign-in path through the pool
+(including its federated providers) enforces MFA.
 ### 🔐 Multi-Factor Authentication (MFA)
 
 TOTP-based MFA (compatible with Google Authenticator, Authy, 1Password, etc.) is **required for

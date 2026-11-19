@@ -169,6 +169,14 @@ func (unavailableRepository) ExecutePatternChanges(
 	return nil, errRepositoryUnavailable
 }
 
+func (unavailableRepository) ExecuteGroupWindows(
+	context.Context,
+	uuid.UUID,
+	*GroupWindowsRequestDTO,
+) (*GroupWindowsResponseDTO, error) {
+	return nil, errRepositoryUnavailable
+}
+
 func (unavailableRepository) ExecutePatternSamples(
 	context.Context,
 	uuid.UUID,

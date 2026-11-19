@@ -3099,7 +3099,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Worst health first. kind, health and state take comma-separated values.",
+                "description": "A page of the matching assets, worst health first unless sort says otherwise; total is how many\nmatched. kind, health and state take comma-separated values. Without offset and limit it\nreturns the first 2000.",
                 "produces": [
                     "application/json"
                 ],
@@ -3116,7 +3116,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "cluster, node, host, namespace, workload, pod, container, docker_container, service",
+                        "description": "cluster, node, host, namespace, workload, pod, container, docker_container, service, load_balancer, database, bucket, function, scaling_group",
                         "name": "kind",
                         "in": "query"
                     },
@@ -3146,14 +3146,56 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Search name, node and attributes",
+                        "description": "Only the assets right under this asset key (use with projectId)",
+                        "name": "parent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only the assets without a parent in the inventory",
+                        "name": "roots",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Search name, node, attribute values and project name",
                         "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "health (default), kind, name, cpu, memory, restarts, age, lastSeen or attention",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "asc (default: worst health, newest, least first) or desc (the reverse)",
+                        "name": "order",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Skip this many matches (default 0)",
+                        "name": "offset",
                         "in": "query"
                     },
                     {
                         "type": "integer",
                         "description": "At most this many (default 2000, max 5000)",
                         "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Add each asset's childCount",
+                        "name": "childCounts",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Add the ancestors of the returned assets that are not among them",
+                        "name": "ancestors",
                         "in": "query"
                     }
                 ],
@@ -3162,6 +3204,15 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/inventory.AssetListDTO"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "403": {
@@ -24007,6 +24058,10 @@ const docTemplate = `{
                 "attributes": {
                     "$ref": "#/definitions/inventory.Attributes"
                 },
+                "childCount": {
+                    "description": "ChildCount is how many assets have this one as parent: only with childCounts=true.",
+                    "type": "integer"
+                },
                 "cluster": {
                     "type": "string"
                 },
@@ -24113,6 +24168,13 @@ const docTemplate = `{
         "inventory.AssetListDTO": {
             "type": "object",
             "properties": {
+                "ancestors": {
+                    "description": "Ancestors: only with ancestors=true. The parents, up to the top, of Assets that are not in\nAssets themselves, so a tree can show where each match sits.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/inventory.AssetDTO"
+                    }
+                },
                 "assets": {
                     "type": "array",
                     "items": {
@@ -24120,7 +24182,7 @@ const docTemplate = `{
                     }
                 },
                 "total": {
-                    "description": "Total is how many matched; Assets holds at most the limit.",
+                    "description": "Total is how many matched; Assets holds the page of them from offset, at most limit.",
                     "type": "integer"
                 }
             }
@@ -24189,6 +24251,10 @@ const docTemplate = `{
         "inventory.ChangeDTO": {
             "type": "object",
             "properties": {
+                "assetId": {
+                    "description": "AssetID is the asset's id while it is still in the inventory.",
+                    "type": "string"
+                },
                 "assetKey": {
                     "type": "string"
                 },
@@ -24311,6 +24377,14 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "live": {
+                    "description": "Live counts the project's assets that are not terminated, by health.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
                 "name": {
                     "type": "string"
                 }
@@ -24327,9 +24401,44 @@ const docTemplate = `{
                 }
             }
         },
+        "inventory.RegionCountDTO": {
+            "type": "object",
+            "properties": {
+                "assets": {
+                    "type": "integer"
+                },
+                "critical": {
+                    "type": "integer"
+                },
+                "projects": {
+                    "description": "Projects are the names of the projects with assets there.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "provider": {
+                    "description": "Provider is cloud_provider, \"\" when not reported.",
+                    "type": "string"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "warning": {
+                    "type": "integer"
+                }
+            }
+        },
         "inventory.SummaryDTO": {
             "type": "object",
             "properties": {
+                "clusters": {
+                    "description": "Clusters are the names of the cluster assets, sorted.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "health": {
                     "type": "object",
                     "additionalProperties": {
@@ -24356,10 +24465,25 @@ const docTemplate = `{
                         }
                     }
                 },
+                "live": {
+                    "description": "Live counts the assets that are not terminated, by health.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
                 "projects": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/inventory.ProjectCountDTO"
+                    }
+                },
+                "regions": {
+                    "description": "Regions: most assets first.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/inventory.RegionCountDTO"
                     }
                 },
                 "states": {
@@ -29388,6 +29512,19 @@ const docTemplate = `{
                 "issuerUrl": {
                     "type": "string"
                 },
+                "mfaTrust": {
+                    "description": "MFATrust: off (always Obzly's MFA), amr (skip it when the ID token's amr\nshows a second factor) or always (skip it for every sign-in through this connector).",
+                    "enum": [
+                        "off",
+                        "amr",
+                        "always"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/sso_models.MFATrustMode"
+                        }
+                    ]
+                },
                 "name": {
                     "type": "string"
                 },
@@ -29401,6 +29538,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "trustIdpMfa": {
+                    "description": "TrustIdPMFA is deprecated: mfaTrust != \"off\".",
                     "type": "boolean"
                 },
                 "updatedAt": {
@@ -29440,6 +29578,19 @@ const docTemplate = `{
                 "issuerUrl": {
                     "type": "string"
                 },
+                "mfaTrust": {
+                    "description": "MFATrust defaults to \"off\" when omitted (and trustIdpMfa is omitted too).",
+                    "enum": [
+                        "off",
+                        "amr",
+                        "always"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/sso_models.MFATrustMode"
+                        }
+                    ]
+                },
                 "name": {
                     "type": "string",
                     "maxLength": 100,
@@ -29456,7 +29607,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "trustIdpMfa": {
-                    "description": "TrustIdPMFA defaults to false when omitted.",
+                    "description": "TrustIdPMFA is deprecated, read only when mfaTrust is omitted: true = \"amr\".",
                     "type": "boolean"
                 }
             }
@@ -29609,6 +29760,19 @@ const docTemplate = `{
                 "issuerUrl": {
                     "type": "string"
                 },
+                "mfaTrust": {
+                    "description": "MFATrust keeps the current value when omitted (and trustIdpMfa is omitted too).",
+                    "enum": [
+                        "off",
+                        "amr",
+                        "always"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/sso_models.MFATrustMode"
+                        }
+                    ]
+                },
                 "name": {
                     "type": "string",
                     "maxLength": 100,
@@ -29625,10 +29789,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "trustIdpMfa": {
-                    "description": "TrustIdPMFA keeps the current value when omitted.",
+                    "description": "TrustIdPMFA is deprecated, read only when mfaTrust is omitted: false =\n\"off\"; true = \"amr\", or keeps a current \"always\".",
                     "type": "boolean"
                 }
             }
+        },
+        "sso_models.MFATrustMode": {
+            "type": "string",
+            "enum": [
+                "off",
+                "amr",
+                "always"
+            ],
+            "x-enum-varnames": [
+                "MFATrustOff",
+                "MFATrustAMR",
+                "MFATrustAlways"
+            ]
         },
         "sso_models.ProviderType": {
             "type": "string",
@@ -31408,6 +31585,10 @@ const docTemplate = `{
                 "email": {
                     "type": "string"
                 },
+                "idpMfaNotReported": {
+                    "description": "IdPMFANotReported: an SSO sign-in asked for Obzly's MFA and the\nprovider's ID token reported no second factor (amr), so the UI can say why.",
+                    "type": "boolean"
+                },
                 "isNewUser": {
                     "type": "boolean"
                 },
@@ -31963,6 +32144,10 @@ const docTemplate = `{
                 },
                 "from": {
                     "type": "string"
+                },
+                "partial": {
+                    "description": "Partial: part of the range couldn't be read in time (or at all); the\ncounts leave it out.",
+                    "type": "boolean"
                 },
                 "rows": {
                     "type": "integer"

@@ -1,14 +1,21 @@
-import { Segmented, Tooltip } from 'antd';
+import { LoadingOutlined } from '@ant-design/icons';
+import { Segmented, Spin, Tooltip } from 'antd';
 import { useMemo, useState } from 'react';
 
-import type { AssetHealth, AssetKind, SiteAsset, SiteChange } from '../../../entity/inventory';
+import type {
+  AssetHealth,
+  AssetKind,
+  AssetQuery,
+  SiteAsset,
+  SiteChange,
+  SiteRef,
+} from '../../../entity/inventory';
 import { absoluteChange } from '../../../shared/lib/periodChange';
 import { Donut, KpiTile } from '../../../shared/ui/v2';
 import { Panel } from '../../synthetics';
 import {
   HEALTH_COLOR,
   HEALTH_LABEL,
-  HEALTH_ORDER,
   KIND_LABEL,
   STATE_LABEL,
   assetUid,
@@ -16,15 +23,24 @@ import {
   since,
 } from '../lib/assets';
 import type { KindHistory } from '../lib/history';
+import { type HealthCounts, type MergedSummary, healthTotal } from '../lib/paging';
+import { useSiteAssets } from '../lib/useSiteAssets';
 import { HealthDot, KindIcon } from './parts';
 
+/** What opening an asset needs: its Site and id. */
+export type AssetTarget = Pick<SiteAsset, 'siteId' | 'siteName' | 'id'>;
+
 interface Props {
-  assets: SiteAsset[];
+  /** Every answering Site's counts, added up. */
+  summary: MergedSummary;
+  /** The Sites that answered, for the panels' short lists. */
+  sites: SiteRef[];
   changes: SiteChange[];
   /** Kind counts over time for the tiles' sparklines and changes vs 24 h ago. */
   history?: KindHistory;
   multiSite: boolean;
-  onOpen: (asset: SiteAsset) => void;
+  refresh: number;
+  onOpen: (asset: AssetTarget) => void;
   onOpenKind: (kind: AssetKind) => void;
 }
 
@@ -40,114 +56,63 @@ const CARDS: { kind: AssetKind; label: string }[] = [
 const HEALTHS: AssetHealth[] = ['critical', 'warning', 'healthy', 'unknown', 'inactive'];
 const ATTENTION_LIMIT = 12;
 const CHANGES_LIMIT = 15;
+const TOP_LIMIT = 10;
+const LIVE: AssetQuery['state'] = ['new', 'active', 'not_reporting'];
+
+// Leaves first: a pod's reason, not the namespace repeating it.
+const ATTENTION_QUERY: AssetQuery = {
+  health: ['critical', 'warning'],
+  state: LIVE,
+  sort: 'attention',
+  limit: ATTENTION_LIMIT,
+};
+
+const topQuery = (metric: 'cpu' | 'memory'): AssetQuery => ({
+  kind: ['pod', 'node', 'host'],
+  state: LIVE,
+  sort: metric,
+  order: 'desc',
+  limit: TOP_LIMIT,
+});
 
 export const OverviewComponent = ({
-  assets,
+  summary,
+  sites,
   changes,
   history,
   multiSite,
+  refresh,
   onOpen,
   onOpenKind,
 }: Props) => {
   const [metric, setMetric] = useState<'cpu' | 'memory'>('cpu');
+  const attention = useSiteAssets(sites, ATTENTION_QUERY, refresh);
+  const topAssets = useSiteAssets(sites, topQuery(metric), refresh);
 
-  const live = useMemo(() => assets.filter((asset) => asset.state !== 'terminated'), [assets]);
   // Hourly counts over 7 days; a sparkline needs two points.
   const trendOf = (kind: AssetKind) => {
     const values = history?.trend[kind];
     return values && values.length > 1 ? values : undefined;
   };
-  const byUid = useMemo(() => new Map(assets.map((asset) => [assetUid(asset), asset])), [assets]);
+  const counts = summary.kinds;
+  const liveTotal = healthTotal(summary.live);
 
-  const counts = useMemo(() => {
-    const result = new Map<AssetKind, Record<AssetHealth, number>>();
-    for (const asset of assets) {
-      const row =
-        result.get(asset.kind) ??
-        ({ critical: 0, warning: 0, healthy: 0, unknown: 0, inactive: 0 } as Record<
-          AssetHealth,
-          number
-        >);
-      row[asset.health] += 1;
-      result.set(asset.kind, row);
-    }
-    return result;
-  }, [assets]);
+  const healthTotals = HEALTHS.filter((health) => health !== 'inactive').map((health) => ({
+    health,
+    value: summary.live[health],
+  }));
 
-  const attention = useMemo(
+  const top = useMemo(
     () =>
-      live
-        .filter((asset) => asset.health === 'critical' || asset.health === 'warning')
-        .sort(
-          (a, b) =>
-            HEALTH_ORDER[a.health] - HEALTH_ORDER[b.health] ||
-            // Leaves first: a pod's reason, not the namespace repeating it.
-            leafRank(a.kind) - leafRank(b.kind) ||
-            a.name.localeCompare(b.name),
-        ),
-    [live],
+      topAssets.assets.flatMap((asset) => {
+        const value = metric === 'cpu' ? asset.metrics.cpuPercent : asset.metrics.memoryPercent;
+        return value === undefined ? [] : [{ asset, value }];
+      }),
+    [topAssets.assets, metric],
   );
 
-  const healthTotals = useMemo(
-    () =>
-      HEALTHS.filter((health) => health !== 'inactive').map((health) => ({
-        health,
-        value: live.filter((asset) => asset.health === health).length,
-      })),
-    [live],
-  );
-
-  const top = useMemo(() => {
-    const value = (asset: SiteAsset) =>
-      metric === 'cpu' ? asset.metrics.cpuPercent : asset.metrics.memoryPercent;
-    return live
-      .filter((asset) => ['pod', 'node', 'host'].includes(asset.kind) && value(asset) !== undefined)
-      .map((asset) => ({ asset, value: value(asset) ?? 0 }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 10);
-  }, [live, metric]);
-
-  const groups = useMemo(() => {
-    const result = new Map<string, Record<AssetHealth, number>>();
-    for (const asset of live) {
-      const key = multiSite ? asset.siteName : asset.projectName;
-      const row = result.get(key) ?? {
-        critical: 0,
-        warning: 0,
-        healthy: 0,
-        unknown: 0,
-        inactive: 0,
-      };
-      row[asset.health] += 1;
-      result.set(key, row);
-    }
-    return result;
-  }, [live, multiSite]);
-
-  const regions = useMemo(() => {
-    const result = new Map<
-      string,
-      { assets: number; warning: number; critical: number; sites: Set<string> }
-    >();
-    for (const asset of live) {
-      const region = asset.attributes.cloud_region;
-      if (!region || asset.kind === 'container' || asset.kind === 'pod') continue;
-      const key = `${asset.attributes.cloud_provider || 'cloud'} · ${region}`;
-      const row = result.get(key) ?? {
-        assets: 0,
-        warning: 0,
-        critical: 0,
-        sites: new Set<string>(),
-      };
-      row.assets += 1;
-      if (asset.health === 'warning') row.warning += 1;
-      if (asset.health === 'critical') row.critical += 1;
-      row.sites.add(multiSite ? asset.siteName : asset.projectName);
-      result.set(key, row);
-    }
-    return [...result.entries()].sort((a, b) => b[1].assets - a[1].assets);
-  }, [live, multiSite]);
-
+  const groups = summary.groups;
+  const regions = summary.regions;
   const groupNames = [...groups.keys()].sort();
 
   return (
@@ -158,7 +123,7 @@ export const OverviewComponent = ({
       >
         {CARDS.map((card) => {
           const row = counts.get(card.kind);
-          const total = row ? HEALTHS.reduce((sum, health) => sum + row[health], 0) : 0;
+          const total = healthTotal(row);
           return (
             <KpiTile
               key={card.kind}
@@ -204,9 +169,9 @@ export const OverviewComponent = ({
         <Panel title="Health" subtitle="All assets that are not terminated">
           <div className="flex flex-wrap items-center gap-6">
             <Donut
-              label={`Health of ${live.length} live assets`}
+              label={`Health of ${liveTotal} live assets`}
               size={150}
-              center={live.length}
+              center={liveTotal}
               centerSub="live assets"
               parts={healthTotals
                 .filter((item) => item.value > 0)
@@ -237,13 +202,17 @@ export const OverviewComponent = ({
           title="Needs attention"
           subtitle="Critical first, with the reason. Click to open."
         >
-          {attention.length === 0 ? (
+          {attention.assets.length === 0 ? (
             <div className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-              Nothing needs attention
+              {attention.loading ? (
+                <Spin indicator={<LoadingOutlined spin />} />
+              ) : (
+                'Nothing needs attention'
+              )}
             </div>
           ) : (
             <ul className="m-0 flex list-none flex-col p-0">
-              {attention.slice(0, ATTENTION_LIMIT).map((asset) => (
+              {attention.assets.map((asset) => (
                 <li
                   key={assetUid(asset)}
                   onClick={() => onOpen(asset)}
@@ -271,9 +240,10 @@ export const OverviewComponent = ({
                   </span>
                 </li>
               ))}
-              {attention.length > ATTENTION_LIMIT && (
+              {attention.total > attention.assets.length && (
                 <li className="pt-2 text-xs text-gray-500 dark:text-gray-400">
-                  and {attention.length - ATTENTION_LIMIT} more in Assets
+                  Showing {attention.assets.length} of {attention.total.toLocaleString()}; the rest
+                  are in Assets
                 </li>
               )}
             </ul>
@@ -290,13 +260,9 @@ export const OverviewComponent = ({
           ) : (
             <ul className="m-0 flex list-none flex-col gap-1 p-0">
               {changes.slice(0, CHANGES_LIMIT).map((change) => {
-                const asset = byUid.get(
-                  assetUid({
-                    siteId: change.siteId,
-                    projectId: change.projectId,
-                    key: change.assetKey,
-                  }),
-                );
+                const asset = change.assetId
+                  ? { siteId: change.siteId, siteName: change.siteName, id: change.assetId }
+                  : undefined;
                 const health = changeHealth(change);
                 return (
                   <li
@@ -345,7 +311,11 @@ export const OverviewComponent = ({
         >
           {top.length === 0 ? (
             <div className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-              No {metric === 'cpu' ? 'CPU' : 'memory'} data yet
+              {topAssets.loading ? (
+                <Spin indicator={<LoadingOutlined spin />} />
+              ) : (
+                `No ${metric === 'cpu' ? 'CPU' : 'memory'} data yet`
+              )}
             </div>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-3 p-0">
@@ -392,7 +362,7 @@ export const OverviewComponent = ({
             <div className="flex flex-col gap-3">
               {groupNames.map((name) => {
                 const row = groups.get(name)!;
-                const total = HEALTHS.reduce((sum, health) => sum + row[health], 0);
+                const total = healthTotal(row);
                 return (
                   <div key={name} className="flex flex-col gap-1.5">
                     <span className="flex justify-between gap-3 text-sm">
@@ -452,14 +422,14 @@ export const OverviewComponent = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {regions.map(([key, row]) => (
+                  {regions.map((row) => (
                     <tr
-                      key={key}
+                      key={row.key}
                       className="border-b border-gray-100 last:border-b-0 dark:border-gray-700"
                     >
-                      <td className="py-2.5 font-mono text-xs">{key}</td>
+                      <td className="py-2.5 font-mono text-xs">{row.key}</td>
                       <td className="py-2.5 text-gray-500 dark:text-gray-400">
-                        {[...row.sites].join(', ')}
+                        {row.where.join(', ')}
                       </td>
                       <td className="py-2.5 text-right tabular-nums">{row.assets}</td>
                       <td
@@ -493,7 +463,7 @@ const HealthBar = ({
   height = 6,
   withTitles = false,
 }: {
-  row?: Record<AssetHealth, number>;
+  row?: HealthCounts;
   total: number;
   height?: number;
   withTitles?: boolean;
@@ -535,11 +505,6 @@ const Count = ({ health, value }: { health: AssetHealth; value: number }) => (
     {value} {HEALTH_LABEL[health].toLowerCase()}
   </span>
 );
-
-const leafRank = (kind: AssetKind) =>
-  ({ pod: 0, container: 1, node: 2, host: 3, docker_container: 4, workload: 5, service: 6 })[
-    kind as string
-  ] ?? 9;
 
 const changeHealth = (change: SiteChange): AssetHealth => {
   if (change.change === 'health') return (change.to as AssetHealth) || 'unknown';

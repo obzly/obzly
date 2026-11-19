@@ -47,6 +47,11 @@ type LogRepository interface {
 	ExecutePatternChanges(
 		ctx context.Context, projectID uuid.UUID, request *PatternChangesRequestDTO,
 	) (*PatternChangesResponseDTO, error)
+	// ExecuteGroupWindows: grouped counts over several windows, of which only
+	// the selected keys come back.
+	ExecuteGroupWindows(
+		ctx context.Context, projectID uuid.UUID, request *GroupWindowsRequestDTO,
+	) (*GroupWindowsResponseDTO, error)
 	ExecuteDeploys(
 		ctx context.Context, projectID uuid.UUID, request *DeploysRequestDTO,
 	) (*DeploysResponseDTO, error)

@@ -41,5 +41,7 @@ identity provider and reverse proxy - though a way Obzly could be made to misuse
   client needs larger requests.
 - Encrypt database backups with a key held outside the database: they contain `secret_keys`, the
   root of trust for sessions, SSO secrets and MFA seeds ([backup runbook](docs/runbooks/backup-restore.md#key-material-secret_keys)).
-- Admin accounts must use MFA; an SSO connector set to trust the identity provider's MFA skips
-  Obzly's only for sign-ins whose ID token `amr` shows a second factor.
+- Admin accounts must use MFA. An SSO connector's MFA trust decides when its sign-ins skip
+  Obzly's: `off` (never, the default), `amr` (only when the ID token's `amr` shows a second factor)
+  or `always` (every sign-in through it - only for a provider that requires MFA for every user).
+  Changes are audit-logged; password sign-ins always need Obzly's MFA.

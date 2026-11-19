@@ -1,16 +1,17 @@
 // A control plane reads every Site it can reach; a standalone Site shows its own.
 import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Tabs, Tooltip } from 'antd';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
-import type { AssetKind, SiteAsset } from '../../../entity/inventory';
+import type { AssetKind } from '../../../entity/inventory';
 import { useVisibleInterval } from '../../../shared/lib';
 import { PageHeader } from '../../../shared/ui/v2';
+import { mergeSummaries } from '../lib/paging';
 import { useInventory } from '../lib/useInventory';
 import { AssetDetailDrawer, type NavigateTarget } from './AssetDetailDrawer';
 import { AssetsTableComponent } from './AssetsTableComponent';
 import { CloudConnectionsComponent } from './CloudConnectionsComponent';
-import { OverviewComponent } from './OverviewComponent';
+import { type AssetTarget, OverviewComponent } from './OverviewComponent';
 
 interface Props {
   contentHeight: number;
@@ -36,13 +37,16 @@ export const InfrastructureComponent = ({
   const [kinds, setKinds] = useState<Set<AssetKind>>(new Set());
   const [open, setOpen] = useState<{ siteId: string; siteName: string; id: string }>();
   const data = useInventory(refresh);
+  const summary = useMemo(
+    () => mergeSummaries(data.summaries, multiSite),
+    [data.summaries, multiSite],
+  );
 
   useVisibleInterval(() => setRefresh((value) => value + 1), REFRESH_MS);
 
-  const openAsset = (asset: SiteAsset) =>
+  const openAsset = (asset: AssetTarget) =>
     setOpen({ siteId: asset.siteId, siteName: asset.siteName, id: asset.id });
   const failed = data.sites.filter((site) => site.error);
-  const truncated = data.sites.filter((site) => site.truncated);
 
   return (
     <div
@@ -85,14 +89,6 @@ export const InfrastructureComponent = ({
       {failed.length > 0 && !multiSite && (
         <Alert className="mt-4" type="error" showIcon title={failed[0].error} />
       )}
-      {truncated.length > 0 && (
-        <Alert
-          className="mt-4"
-          type="info"
-          showIcon
-          title={`Showing the first 5000 assets of ${truncated.map((site) => `${site.siteName || 'this Site'} (${site.assets})`).join(', ')}, worst health first.`}
-        />
-      )}
 
       <Tabs
         className="mt-3"
@@ -105,9 +101,9 @@ export const InfrastructureComponent = ({
             label: (
               <span className="inline-flex items-center gap-1.5">
                 Assets
-                {data.assets.length > 0 && (
+                {summary.total > 0 && (
                   <span className="rounded-full bg-gray-100 px-2 py-px text-xs text-gray-500 tabular-nums dark:bg-gray-700 dark:text-gray-300">
-                    {data.assets.length}
+                    {summary.total.toLocaleString()}
                   </span>
                 )}
               </span>
@@ -128,11 +124,12 @@ export const InfrastructureComponent = ({
         <>
           {view === 'overview' && (
             <OverviewComponent
-              assets={data.assets}
+              summary={summary}
+              sites={data.summaries}
               changes={data.changes}
-              // Capped asset lists undercount the tiles, so they get no change pills then.
-              history={truncated.length ? { trend: data.history.trend } : data.history}
+              history={data.history}
               multiSite={multiSite}
+              refresh={refresh}
               onOpen={openAsset}
               onOpenKind={(kind) => {
                 setKinds(new Set([kind]));
@@ -142,9 +139,11 @@ export const InfrastructureComponent = ({
           )}
           {view === 'assets' && (
             <AssetsTableComponent
-              assets={data.assets}
               sites={data.sites}
+              clusters={summary.clusters}
+              inventoryTotal={summary.total}
               multiSite={multiSite}
+              refresh={refresh}
               kinds={kinds}
               onKindsChange={setKinds}
               onOpen={openAsset}

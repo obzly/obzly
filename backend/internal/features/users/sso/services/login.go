@@ -34,9 +34,12 @@ type IdentityClaims struct {
 	EmailVerified        bool
 	RequireVerifiedEmail bool
 
-	// IdPMFAVerified: the connector trusts the provider's MFA and amr shows a second
-	// factor, so local TOTP is skipped.
+	// IdPMFAVerified: the connector's MFA trust lets this sign-in skip local
+	// TOTP ("always", or "amr" with a second factor in amr).
 	IdPMFAVerified bool
+	// AMRShowsMFA: the ID token's amr reported a second factor, whatever the
+	// connector's trust; lets the UI say why Obzly asks for its own.
+	AMRShowsMFA bool
 
 	// GroupsSyncEnabled is true when a groups claim is configured. A missing claim
 	// means "no groups" (Cognito omits it for a user in none), not "unknown".
@@ -64,8 +67,22 @@ type oidcClaims struct {
 	AMR any `json:"amr"`
 }
 
-// mfaAMRValues are RFC 8176 methods that mean a second factor was used.
-var mfaAMRValues = []string{"mfa", "otp", "hwk", "swk", "sms", "fido"}
+// mfaAMRValues are RFC 8176 methods that mean a second factor was used, plus
+// Cognito's "email_otp".
+var mfaAMRValues = []string{"mfa", "otp", "hwk", "swk", "sms", "fido", "email_otp"}
+
+// mfaTrustSatisfied reports whether a sign-in through a connector in this
+// mode may skip local TOTP.
+func mfaTrustSatisfied(mode sso_models.MFATrustMode, amrShowsMFA bool) bool {
+	switch mode {
+	case sso_models.MFATrustAlways:
+		return true
+	case sso_models.MFATrustAMR:
+		return amrShowsMFA
+	default:
+		return false
+	}
+}
 
 func amrShowsMFA(amr any) bool {
 	var methods []string
@@ -197,7 +214,8 @@ func (s *ConnectorService) HandleCallback(request *sso_dto.SSOCallbackRequestDTO
 
 		EmailVerified:        emailVerified,
 		RequireVerifiedEmail: connector.RequireVerifiedEmail,
-		IdPMFAVerified:       connector.TrustIdPMFA && amrShowsMFA(claims.AMR),
+		IdPMFAVerified:       mfaTrustSatisfied(connector.MFATrust, amrShowsMFA(claims.AMR)),
+		AMRShowsMFA:          amrShowsMFA(claims.AMR),
 
 		GroupsSyncEnabled: connector.GroupsClaim != "",
 		Groups:            groups,

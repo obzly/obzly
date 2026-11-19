@@ -5,11 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
 	logs_core "obzly/internal/features/logs/core"
-	"obzly/internal/storage/segments"
 	"obzly/internal/util/attrnames"
 
 	"github.com/google/uuid"
@@ -114,53 +112,38 @@ func (q *LogQuerier) restrictToTopGroups(
 	return &restricted, nil
 }
 
-// hourlyTopNRequest is an unbucketed grouped count as hourly buckets, which
-// per-minute counts and the partition cache can answer; nil for any other.
-func hourlyTopNRequest(request *logs_core.AggregationRequestDTO) *logs_core.AggregationRequestDTO {
+// topNWindowsRequest is an unbucketed grouped count as a one-window
+// grouped count (per-minute counts answer it, the merge keeps the top
+// limit); nil for any other request.
+func topNWindowsRequest(
+	request *logs_core.AggregationRequestDTO, from, to time.Time, limit int,
+) *logs_core.GroupWindowsRequestDTO {
 	if request.BucketMs != 0 || request.GroupField == "" || !request.UsesCountsOnly() {
 		return nil
 	}
-	hourly := *request
-	hourly.BucketMs = time.Hour.Milliseconds()
-	hourly.Limit = 0
-	return &hourly
+	return &logs_core.GroupWindowsRequestDTO{
+		Query: request.Query, GroupField: request.GroupField,
+		Windows:    []logs_core.CountWindowDTO{{From: from, To: to}},
+		Selections: []logs_core.GroupSelectionDTO{{OrderBy: "w0 DESC", Limit: limit}},
+		ScanBudget: request.ScanBudget,
+	}
 }
 
-// aggregateTopNByPartition answers an unbucketed top N from hourly counts
-// read by partition (logs_1m where it can), summed per group.
-func (q *LogQuerier) aggregateTopNByPartition(
-	ctx context.Context,
-	projectID uuid.UUID,
-	hourly *logs_core.AggregationRequestDTO,
-	from, to time.Time,
-	tail []segments.ResolvedFile,
-	ordered []*segments.SegmentRecord,
-	whereClause string,
-	whereArgs []any,
-	plan aggregationPlan,
-	limit int,
+// aggregateTopN answers an unbucketed top N in SQL: highest count first,
+// ties by key, as the unbucketed plan orders it.
+func (q *LogQuerier) aggregateTopN(
+	ctx context.Context, projectID uuid.UUID, request *logs_core.GroupWindowsRequestDTO,
 ) (*logs_core.AggregationResponseDTO, error) {
-	response, err := q.aggregateByPartition(ctx, projectID, hourly, from, to, tail, ordered, whereClause, whereArgs,
-		plan, math.MaxInt32, nil)
+	counted, err := q.groupWindows(ctx, projectID, request)
 	if err != nil {
 		return nil, err
 	}
-	totals := map[string]int64{}
-	for _, bucket := range response.Buckets {
-		totals[bucket.GroupKey] += bucket.Count
+	rows := counted.Selections[0].Rows
+	buckets := make([]logs_core.AggregationBucketDTO, 0, len(rows))
+	for _, row := range rows {
+		buckets = append(buckets, logs_core.AggregationBucketDTO{GroupKey: row.Key, Count: row.Counts[0]})
 	}
-	buckets := make([]logs_core.AggregationBucketDTO, 0, len(totals))
-	for key, count := range totals {
-		buckets = append(buckets, logs_core.AggregationBucketDTO{GroupKey: key, Count: count})
-	}
-	// The unbucketed plan's order: highest count first, ties by key.
-	sort.Slice(buckets, func(i, j int) bool {
-		if buckets[i].Count != buckets[j].Count {
-			return buckets[i].Count > buckets[j].Count
-		}
-		return buckets[i].GroupKey < buckets[j].GroupKey
-	})
-	return &logs_core.AggregationResponseDTO{Buckets: buckets[:min(len(buckets), limit)]}, nil
+	return &logs_core.AggregationResponseDTO{Buckets: buckets}, nil
 }
 
 // numericExpression is a custom field's value as a DOUBLE (NULL when not a

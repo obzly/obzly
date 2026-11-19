@@ -193,7 +193,7 @@ func (s *MetricCleanupBackgroundService) compactAllProjects(owned func(uuid.UUID
 		processedProjects++
 	}
 
-	s.logger.Info("Compaction completed",
+	s.logger.Debug("Compaction completed",
 		slog.Int("processedProjects", processedProjects),
 		slog.Int("compactionFailures", compactionFailures))
 
@@ -278,7 +278,7 @@ func (s *MetricCleanupBackgroundService) enforceAllProjectsRetention() error {
 		processedProjects++
 	}
 
-	s.logger.Info("Metric retention cleanup completed",
+	s.logger.Debug("Metric retention cleanup completed",
 		slog.Int("processedProjects", processedProjects),
 		slog.Int("cleanupFailures", cleanupFailures))
 

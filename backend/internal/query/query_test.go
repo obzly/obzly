@@ -391,6 +391,55 @@ func Test_Coordinator_Slices_RunWholeAndRetryWhole(t *testing.T) {
 	require.Equal(t, 3, ran)
 }
 
+// Sources run their own SQL over their own files, in-process or spread over
+// executors, and one merge sums them with the main fragments - also when the
+// main input has no files at all.
+func Test_Coordinator_Sources_MergeWithTheMainFragments(t *testing.T) {
+	dir := t.TempDir()
+	records := writeSegments(t, dir, 6, 300)
+	db := duckDB(t)
+	inProcess, err := query.NewCoordinator(filepath.Join(dir, "results"), db,
+		query.NewLocalExecutor("local", db, nil, ""), nil, discard())
+	require.NoError(t, err)
+	remote := []query.Executor{query.NewLocalExecutor("e1", db, nil, ""), query.NewLocalExecutor("e2", db, nil, "")}
+	spread, err := query.NewCoordinator(filepath.Join(dir, "spread"), db,
+		failingExecutor{id: "local"}, func() []query.Executor { return remote }, discard())
+	require.NoError(t, err)
+	byLevel := "SELECT level, count(*) * ? AS n FROM " + query.SourcePlaceholder + " GROUP BY level"
+	// The second source counts each row twice: the merge must sum both SQLs.
+	sources := []query.Source{
+		{Stream: "logs", Segments: records[2:4], FragmentSQL: byLevel, FragmentArgs: []any{1}},
+		{Stream: "logs", Segments: records[4:], FragmentSQL: byLevel, FragmentArgs: []any{2}},
+	}
+	run := func(coordinator *query.Coordinator, main []*segments.SegmentRecord) map[string]int64 {
+		counts := map[string]int64{}
+		err := coordinator.Query(context.Background(), query.Request{
+			Stream: "logs", Segments: main, FragmentSQL: byLevel, FragmentArgs: []any{1}, Sources: sources,
+			FinalSQL: "SELECT level, sum(n)::BIGINT FROM " + query.ResultsPlaceholder + " GROUP BY level",
+		}, func(rows *sql.Rows) error {
+			for rows.Next() {
+				var level string
+				var n int64
+				if err := rows.Scan(&level, &n); err != nil {
+					return err
+				}
+				counts[level] = n
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		return counts
+	}
+
+	// Each segment: 100 errors, 200 others; the last two count double.
+	errorRows, _ := singleQuery(t, records)
+	require.Equal(t, int64(600), errorRows)
+	want := map[string]int64{"error": 800, "info": 1600}
+	require.Equal(t, want, run(inProcess, records[:2]))
+	require.Equal(t, want, run(spread, records[:2]))
+	require.Equal(t, map[string]int64{"error": 600, "info": 1200}, run(inProcess, nil), "sources alone")
+}
+
 // With every remote executor failing, the segments run in-process.
 func Test_Coordinator_EveryExecutorFails_RunsInProcess(t *testing.T) {
 	dir := t.TempDir()

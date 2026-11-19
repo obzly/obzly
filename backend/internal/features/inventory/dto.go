@@ -10,12 +10,17 @@ import (
 type AssetDTO struct {
 	Asset
 	ProjectName string `json:"projectName"`
+	// ChildCount is how many assets have this one as parent: only with childCounts=true.
+	ChildCount *int64 `json:"childCount,omitempty"`
 }
 
 type AssetListDTO struct {
 	Assets []AssetDTO `json:"assets"`
-	// Total is how many matched; Assets holds at most the limit.
+	// Total is how many matched; Assets holds the page of them from offset, at most limit.
 	Total int64 `json:"total"`
+	// Ancestors: only with ancestors=true. The parents, up to the top, of Assets that are not in
+	// Assets themselves, so a tree can show where each match sits.
+	Ancestors []AssetDTO `json:"ancestors,omitempty"`
 }
 
 // AssetRefDTO points at a related asset.
@@ -40,12 +45,28 @@ type AssetDetailDTO struct {
 type ChangeDTO struct {
 	Change
 	ProjectName string `json:"projectName"`
+	// AssetID is the asset's id while it is still in the inventory.
+	AssetID *uuid.UUID `json:"assetId,omitempty"`
 }
 
 type ProjectCountDTO struct {
 	ID     uuid.UUID `json:"id"`
 	Name   string    `json:"name"`
 	Assets int64     `json:"assets"`
+	// Live counts the project's assets that are not terminated, by health.
+	Live map[string]int64 `json:"live"`
+}
+
+// RegionCountDTO counts the live assets (pods and containers aside) reporting a cloud region.
+type RegionCountDTO struct {
+	// Provider is cloud_provider, "" when not reported.
+	Provider string `json:"provider"`
+	Region   string `json:"region"`
+	Assets   int64  `json:"assets"`
+	Warning  int64  `json:"warning"`
+	Critical int64  `json:"critical"`
+	// Projects are the names of the projects with assets there.
+	Projects []string `json:"projects"`
 }
 
 type SummaryDTO struct {
@@ -55,6 +76,12 @@ type SummaryDTO struct {
 	Health   map[string]int64            `json:"health"`
 	States   map[string]int64            `json:"states"`
 	Projects []ProjectCountDTO           `json:"projects"`
+	// Live counts the assets that are not terminated, by health.
+	Live map[string]int64 `json:"live"`
+	// Regions: most assets first.
+	Regions []RegionCountDTO `json:"regions"`
+	// Clusters are the names of the cluster assets, sorted.
+	Clusters []string `json:"clusters"`
 	// History: only with history=true.
 	History *HistoryDTO `json:"history,omitempty"`
 }

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,10 +23,12 @@ import (
 )
 
 // The Logs page's Patterns, Volume & noise and Health map tabs and its
-// "Explain this spike" panel. Every count is a bucketed aggregation over
-// whole minutes on the per-minute counts' dimensions, so it reads logs_1m
-// where segments have it (raw logs only for the uncompacted tail); Health
-// map by host is the exception (host_name is not a per-minute dimension).
+// "Explain this spike" panel. Counts are grouped counts on the per-minute
+// counts' dimensions, so they read logs_1m where segments have it (raw logs
+// only for the uncompacted tail; Health map by host is the exception, as
+// host_name is not a per-minute dimension). The merge picks the top keys, or
+// the keys a comparison flags, in SQL: only those reach Go, however many
+// patterns or pods there are.
 const (
 	insightCacheKeyPrefix = "logs:insight:"
 	insightCacheTTL       = time.Minute
@@ -34,6 +37,10 @@ const (
 	// insightGroupLimit: the aggregation's row cap; reaching it marks a
 	// response partial.
 	insightGroupLimit = 10_000
+	// trendNewCandidates: patterns absent 24 h earlier whose previous 7 days
+	// are checked (by an IN filter, not a 7-day count of every pattern);
+	// more mark the response partial and NewCount a lower bound.
+	trendNewCandidates = 2_000
 
 	trendMaxBuckets   = 60
 	trendDefaultLimit = 30
@@ -56,9 +63,11 @@ const (
 	volumeNoisyDays     = 7
 
 	healthMaxTiles = 150
+	// healthMaxGroups: (group, workload, service) keys read, most lines
+	// first; more mark the map partial.
+	healthMaxGroups = 5_000
 
-	replicaSetField = "k8s_replicaset"
-	day             = 24 * time.Hour
+	day = 24 * time.Hour
 )
 
 var (
@@ -66,15 +75,14 @@ var (
 		time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour,
 		3 * time.Hour, 6 * time.Hour, 12 * time.Hour, day,
 	}
-	errorLevels = map[string]bool{"error": true, "fatal": true, "critical": true}
-	warnLevels  = map[string]bool{"warn": true, "warning": true}
-	// generatedNamePart is a Kubernetes generated name part (pod suffix or
-	// pod-template-hash): 5-10 characters of the alphabet Kubernetes uses
-	// for them, which has no vowels - so "indexer" isn't one.
-	generatedNamePart  = regexp.MustCompile(`-[bcdfghjklmnpqrstvwxz2456789]{5,10}$`)
-	statefulSetOrdinal = regexp.MustCompile(`-[0-9]+$`)
-	explainDimensions  = []string{
+	errorLevels        = map[string]bool{"error": true, "fatal": true, "critical": true}
+	warnLevels         = map[string]bool{"warn": true, "warning": true}
+	generatedNamePart  = regexp.MustCompile(logs_core.GeneratedNamePartPattern)
+	statefulSetOrdinal = regexp.MustCompile(logs_core.StatefulSetOrdinalPattern)
+	// explainDimensions: each counted on its own; pods add their ReplicaSet.
+	explainDimensions = []string{
 		"service_name", "k8s_namespace_name", "k8s_container_name", "k8s_pod_name", "level",
+		logs_core.ReplicaSetField,
 	}
 )
 
@@ -135,17 +143,23 @@ func (s *LogQueryService) ExecuteExplain(
 		minCount = explainDefaultMinCount
 	}
 	c := s.newCounter(ctx, projectID)
-	group := logs_core.JoinGroupFields(explainDimensions...)
-	current, err := c.by(request.Query, group, *request.Current.From, *request.Current.To)
+	// A value's gain: its share of the current lines less its baseline share.
+	gain := "(w0::DOUBLE / NULLIF(t0, 0) - COALESCE(w1::DOUBLE / NULLIF(t1, 0), 0))"
+	counted, err := c.count(&logs_core.GroupWindowsRequestDTO{
+		Query: request.Query, GroupSets: explainDimensions,
+		Windows: []logs_core.CountWindowDTO{
+			{From: *request.Current.From, To: *request.Current.To},
+			{From: *request.Baseline.From, To: *request.Baseline.To},
+		},
+		Selections: []logs_core.GroupSelectionDTO{{
+			Where:     "NOT ends_with(key, chr(31)) AND w0 >= ? AND " + gain + " > 0",
+			WhereArgs: []any{minCount}, OrderBy: gain + " DESC", Limit: explainMaxFields,
+		}},
+	})
 	if err != nil {
 		return nil, err
 	}
-	baseline, err := c.by(request.Query, group, *request.Baseline.From, *request.Baseline.To)
-	if err != nil {
-		return nil, err
-	}
-	curValues, curTotal := explainMarginals(current)
-	baseValues, baseTotal := explainMarginals(baseline)
+	curTotal, baseTotal := counted.Totals[0], counted.Totals[1]
 
 	response := &logs_core.ExplainResponseDTO{
 		CurrentTotal: curTotal, BaselineTotal: baseTotal, Fields: []logs_core.ExplainFieldDTO{}, Partial: c.partial,
@@ -155,20 +169,20 @@ func (s *LogQueryService) ExecuteExplain(
 		gain  float64
 	}
 	var candidates []scored
-	for key, count := range curValues {
-		if count < minCount || curTotal == 0 {
+	for _, row := range counted.Selections[0].Rows {
+		parts := logs_core.SplitGroupKey(row.Key, 2)
+		dimension, err := strconv.Atoi(parts[0])
+		if err != nil || dimension < 0 || dimension >= len(explainDimensions) {
 			continue
 		}
 		field := logs_core.ExplainFieldDTO{
-			Field: key[0], Value: key[1], Current: count, Baseline: baseValues[key],
-			CurrentShare: float64(count) / float64(curTotal),
+			Field: explainDimensions[dimension], Value: parts[1], Current: row.Counts[0], Baseline: row.Counts[1],
+			CurrentShare: float64(row.Counts[0]) / float64(curTotal),
 		}
 		if baseTotal > 0 {
 			field.BaselineShare = float64(field.Baseline) / float64(baseTotal)
 		}
-		if gain := field.CurrentShare - field.BaselineShare; gain > 0 {
-			candidates = append(candidates, scored{field, gain})
-		}
+		candidates = append(candidates, scored{field, field.CurrentShare - field.BaselineShare})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].gain != candidates[j].gain {
@@ -179,7 +193,7 @@ func (s *LogQueryService) ExecuteExplain(
 		}
 		return candidates[i].field.Value < candidates[j].field.Value
 	})
-	for _, candidate := range candidates[:min(len(candidates), explainMaxFields)] {
+	for _, candidate := range candidates {
 		response.Fields = append(response.Fields, candidate.field)
 	}
 	return response, nil
@@ -284,75 +298,80 @@ func (s *LogQueryService) patternTrends(
 	c := s.newCounter(ctx, projectID)
 	hashField := logs_core.PatternHashField
 
-	current, err := c.by(request.Query, hashField, from, end)
+	// Each pattern's lines now (w0) and 24 h earlier (w1), compared in the
+	// merge: the biggest, the new candidates, the spiking and the dropping
+	// patterns come back, and how many of each.
+	named := "length(key) > 0"
+	counted, err := c.count(&logs_core.GroupWindowsRequestDTO{
+		Query: request.Query, GroupField: hashField,
+		Windows: []logs_core.CountWindowDTO{{From: from, To: end}, {From: from.Add(-day), To: end.Add(-day)}},
+		Selections: []logs_core.GroupSelectionDTO{
+			{Where: named + " AND w0 > 0", Limit: request.Limit},
+			{
+				Where: named + " AND w1 = 0 AND w0 >= ?", WhereArgs: []any{trendMinCount},
+				Limit: trendNewCandidates,
+			},
+			{
+				Where: named + " AND w1 > 0 AND w0 >= ? AND w0 >= 2 * w1", WhereArgs: []any{trendMinCount},
+				OrderBy: "w0 / w1 DESC", Limit: request.Limit,
+			},
+			{
+				Where: named + " AND w1 >= ? AND 2 * w0 <= w1", WhereArgs: []any{trendMinCount},
+				OrderBy: "w1 DESC", Limit: request.Limit,
+			},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
-	yesterday, err := c.by(request.Query, hashField, from.Add(-day), end.Add(-day))
-	if err != nil {
-		return nil, err
+	current, yesterday := map[string]int64{}, map[string]int64{}
+	keysOf := func(selection logs_core.GroupSelectionResultDTO) []string {
+		keys := make([]string, 0, len(selection.Rows))
+		for _, row := range selection.Rows {
+			current[row.Key], yesterday[row.Key] = row.Counts[0], row.Counts[1]
+			keys = append(keys, row.Key)
+		}
+		return keys
 	}
-	week, err := c.by(request.Query, hashField, from.Add(-7*day), from.Add(-time.Nanosecond))
-	if err != nil {
-		return nil, err
+	top, candidates := keysOf(counted.Selections[0]), keysOf(counted.Selections[1])
+	rising, falling := keysOf(counted.Selections[2]), keysOf(counted.Selections[3])
+
+	// The 7 days before the range, only for the patterns that need it: a
+	// candidate is new only without any line there.
+	checked := unique(candidates, top, rising, falling)
+	week := map[string]int64{}
+	if len(checked) > 0 {
+		weekCounts, err := c.count(&logs_core.GroupWindowsRequestDTO{
+			Query: request.Query, GroupField: hashField, Keys: checked,
+			Windows:    []logs_core.CountWindowDTO{{From: from.Add(-7 * day), To: from.Add(-time.Nanosecond)}},
+			Selections: []logs_core.GroupSelectionDTO{{Where: "w0 > 0", Limit: len(checked)}},
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range weekCounts.Selections[0].Rows {
+			week[row.Key] = row.Counts[0]
+		}
+	}
+	var added []string
+	for _, hash := range candidates {
+		if week[hash] == 0 {
+			added = append(added, hash)
+		}
+	}
+	if counted.Selections[1].Truncated() {
+		c.partial = true
 	}
 
 	response := &logs_core.PatternTrendsResponseDTO{
 		BucketMs: request.BucketMs, Patterns: []logs_core.PatternTrendDTO{},
+		Total: counted.Totals[0], Distinct: int(counted.Selections[0].Matched),
+		NewCount: len(added), SpikeCount: int(counted.Selections[2].Matched),
+		DropCount: int(counted.Selections[3].Matched),
 	}
 	for start := from.Truncate(bucket); start.Before(to); start = start.Add(bucket) {
 		response.Buckets = append(response.Buckets, start)
 	}
-	changes := map[string]string{}
-	var added, rising, falling []string
-	for hash, count := range current {
-		response.Total += count
-		if hash != "" {
-			response.Distinct++
-		}
-	}
-	for _, hash := range unionKeys(current, yesterday) {
-		if hash == "" {
-			continue
-		}
-		change := trendChange(current[hash], yesterday[hash], week[hash])
-		changes[hash] = change
-		switch change {
-		case logs_core.PatternChangeNew:
-			added = append(added, hash)
-		case logs_core.PatternChangeSpike:
-			rising = append(rising, hash)
-		case logs_core.PatternChangeDrop:
-			falling = append(falling, hash)
-		}
-	}
-	response.NewCount, response.SpikeCount, response.DropCount = len(added), len(rising), len(falling)
-
-	byCount := func(counts map[string]int64, hashes []string) {
-		sort.Slice(hashes, func(i, j int) bool {
-			if counts[hashes[i]] != counts[hashes[j]] {
-				return counts[hashes[i]] > counts[hashes[j]]
-			}
-			return hashes[i] < hashes[j]
-		})
-	}
-	top := make([]string, 0, len(current))
-	for hash := range current {
-		if hash != "" {
-			top = append(top, hash)
-		}
-	}
-	byCount(current, top)
-	byCount(current, added)
-	sort.Slice(rising, func(i, j int) bool {
-		ri := float64(current[rising[i]]) / float64(yesterday[rising[i]])
-		rj := float64(current[rising[j]]) / float64(yesterday[rising[j]])
-		if ri != rj {
-			return ri > rj
-		}
-		return rising[i] < rising[j]
-	})
-	byCount(yesterday, falling)
 	listed := []string{}
 	seen := map[string]bool{}
 	for _, group := range [][]string{top, added, rising, falling} {
@@ -362,6 +381,10 @@ func (s *LogQueryService) patternTrends(
 				listed = append(listed, hash)
 			}
 		}
+	}
+	changes := map[string]string{}
+	for _, hash := range listed {
+		changes[hash] = trendChange(current[hash], yesterday[hash], week[hash])
 	}
 	if len(listed) == 0 {
 		response.Other = make([]int64, len(response.Buckets))
@@ -402,13 +425,13 @@ func (s *LogQueryService) patternTrends(
 		if len(hashes) == 0 {
 			return nil
 		}
-		counts, err := c.by(andQuery(request.Query, inCondition(hashField, hashes)),
-			logs_core.JoinGroupFields(hashField, "level", "service_name"), from, to)
+		rows, err := c.top(andQuery(request.Query, inCondition(hashField, hashes)),
+			logs_core.JoinGroupFields(hashField, "level", "service_name"), from, to, insightGroupLimit)
 		if err != nil {
 			return err
 		}
-		for key, count := range counts {
-			parts := logs_core.SplitGroupKey(key, 3)
+		for _, row := range rows {
+			parts, count := logs_core.SplitGroupKey(row.Key, 3), row.Counts[0]
 			entry := meta[parts[0]]
 			if entry == nil {
 				entry = &patternMeta{levels: map[string]int64{}, services: map[string]int64{}}
@@ -486,65 +509,63 @@ func (s *LogQueryService) volume(
 		Services: []logs_core.VolumeSeriesDTO{}, Levels: []logs_core.VolumeCountDTO{},
 		Noisy: []logs_core.NoisyPatternDTO{},
 	}
-	dayIndex := map[int64]int{}
+	// One window per day: the biggest services' days, and every line's.
+	windows := make([]logs_core.CountWindowDTO, days)
+	sums := make([]string, days)
 	for i := range days {
 		at := start.Add(time.Duration(i) * day)
 		response.Days = append(response.Days, at)
-		dayIndex[at.UnixMilli()] = i
+		windows[i] = logs_core.CountWindowDTO{From: at, To: minTime(at.Add(day-time.Nanosecond), now)}
+		sums[i] = "w" + strconv.Itoa(i)
 	}
-
-	perService, err := c.series(nil, "service_name", start, now, day)
+	perService, err := c.count(&logs_core.GroupWindowsRequestDTO{
+		GroupField: "service_name", Windows: windows,
+		Selections: []logs_core.GroupSelectionDTO{
+			{OrderBy: strings.Join(sums, " + ") + " DESC", Limit: volumeTopServices},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
-	totals := map[string]int64{}
 	perDay := newDayCounts(days)
-	for service, counts := range perService {
-		for at, count := range counts {
-			totals[service] += count
-			if i, ok := dayIndex[at]; ok {
-				perDay[i] += count
-			}
-		}
-	}
+	copy(perDay, perService.Totals)
 	other := logs_core.VolumeSeriesDTO{Name: "other", Counts: newDayCounts(days), Other: true}
-	topServices := topKeys(totals, len(totals))
-	for rank, service := range topServices {
-		row := logs_core.VolumeSeriesDTO{Name: service, Counts: newDayCounts(days), Total: totals[service]}
-		target := &row
-		if rank >= volumeTopServices || service == "" {
-			target = &other
-			other.Total += totals[service]
+	copy(other.Counts, perDay)
+	for _, count := range perDay {
+		other.Total += count
+	}
+	for _, service := range perService.Selections[0].Rows {
+		if service.Key == "" {
+			continue
 		}
-		for at, count := range perService[service] {
-			if i, ok := dayIndex[at]; ok {
-				target.Counts[i] += count
-			}
+		row := logs_core.VolumeSeriesDTO{Name: service.Key, Counts: newDayCounts(days)}
+		for i, count := range service.Counts {
+			row.Counts[i] = count
+			row.Total += count
+			other.Counts[i] -= count
 		}
-		if target == &row {
-			response.Services = append(response.Services, row)
-		}
+		other.Total -= row.Total
+		response.Services = append(response.Services, row)
 	}
 	if other.Total > 0 {
 		response.Services = append(response.Services, other)
 	}
 
-	levels, err := c.by(nil, "level", weekAgo, now)
+	levels, err := c.top(nil, "level", weekAgo, now, insightGroupLimit)
 	if err != nil {
 		return nil, err
 	}
-	for _, level := range topKeys(levels, len(levels)) {
-		response.Levels = append(response.Levels, logs_core.VolumeCountDTO{Name: level, Count: levels[level]})
+	for _, level := range levels {
+		response.Levels = append(response.Levels, logs_core.VolumeCountDTO{Name: level.Key, Count: level.Counts[0]})
 	}
-	todayCount, err := c.by(nil, "", today, now.Add(-time.Nanosecond))
+	soFar, err := c.count(&logs_core.GroupWindowsRequestDTO{Windows: []logs_core.CountWindowDTO{
+		{From: today, To: now.Add(-time.Nanosecond)},
+		{From: today.Add(-day), To: now.Add(-day - time.Nanosecond)},
+	}})
 	if err != nil {
 		return nil, err
 	}
-	yesterdayCount, err := c.by(nil, "", today.Add(-day), now.Add(-day-time.Nanosecond))
-	if err != nil {
-		return nil, err
-	}
-	response.Today, response.YesterdaySoFar = todayCount[""], yesterdayCount[""]
+	response.Today, response.YesterdaySoFar = soFar.Totals[0], soFar.Totals[1]
 
 	stats, err := logs_core.GetLogCoreRepository().GetProjectLogStats(projectID)
 	if err != nil {
@@ -556,12 +577,13 @@ func (s *LogQueryService) volume(
 		response.RawBytesPerLine = stats.RawSizeMB * 1024 * 1024 / float64(stats.TotalLogs)
 	}
 
-	noisy, err := c.by(
-		nil,
-		logs_core.JoinGroupFields(logs_core.PatternHashField, "service_name", "level"),
-		weekAgo,
-		now,
-	)
+	noisy, err := c.count(&logs_core.GroupWindowsRequestDTO{
+		GroupField: logs_core.JoinGroupFields(logs_core.PatternHashField, "service_name", "level"),
+		Windows:    []logs_core.CountWindowDTO{{From: weekAgo, To: now}},
+		Selections: []logs_core.GroupSelectionDTO{
+			{Where: "length(split_part(key, chr(31), 1)) > 0", Limit: volumeNoisyPatterns},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -574,21 +596,15 @@ func (s *LogQueryService) volume(
 	activeDays = max(activeDays, 1)
 	var hashes []string
 	seen := map[string]bool{}
-	for _, key := range topKeys(noisy, len(noisy)) {
-		parts := logs_core.SplitGroupKey(key, 3)
-		if parts[0] == "" {
-			continue
-		}
+	for _, row := range noisy.Selections[0].Rows {
+		parts := logs_core.SplitGroupKey(row.Key, 3)
 		response.Noisy = append(response.Noisy, logs_core.NoisyPatternDTO{
-			Hash: parts[0], Service: parts[1], Level: parts[2], Count: noisy[key],
-			PerDay: float64(noisy[key]) / float64(activeDays),
+			Hash: parts[0], Service: parts[1], Level: parts[2], Count: row.Counts[0],
+			PerDay: float64(row.Counts[0]) / float64(activeDays),
 		})
 		if !seen[parts[0]] {
 			seen[parts[0]] = true
 			hashes = append(hashes, parts[0])
-		}
-		if len(response.Noisy) == volumeNoisyPatterns {
-			break
 		}
 	}
 	if len(hashes) > 0 {
@@ -624,11 +640,12 @@ func (s *LogQueryService) healthMap(
 	}
 	switch request.GroupBy {
 	case logs_core.HealthMapByKubernetes:
-		fields = []string{"k8s_namespace_name", "k8s_pod_name", "service_name"}
+		// Pods are grouped into workloads in SQL (WorkloadOfPod there).
+		fields = []string{"k8s_namespace_name", logs_core.WorkloadField, "service_name"}
 		place = func(values []string) (string, string) {
 			tile := unknown(values[2], "(unknown)")
 			if values[1] != "" {
-				tile = WorkloadOfPod(values[1])
+				tile = values[1]
 			}
 			return unknown(values[0], "(outside Kubernetes)"), tile
 		}
@@ -644,42 +661,37 @@ func (s *LogQueryService) healthMap(
 		}
 	}
 
+	// Lines, error lines and warning lines in the range, and lines 24 h
+	// earlier, per key - the most lines first, at most healthMaxGroups.
 	c := s.newCounter(ctx, projectID)
-	current, err := c.by(request.Query, logs_core.JoinGroupFields(append(fields, "level")...), from, end)
+	counted, err := c.count(&logs_core.GroupWindowsRequestDTO{
+		Query: request.Query, GroupField: logs_core.JoinGroupFields(fields...),
+		Windows: []logs_core.CountWindowDTO{
+			{From: from, To: end},
+			{From: from, To: end, Levels: mapKeys(errorLevels)},
+			{From: from, To: end, Levels: mapKeys(warnLevels)},
+			{From: from.Add(-day), To: end.Add(-day)},
+		},
+		Selections: []logs_core.GroupSelectionDTO{{Where: "w0 > 0", Limit: healthMaxGroups}},
+	})
 	if err != nil {
 		return nil, err
 	}
-	previous, err := c.by(request.Query, logs_core.JoinGroupFields(fields...), from.Add(-day), end.Add(-day))
-	if err != nil {
-		return nil, err
-	}
+	grouped := counted.Selections[0]
 
 	type tileKey struct{ group, tile string }
 	tiles := map[tileKey]*logs_core.HealthTileDTO{}
-	tileOf := func(group, tile string) *logs_core.HealthTileDTO {
-		key := tileKey{group, tile}
+	for _, row := range grouped.Rows {
+		group, name := place(logs_core.SplitGroupKey(row.Key, len(fields)))
+		key := tileKey{group, name}
 		if tiles[key] == nil {
-			tiles[key] = &logs_core.HealthTileDTO{Name: tile}
+			tiles[key] = &logs_core.HealthTileDTO{Name: name}
 		}
-		return tiles[key]
-	}
-	for key, count := range current {
-		values := logs_core.SplitGroupKey(key, len(fields)+1)
-		group, name := place(values)
-		tile := tileOf(group, name)
-		tile.Total += count
-		level := strings.ToLower(values[len(fields)])
-		if errorLevels[level] {
-			tile.Errors += count
-		} else if warnLevels[level] {
-			tile.Warnings += count
-		}
-	}
-	for key, count := range previous {
-		group, name := place(logs_core.SplitGroupKey(key, len(fields)))
-		if tile := tiles[tileKey{group, name}]; tile != nil {
-			tile.Previous += count
-		}
+		tile := tiles[key]
+		tile.Total += row.Counts[0]
+		tile.Errors += row.Counts[1]
+		tile.Warnings += row.Counts[2]
+		tile.Previous += row.Counts[3]
 	}
 
 	keys := make([]tileKey, 0, len(tiles))
@@ -699,6 +711,11 @@ func (s *LogQueryService) healthMap(
 	if len(keys) > healthMaxTiles {
 		response.HiddenTiles = len(keys) - healthMaxTiles
 		keys = keys[:healthMaxTiles]
+	}
+	if grouped.Truncated() {
+		// Each key left out is about one tile (a workload's services split it).
+		response.HiddenTiles += int(grouped.Matched) - len(grouped.Rows)
+		c.partial = true
 	}
 	groupIndex := map[string]int{}
 	for _, key := range keys {
@@ -769,23 +786,29 @@ func (s *LogQueryService) newCounter(ctx context.Context, projectID uuid.UUID) *
 	return &counter{ctx: ctx, projectID: projectID, budget: config.GetEnv().QueryMaxScanBytes}
 }
 
-// by is the lines matching filter in [from, to] per group key: one bucket
-// as wide as the range in whole minutes, so per-minute counts answer it.
-func (c *counter) by(
-	filter *logs_core.QueryNode, groupField string, from, to time.Time,
-) (map[string]int64, error) {
-	width := to.Sub(from).Truncate(time.Minute) + time.Minute
-	series, err := c.series(filter, groupField, from, to, width)
+// count runs a grouped count under the insight's scan budget.
+func (c *counter) count(request *logs_core.GroupWindowsRequestDTO) (*logs_core.GroupWindowsResponseDTO, error) {
+	request.ScanBudget = c.budget
+	return logs_core.GetLogCoreRepository().ExecuteGroupWindows(c.ctx, c.projectID, request)
+}
+
+// top is the at most limit keys of groupField with the most lines matching
+// filter in [from, to], most first (ties by key); leaving any out marks the
+// insight partial.
+func (c *counter) top(
+	filter *logs_core.QueryNode, groupField string, from, to time.Time, limit int,
+) ([]logs_core.GroupCountsDTO, error) {
+	counted, err := c.count(&logs_core.GroupWindowsRequestDTO{
+		Query: filter, GroupField: groupField, Windows: []logs_core.CountWindowDTO{{From: from, To: to}},
+		Selections: []logs_core.GroupSelectionDTO{{Where: "w0 > 0", Limit: limit}},
+	})
 	if err != nil {
 		return nil, err
 	}
-	counts := map[string]int64{}
-	for key, buckets := range series {
-		for _, count := range buckets {
-			counts[key] += count
-		}
+	if counted.Selections[0].Truncated() {
+		c.partial = true
 	}
-	return counts, nil
+	return counted.Selections[0].Rows, nil
 }
 
 // series is the lines matching filter in [from, to] per group key and
@@ -891,26 +914,6 @@ func trendChange(current, yesterday, week int64) string {
 	return ""
 }
 
-// explainMarginals is each (field, value)'s lines, from counts keyed by
-// explainDimensions' values, plus the total; pods add their ReplicaSet.
-func explainMarginals(counts map[string]int64) (map[[2]string]int64, int64) {
-	values := map[[2]string]int64{}
-	var total int64
-	for key, count := range counts {
-		parts := logs_core.SplitGroupKey(key, len(explainDimensions))
-		total += count
-		for i, field := range explainDimensions {
-			if parts[i] != "" {
-				values[[2]string{field, parts[i]}] += count
-			}
-		}
-		if replicaSet := ReplicaSetOfPod(parts[3]); replicaSet != "" {
-			values[[2]string{replicaSetField, replicaSet}] += count
-		}
-	}
-	return values, total
-}
-
 func andQuery(nodes ...*logs_core.QueryNode) *logs_core.QueryNode {
 	children := []logs_core.QueryNode{}
 	for _, node := range nodes {
@@ -943,19 +946,36 @@ func inCondition(field string, values []string) *logs_core.QueryNode {
 	}
 }
 
-func unionKeys(maps ...map[string]int64) []string {
+// unique is lists' values, each once, in order.
+func unique(lists ...[]string) []string {
 	seen := map[string]bool{}
-	keys := []string{}
-	for _, m := range maps {
-		for key := range m {
-			if !seen[key] {
-				seen[key] = true
-				keys = append(keys, key)
+	var values []string
+	for _, list := range lists {
+		for _, value := range list {
+			if !seen[value] {
+				seen[value] = true
+				values = append(values, value)
 			}
 		}
 	}
+	return values
+}
+
+// mapKeys is set's keys, sorted.
+func mapKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
 	sort.Strings(keys)
 	return keys
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 // topKeys is counts' n biggest keys, most first, ties by key.

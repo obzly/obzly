@@ -1,6 +1,7 @@
 package webanalytics
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -31,8 +32,41 @@ type scanRequest struct {
 	keysFrom  time.Time
 	bucket    time.Duration
 	options   scanOptions
-	timeout   time.Duration
+	// timeout bounds one slice's statements.
+	timeout time.Duration
+	// slice is the longest range one read covers (0: the whole range).
+	slice time.Duration
+	// deadline: no slice starts after it and each ends by it (zero: none).
+	deadline time.Time
+	// partial leaves out a slice that fails or doesn't fit before the
+	// deadline instead of failing the scan (see runScan).
+	partial bool
 }
+
+// minScanSlice: a slice that runs out of memory or spill is split in
+// halves while the halves are at least this long.
+const minScanSlice = 5 * time.Minute
+
+// scanError is a failed scan, with what it got through.
+type scanError struct {
+	projectID uuid.UUID
+	// from, to: the slice that failed.
+	from, to time.Time
+	// rowsRead: access lines in the slices that finished.
+	rowsRead int64
+	slices   int
+	err      error
+}
+
+func (e *scanError) Error() string {
+	return fmt.Sprintf("web analytics scan of project %s failed for %s to %s after %d slices (%d rows read): %v",
+		e.projectID, e.from.Format(time.RFC3339), e.to.Format(time.RFC3339), e.slices, e.rowsRead, e.err)
+}
+
+func (e *scanError) Unwrap() error { return e.err }
+
+// timeWindow is one slice of a scan.
+type timeWindow struct{ from, to time.Time }
 
 // keyStatement is one top list's query.
 type keyStatement struct {
@@ -63,8 +97,89 @@ var keyStatements = []keyStatement{
 }
 
 // runScan reads [from, to) of a project's raw logs into a rollup (not yet
-// finished: see rollup.finish).
+// finished: see rollup.finish), in slices of request.slice, newest first,
+// merged. A slice that runs out of memory or spill is split in halves (down
+// to minScanSlice), so a busy hour still fits the handle's caps. Counts and
+// visitors merge exactly; a top list merges each slice's top rows, so a key
+// just below the cut in some slices counts fewer hits (as hours merge into
+// days). With request.partial, a slice that still fails, or doesn't start
+// before the deadline, is left out: the rollup is marked partial and comes
+// back with a *scanError for the first failure.
 func runScan(repository logs_core.LogRepository, request scanRequest) (*rollup, error) {
+	merged := newRollup()
+	pending := sliceWindows(request.from, request.to, request.slice)
+	slices := 0
+	var firstErr error
+	fail := func(window timeWindow, err error) error {
+		scanErr := &scanError{projectID: request.projectID, from: window.from, to: window.to,
+			rowsRead: merged.rowsRead, slices: slices, err: err}
+		if firstErr == nil {
+			firstErr = scanErr
+		}
+		return scanErr
+	}
+	for len(pending) > 0 {
+		window := pending[0]
+		pending = pending[1:]
+		sliceRequest := request
+		sliceRequest.from, sliceRequest.to = window.from, window.to
+		if !request.deadline.IsZero() && !time.Now().Before(request.deadline) {
+			err := fail(window, errors.New("out of time before this slice started"))
+			if !request.partial {
+				return nil, err
+			}
+			merged.partial = true
+			continue
+		}
+		part, err := scanSlice(repository, sliceRequest)
+		if err != nil {
+			if half := window.to.Sub(window.from) / 2; outOfMemory(err) && half >= minScanSlice {
+				middle := window.from.Add(half).Truncate(time.Minute)
+				if middle.After(window.from) {
+					pending = append([]timeWindow{{middle, window.to}, {window.from, middle}}, pending...)
+					continue
+				}
+			}
+			scanErr := fail(window, err)
+			if !request.partial {
+				return nil, scanErr
+			}
+			merged.partial = true
+			continue
+		}
+		merged.merge(part)
+		slices++
+	}
+	return merged, firstErr
+}
+
+// sliceWindows splits [from, to) at multiples of slice (all of it when slice
+// is 0 or longer), newest first.
+func sliceWindows(from, to time.Time, slice time.Duration) []timeWindow {
+	if slice <= 0 || to.Sub(from) <= slice {
+		return []timeWindow{{from, to}}
+	}
+	var windows []timeWindow
+	for end := to; end.After(from); {
+		start := end.Add(-time.Nanosecond).Truncate(slice)
+		if start.Before(from) {
+			start = from
+		}
+		windows = append(windows, timeWindow{start, end})
+		end = start
+	}
+	return windows
+}
+
+// outOfMemory: DuckDB ran out of its memory limit or spill cap.
+func outOfMemory(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, "Out of Memory") || strings.Contains(text, "max_temp_directory_size")
+}
+
+// scanSlice reads one slice: its access lines (rawFilterSQL narrows the
+// segment scan, then tableSQL shapes them) and every statement over them.
+func scanSlice(repository logs_core.LogRepository, request scanRequest) (*rollup, error) {
 	table, tableArgs := tableSQL(request.options)
 	interval := fmt.Sprintf("INTERVAL '%d seconds'", int64(request.bucket/time.Second))
 	statements := []logs_core.ScopedSQLStatement{
@@ -77,13 +192,17 @@ func runScan(repository logs_core.LogRepository, request scanRequest) (*rollup, 
 		statements = append(statements, logs_core.ScopedSQLStatement{SQL: sql, Args: args})
 	}
 	results, err := repository.ExecuteScopedSQL(request.projectID, &logs_core.ScopedSQLRequestDTO{
-		From:       request.from,
-		To:         request.to.Add(-time.Nanosecond),
-		Statements: statements,
-		Table:      table,
-		TableArgs:  tableArgs,
-		Timeout:    request.timeout,
-		MaxRows:    scanMaxRows,
+		From:        request.from,
+		To:          request.to.Add(-time.Nanosecond),
+		Statements:  statements,
+		Table:       table,
+		TableArgs:   tableArgs,
+		TableFilter: accessFilterSQL,
+		RawColumns:  rawColumns,
+		RawFilter:   rawFilterSQL(),
+		Timeout:     request.timeout,
+		MaxRows:     scanMaxRows,
+		Deadline:    request.deadline,
 	})
 	if err != nil {
 		return nil, err

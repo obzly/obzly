@@ -41,6 +41,35 @@ var (
 // other admins. Listing stays open to admins since it never exposes the secret.
 var ErrConnectorRootOnly = errors.New("only the root admin can create, update, or delete SSO connectors")
 
+var ErrInvalidMFATrust = errors.New(`invalid mfaTrust: must be "off", "amr" or "always"`)
+
+// requestedMFATrust resolves a request's mfaTrust, or the deprecated
+// trustIdpMfa when it is omitted; nil = neither was sent. A legacy true keeps
+// a current "always", since responses report that as trustIdpMfa true too.
+func requestedMFATrust(
+	mfaTrust *sso_models.MFATrustMode,
+	trustIdPMFA *bool,
+	current sso_models.MFATrustMode,
+) (*sso_models.MFATrustMode, error) {
+	if mfaTrust != nil {
+		if !mfaTrust.IsValid() {
+			return nil, ErrInvalidMFATrust
+		}
+		return mfaTrust, nil
+	}
+	if trustIdPMFA == nil {
+		return nil, nil
+	}
+	mode := sso_models.MFATrustOff
+	if *trustIdPMFA {
+		mode = sso_models.MFATrustAMR
+		if current == sso_models.MFATrustAlways {
+			mode = current
+		}
+	}
+	return &mode, nil
+}
+
 const defaultScopes = "openid email profile"
 
 type ConnectorService struct {
@@ -84,6 +113,10 @@ func (s *ConnectorService) CreateConnector(
 	if !request.ProviderType.IsValid() {
 		return nil, fmt.Errorf("invalid provider type %q", request.ProviderType)
 	}
+	mfaTrust, err := requestedMFATrust(request.MFATrust, request.TrustIdPMFA, sso_models.MFATrustOff)
+	if err != nil {
+		return nil, err
+	}
 
 	// Real discovery on save, so a bad issuer fails now rather than at first sign-in.
 	if err := discoverAndCheckProvider(request.IssuerURL); err != nil {
@@ -105,9 +138,12 @@ func (s *ConnectorService) CreateConnector(
 		Scopes:                effectiveScopes(request.Scopes),
 		GroupsClaim:           strings.TrimSpace(request.GroupsClaim),
 		RequireVerifiedEmail:  request.RequireVerifiedEmail == nil || *request.RequireVerifiedEmail,
-		TrustIdPMFA:           request.TrustIdPMFA != nil && *request.TrustIdPMFA,
+		MFATrust:              sso_models.MFATrustOff,
 		ButtonLabel:           request.ButtonLabel,
 		Enabled:               request.Enabled,
+	}
+	if mfaTrust != nil {
+		connector.MFATrust = *mfaTrust
 	}
 
 	if err := s.connectorRepository.Create(connector); err != nil {
@@ -116,7 +152,8 @@ func (s *ConnectorService) CreateConnector(
 
 	if s.auditLogWriter != nil {
 		s.auditLogWriter.WriteAuditLog(
-			fmt.Sprintf("SSO connector created: %s (%s)", connector.Name, connector.ProviderType),
+			fmt.Sprintf("SSO connector created: %s (%s), provider MFA trust: %s",
+				connector.Name, connector.ProviderType, connector.MFATrust),
 			&user.ID,
 			nil,
 		)
@@ -148,10 +185,16 @@ func (s *ConnectorService) UpdateConnector(
 		return nil, ErrConnectorNotFound
 	}
 
+	mfaTrust, err := requestedMFATrust(request.MFATrust, request.TrustIdPMFA, connector.MFATrust)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := discoverAndCheckProvider(request.IssuerURL); err != nil {
 		return nil, err
 	}
 
+	previousMFATrust := connector.MFATrust
 	connector.Name = request.Name
 	connector.ProviderType = request.ProviderType
 	connector.IssuerURL = strings.TrimRight(request.IssuerURL, "/")
@@ -161,8 +204,8 @@ func (s *ConnectorService) UpdateConnector(
 	if request.RequireVerifiedEmail != nil {
 		connector.RequireVerifiedEmail = *request.RequireVerifiedEmail
 	}
-	if request.TrustIdPMFA != nil {
-		connector.TrustIdPMFA = *request.TrustIdPMFA
+	if mfaTrust != nil {
+		connector.MFATrust = *mfaTrust
 	}
 	connector.ButtonLabel = request.ButtonLabel
 	connector.Enabled = request.Enabled
@@ -185,6 +228,15 @@ func (s *ConnectorService) UpdateConnector(
 			&user.ID,
 			nil,
 		)
+		// Decides who skips Obzly's MFA, so it gets its own entry.
+		if connector.MFATrust != previousMFATrust {
+			s.auditLogWriter.WriteAuditLog(
+				fmt.Sprintf("SSO connector %s: provider MFA trust changed from %s to %s",
+					connector.Name, previousMFATrust, connector.MFATrust),
+				&user.ID,
+				nil,
+			)
+		}
 	}
 
 	return sso_dto.ToConnectorResponseDTO(connector), nil
