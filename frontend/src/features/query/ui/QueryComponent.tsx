@@ -30,7 +30,7 @@ import type { SqlChartKind } from '../../../shared/lib/sqlResultShape';
 import { Card, PageHeader } from '../../../shared/ui/v2';
 import { withHiddenLevels } from '../lib/logLevels';
 import { useLogsViewSettings } from '../lib/logsViewSettings';
-import { LOGS_SEARCH_VIEW } from '../lib/logsViews';
+import { LOGS_SEARCH_VIEW, readStoredLogsView, storeLogsView } from '../lib/logsViews';
 import { type PushLiveTailHandle, startPushLiveTail } from '../lib/pushLiveTail';
 import { type ValueSuggestion, clearValueSuggestions } from '../lib/queryEditor/searchLanguage';
 import { getRecentQueries, recordRecentQuery } from '../lib/recentQueriesStorage';
@@ -214,7 +214,8 @@ export const QueryComponentComponent = ({
     readResultsView(`${RESULTS_VIEW_KEY}-sql`),
   );
   // The header's view tab (LogsViewTabs); Search is the page below it.
-  const [logsView, setLogsView] = useState<string>(LOGS_SEARCH_VIEW);
+  const [logsView, setLogsView] = useState<string>(readStoredLogsView);
+  useEffect(() => storeLogsView(logsView), [logsView]);
   // A range dragged on the histogram to explain, kept with the run it was picked on.
   const [explain, setExplain] = useState<{
     run: typeof executedQueries;

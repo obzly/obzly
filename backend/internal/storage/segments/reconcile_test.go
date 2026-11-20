@@ -11,6 +11,7 @@ import (
 
 	"obzly/internal/storage"
 	"obzly/internal/storage/segments"
+	test_utils "obzly/internal/util/testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,9 @@ import (
 // disk copy isn't, one with the wrong size, an orphan from after a
 // database restore, an orphan overlapping cataloged data, and junk.
 func Test_Reconcile_FindsAndRepairsEachKindOnce(t *testing.T) {
+	// Its rows are uploaded logs segments: hold the lock the uploader tests take
+	// before resetting every uploaded logs segment.
+	test_utils.AcquireExclusiveGlobalQueue(t, "logs-uploaded-queue")
 	ctx := context.Background()
 	store := newMemObjectStore(t)
 	dir := t.TempDir()

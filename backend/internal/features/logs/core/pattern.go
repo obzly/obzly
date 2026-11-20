@@ -81,6 +81,10 @@ const PatternVersion = 2
 // patternRulesV1: PatternRules' first rules, version 1's.
 const patternRulesV1 = 6
 
+// patternRuleID is PatternRules' index of the word-with-a-digit rule, which
+// maskIDs applies without the regex.
+const patternRuleID = 7
+
 var compiledPatternRules = func() []*regexp.Regexp {
 	compiled := make([]*regexp.Regexp, len(PatternRules))
 	for i, rule := range PatternRules {
@@ -89,23 +93,31 @@ var compiledPatternRules = func() []*regexp.Regexp {
 	return compiled
 }()
 
+// patternRuleNeeds holds, per rule, text the rule can't match without, so a
+// line lacking it skips that rule's scan: every log is hashed at ingest, on
+// the shard's one goroutine, and the regexes were most of a worker's CPU.
+// Each needed piece is part of every match, so skipping never changes a
+// template (Test_MessagePattern_FastPathMatchesTheRegexes).
+var patternRuleNeeds = []func(string) bool{
+	has("-"), func(t string) bool { return strings.Contains(t, "-") && strings.Contains(t, ":") }, has("."),
+	func(t string) bool { return strings.Contains(t, "0x") || strings.Contains(t, "0X") }, nil, nil,
+	has("@"), nil, has("-"),
+	has(`"`), has(`"`), has(`"`),
+	has("="), has("="),
+}
+
 // MessagePattern returns message's template (see PatternRules), at most
 // PatternMaxChars code points.
 func MessagePattern(message string) string {
-	pattern := cutCodePoints(message, patternInputChars)
-	for i, re := range compiledPatternRules {
-		pattern = re.ReplaceAllLiteralString(pattern, PatternRules[i].Replacement)
-	}
-	return cutCodePoints(pattern, PatternMaxChars)
+	return cutCodePoints(
+		applyPatternRules(cutCodePoints(message, patternInputChars), len(PatternRules)),
+		PatternMaxChars,
+	)
 }
 
 // MessagePatternV1 is message's version 1 template.
 func MessagePatternV1(message string) string {
-	pattern := cutCodePoints(message, PatternMaxChars)
-	for i, re := range compiledPatternRules[:patternRulesV1] {
-		pattern = re.ReplaceAllLiteralString(pattern, PatternRules[i].Replacement)
-	}
-	return pattern
+	return applyPatternRules(cutCodePoints(message, PatternMaxChars), patternRulesV1)
 }
 
 // PatternRegrouped reports whether version 2 gives message another pattern
@@ -113,6 +125,61 @@ func MessagePatternV1(message string) string {
 // version 1 hash stopped there.
 func PatternRegrouped(message string) bool {
 	return MessagePatternV1(message) != MessagePattern(message)
+}
+
+// applyPatternRules runs PatternRules' first n rules over pattern.
+func applyPatternRules(pattern string, n int) string {
+	for i, re := range compiledPatternRules[:n] {
+		if needs := patternRuleNeeds[i]; needs != nil && !needs(pattern) {
+			continue
+		}
+		if i == patternRuleID {
+			pattern = maskIDs(pattern)
+			continue
+		}
+		pattern = re.ReplaceAllLiteralString(pattern, PatternRules[i].Replacement)
+	}
+	return pattern
+}
+
+func has(piece string) func(string) bool {
+	return func(text string) bool { return strings.Contains(text, piece) }
+}
+
+// maskIDs is the <id> rule without the regex: a whole word (a run of ASCII
+// letters, digits and underscores, as RE2's \w and \b see it) of 6 or more
+// characters holding a digit becomes "<id>".
+func maskIDs(text string) string {
+	var out strings.Builder
+	last := 0
+	for i := 0; i < len(text); {
+		if !isWordByte(text[i]) {
+			i++
+			continue
+		}
+		start, digit := i, false
+		for i < len(text) && isWordByte(text[i]) {
+			digit = digit || (text[i] >= '0' && text[i] <= '9')
+			i++
+		}
+		if digit && i-start >= 6 {
+			if last == 0 {
+				out.Grow(len(text))
+			}
+			out.WriteString(text[last:start])
+			out.WriteString(PatternRules[patternRuleID].Replacement)
+			last = i
+		}
+	}
+	if last == 0 {
+		return text
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // cutCodePoints is text's first limit code points.

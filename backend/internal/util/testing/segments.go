@@ -13,10 +13,16 @@ import (
 // UseIsolatedSegmentWriter gives the test a fresh segment writer id: rows it writes
 // carry it, and uploaders list only those. Without it, uploaders pick up other packages'
 // pending rows (one shared Postgres) whose temp dirs are gone.
+// It is marked alive, so another package's orphan sweep doesn't retire its pending
+// rows as a gone writer's (AgeSegments makes them look old enough).
 func UseIsolatedSegmentWriter(t *testing.T) {
 	t.Helper()
-	segments.SetLocalWriter("test-"+uuid.NewString(), false)
+	id := "test-" + uuid.NewString()
+	segments.SetLocalWriter(id, false)
 	t.Cleanup(segments.ResetLocalWriter)
+	if err := segments.HeartbeatWriter(id, time.Now().UTC()); err != nil {
+		t.Fatalf("failed to mark the test segment writer alive: %v", err)
+	}
 }
 
 // AgeSegments makes a project's segments of stream look created age ago, so

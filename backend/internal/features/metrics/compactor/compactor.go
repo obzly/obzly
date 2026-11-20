@@ -38,6 +38,9 @@ type MetricCompactor struct {
 	compactor   *segments.Compactor
 	// objectStore is nil unless object storage is configured (WithObjectStore).
 	objectStore *segments.ObjectStore
+	// publisher uploads each merge before it replaces its sources (nil
+	// without object storage).
+	publisher segments.Publisher
 }
 
 type Option func(*options)
@@ -72,6 +75,11 @@ func NewMetricCompactor(dataDir string, opts ...Option) (*MetricCompactor, error
 		compactor:   compactor,
 		objectStore: cfg.objectStore,
 	}, nil
+}
+
+// SetPublisher uploads each merge before it replaces its sources.
+func (c *MetricCompactor) SetPublisher(publisher segments.Publisher) {
+	c.publisher = publisher
 }
 
 func (c *MetricCompactor) Close() error {
@@ -292,23 +300,17 @@ func (c *MetricCompactor) compactStream(projectID uuid.UUID, stream string, resu
 			continue
 		}
 
-		mergedRecord := segments.FromSegment(*merged)
-		if err := c.segmentRepo.ReplaceSegments(idsOf(group), mergedRecord); err != nil {
-			// Discard the merged file; its rows are either still in the
-			// sources or were deliberately deleted.
-			if cleanupErr := c.compactor.DeleteSegmentFiles(
-				[]*segments.SegmentRecord{mergedRecord},
-			); cleanupErr != nil {
-				return fmt.Errorf("failed to discard merged segment: %w", cleanupErr)
-			}
-			if errors.Is(err, segments.ErrSegmentsGone) {
-				continue
-			}
-			return fmt.Errorf("failed to record merged segment: %w", err)
+		committed, err := segments.CommitMerge(context.Background(), c.segmentRepo, c.publisher,
+			c.deleteSegmentData, group, segments.FromSegment(*merged))
+		if errors.Is(err, segments.ErrMergeNotPublished) {
+			mergeErrs = append(mergeErrs, err)
+			continue
 		}
-
-		if err := c.deleteSegmentData(group); err != nil {
-			return fmt.Errorf("failed to clean up merged-away segments: %w", err)
+		if err != nil {
+			return err
+		}
+		if !committed {
+			continue
 		}
 
 		result.MergedGroups++

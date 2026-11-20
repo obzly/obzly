@@ -61,43 +61,39 @@ func (u *SpanUploader) Upload(ctx context.Context, record *segments.SegmentRecor
 
 func (u *SpanUploader) uploadOne(ctx context.Context, record *segments.SegmentRecord) error {
 	key := segments.ObjectKeyFor(record)
-
-	uploadCtx, cancel := context.WithTimeout(ctx, perSegmentTimeout)
-	defer cancel()
-	if err := u.store.Upload(uploadCtx, key, record.Path); err != nil {
+	if err := segments.UploadVerified(ctx, u.store, key, record, perSegmentTimeout); err != nil {
 		return err
 	}
-
-	// Verify the object landed before marking it durable (a successful
-	// upload call does not guarantee it).
-	existsCtx, cancel := context.WithTimeout(ctx, perSegmentTimeout)
-	defer cancel()
-	exists, err := u.store.Exists(existsCtx, key)
-	if err != nil {
-		return fmt.Errorf("uploaded but failed to verify it landed: %w", err)
-	}
-	if !exists {
-		return fmt.Errorf(
-			"uploaded %q but a follow-up existence check found nothing there - not marking durable, will retry next pass",
-			key,
-		)
-	}
-
 	if err := u.segmentRepo.MarkUploaded(record.ID, key); err != nil {
 		return fmt.Errorf("uploaded but failed to record it (will re-upload next pass): %w", err)
 	}
 	uploaded := *record
 	uploaded.ObjectKey = key
-	segments.NotifyUploaded(&uploaded)
+	return u.Published(&uploaded)
+}
 
+// Publish uploads a segment before its catalog row exists (a merge, before
+// it replaces its sources).
+func (u *SpanUploader) Publish(ctx context.Context, record *segments.SegmentRecord) error {
+	record.ObjectKey = segments.ObjectKeyFor(record)
+	if err := segments.UploadVerified(ctx, u.store, record.ObjectKey, record, perSegmentTimeout); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	record.UploadedAt = &now
+	return nil
+}
+
+// Published tells queriers about an uploaded, recorded segment and frees its
+// local disk if configured.
+func (u *SpanUploader) Published(record *segments.SegmentRecord) error {
+	segments.NotifyUploaded(record)
 	if !u.DeleteLocalAfterUpload {
 		return nil
 	}
-
 	if err := os.Remove(record.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("uploaded and recorded, but failed to reclaim local disk space: %w", err)
 	}
-
 	return nil
 }
 
@@ -110,60 +106,14 @@ func (u *SpanUploader) PendingCount(limit int) (int, error) {
 	return len(pending), nil
 }
 
-type ReconcileResult struct {
-	Verified      int
-	Failures      int
-	Unrecoverable int
-}
+type ReconcileResult = segments.UploadedCheck
 
 // ReconcileSegments checks that uploaded segments missing locally still
 // exist in object storage, and errors on any lost from both.
 func (u *SpanUploader) ReconcileSegments(ctx context.Context, limit int) (ReconcileResult, error) {
-	var result ReconcileResult
-
 	uploaded, err := u.segmentRepo.ListUploaded(streamSpans, limit)
 	if err != nil {
-		return result, fmt.Errorf("failed to list uploaded segments: %w", err)
+		return ReconcileResult{}, fmt.Errorf("failed to list uploaded segments: %w", err)
 	}
-
-	var failureErrs []error
-	var unrecoverableIDs []string
-
-	for _, record := range uploaded {
-		if _, err := os.Stat(record.Path); err == nil {
-			continue
-		}
-
-		existsCtx, cancel := context.WithTimeout(ctx, perSegmentTimeout)
-		exists, err := u.store.Exists(existsCtx, record.ObjectKey)
-		cancel()
-		if err != nil {
-			result.Failures++
-			failureErrs = append(failureErrs, fmt.Errorf("segment %s: checking existence: %w", record.ID, err))
-			continue
-		}
-		if !exists {
-			result.Unrecoverable++
-			unrecoverableIDs = append(unrecoverableIDs, record.ID.String())
-			continue
-		}
-
-		result.Verified++
-	}
-
-	if result.Unrecoverable > 0 {
-		return result, fmt.Errorf(
-			"%d segment(s) missing from BOTH local disk and object storage - unrecoverable data loss, ids: %v",
-			result.Unrecoverable, unrecoverableIDs,
-		)
-	}
-	if result.Failures > 0 {
-		return result, fmt.Errorf(
-			"failed to reconcile %d of %d segments: %w",
-			result.Failures,
-			len(uploaded),
-			errors.Join(failureErrs...),
-		)
-	}
-	return result, nil
+	return segments.VerifyUploaded(ctx, u.store, u.segmentRepo, uploaded, perSegmentTimeout)
 }

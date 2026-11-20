@@ -291,6 +291,59 @@ func Test_Reconcile_CronJobRuns_FoldIntoTheCronJobAndLeaveOnceDone(t *testing.T)
 		Kind: KindWorkload, Type: ChangeNew, To: StateActive, Detail: "CronJob", At: testNow})
 }
 
+func Test_Reconcile_TerminatedAssets_LeaveSoonerAndRemovedNodesAreNotCritical(t *testing.T) {
+	asset := func(kind, subtype, key, name, cluster string, gone time.Duration) Asset {
+		return Asset{
+			ID: uuid.New(), Kind: kind, Subtype: subtype, Key: key, Name: name, Cluster: cluster, Namespace: "shop",
+			Sources: Strings{"metrics"}, FirstSeen: testNow.Add(-20 * 24 * time.Hour), LastSeen: testNow.Add(-gone),
+		}
+	}
+	day := 24 * time.Hour
+	existing := []Asset{
+		asset(KindWorkload, "CronJob", "wl:prd/shop/CronJob/reminder", "reminder", "prd", time.Minute),
+		asset(KindPod, "", "pod:prd/shop/uid-ended", "checkout-api-7d9f8b6c5d-x7k2p", "prd", 25*time.Hour),
+		asset(KindContainer, "", "ctr:prd/shop/uid-ended/app", "app", "prd", 25*time.Hour),
+		asset(KindPod, "", "pod:prd/shop/uid-recent", "checkout-api-7d9f8b6c5d-b2c4d", "prd", 23*time.Hour),
+		asset(KindWorkload, "Deployment", "wl:prd/shop/Deployment/old-api", "old-api", "prd", 8*day),
+		asset(KindWorkload, "Deployment", "wl:prd/shop/Deployment/paused-api", "paused-api", "prd", 6*day),
+		// An earlier build read a CronJob run's pod as a StatefulSet's.
+		asset(KindWorkload, "StatefulSet", "wl:prd/shop/StatefulSet/reminder-29884120", "reminder-29884120",
+			"prd", 3*day),
+		asset(KindWorkload, "StatefulSet", "wl:prd/shop/StatefulSet/orders-db", "orders-db", "prd", 3*day),
+		asset(KindNode, "", "node:prd/scaled-in", "scaled-in", "prd", 20*time.Minute),
+		// No cluster agent in dev: a silent node may be broken, not removed.
+		asset(KindNode, "", "node:dev/silent", "silent", "dev", 20*time.Minute),
+		asset(KindNode, "", "node:dev/up", "up", "dev", time.Minute),
+	}
+	ready := true
+	observed := map[string]*Asset{"node:prd/live": {
+		Kind: KindNode, Key: "node:prd/live", Name: "live", Cluster: "prd", Sources: Strings{"metrics"},
+		FirstSeen: testNow.Add(-day), LastSeen: testNow, Metrics: Metrics{Ready: &ready},
+	}}
+
+	kept, _, stale := reconcile(uuid.New(), existing, observed, nil, testNow, 30*day)
+
+	byKey := indexByKey(kept)
+	for _, key := range []string{
+		"pod:prd/shop/uid-ended", "ctr:prd/shop/uid-ended/app", "wl:prd/shop/Deployment/old-api",
+		"wl:prd/shop/StatefulSet/reminder-29884120",
+	} {
+		assert.Nil(t, byKey[key], key)
+		assert.Contains(t, stale, existingID(existing, key), key)
+	}
+	for _, key := range []string{
+		"pod:prd/shop/uid-recent", "wl:prd/shop/Deployment/paused-api", "wl:prd/shop/StatefulSet/orders-db",
+	} {
+		assert.NotNil(t, byKey[key], key)
+	}
+	scaledIn := byKey["node:prd/scaled-in"]
+	require.NotNil(t, scaledIn, "kept until removeReplacedAfter")
+	assert.Equal(t, StateTerminated, scaledIn.State)
+	assert.Equal(t, HealthInactive, scaledIn.Health)
+	assert.Equal(t, StateNotReporting, byKey["node:dev/silent"].State)
+	assert.Equal(t, HealthCritical, byKey["node:dev/silent"].Health)
+}
+
 func Test_WorkloadOf_PodNames_OnlyTrustsGeneratedSuffixes(t *testing.T) {
 	cases := []struct{ pod, kind, name string }{
 		{"checkout-api-7d9f8b6c5d-x7k2p", "Deployment", "checkout-api"},

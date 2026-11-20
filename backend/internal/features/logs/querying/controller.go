@@ -1,6 +1,8 @@
 package logs_querying
 
 import (
+	"obzly/internal/util/logger"
+
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -708,6 +710,11 @@ func (c *LogQueryController) ExecuteHealthMap(ctx *gin.Context) {
 
 func (c *LogQueryController) handleError(ctx *gin.Context, err error) {
 	status, body := c.errorResponse(err)
+	if status == http.StatusInternalServerError {
+		// The client only gets a generic message, so the cause goes here.
+		logger.GetLogger().Error("Log query failed", "path", ctx.FullPath(),
+			"projectId", ctx.Param("projectId"), "error", err)
+	}
 	ctx.JSON(status, body)
 }
 

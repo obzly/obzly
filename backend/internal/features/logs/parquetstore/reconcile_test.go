@@ -19,6 +19,9 @@ import (
 // A failing reconcile pass (a segment gone from disk and object storage)
 // still backfills token filters.
 func Test_ReconcileSegments_ReconcileFails_StillBackfillsTokenFilters(t *testing.T) {
+	// Uploads logs segments: hold the lock the uploader tests take before
+	// resetting every uploaded logs segment, or they delete this test's.
+	test_utils.AcquireExclusiveGlobalQueue(t, "logs-uploaded-queue")
 	test_utils.UseIsolatedSegmentWriter(t)
 	dataDir := t.TempDir()
 	objects, err := segments.NewObjectStore(context.Background(), "mem://")

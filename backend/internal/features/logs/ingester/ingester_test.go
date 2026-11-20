@@ -2,6 +2,7 @@ package logs_ingester_test
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -95,6 +96,52 @@ func Test_StoreLogsBatch_ThenFlush_WritesReadableParquetSegment(t *testing.T) {
 	require.Len(t, catalogued, 1)
 	require.Equal(t, segmentsFlushed[0].Path, catalogued[0].Path)
 	require.Equal(t, int64(2), catalogued[0].RowCount)
+}
+
+// A large batch converts on several goroutines: each row must still carry
+// its own log's id, message and pattern hash.
+func Test_StoreLogsBatch_LargeBatch_KeepsEveryRowWithItsOwnLog(t *testing.T) {
+	ingester := newTestIngester(t)
+	projectID := uuid.New()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	items := make([]*logs_core.LogItem, 2000)
+	want := map[string]string{}
+	for k := range items {
+		message := fmt.Sprintf("order ORD%06dX shipped to warehouse %d", k, k%7)
+		if k%3 == 0 {
+			message = fmt.Sprintf(`{"order":"ORD%06dX","note":"line %d"}`, k, k)
+		}
+		items[k] = &logs_core.LogItem{
+			ID:        uuid.New(),
+			ProjectID: projectID,
+			Timestamp: now.Add(time.Duration(k) * time.Millisecond),
+			Level:     logs_core.LogLevelInfo,
+			Message:   message,
+		}
+		want[items[k].ID.String()] = message
+	}
+
+	require.NoError(t, ingester.StoreLogsBatch(map[uuid.UUID][]*logs_core.LogItem{projectID: items}))
+	flushed, err := ingester.FlushAll()
+	require.NoError(t, err)
+	require.Len(t, flushed, 1)
+
+	db, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	defer db.Close()
+	rows, err := db.Query(`SELECT id, message, pattern_hash FROM read_parquet(?)`, flushed[0].Path)
+	require.NoError(t, err)
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var id, message, hash string
+		require.NoError(t, rows.Scan(&id, &message, &hash))
+		require.Equal(t, want[id], message)
+		require.Equal(t, logs_core.PatternHash(message), hash)
+		seen++
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, len(items), seen)
 }
 
 func Test_StoreLogsBatch_MultipleProjects_KeepsRowsSeparate(t *testing.T) {

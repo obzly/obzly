@@ -156,6 +156,10 @@ func reconcileRows(
 					}
 				}
 			default:
+				// A merge running meanwhile deletes the row, then the object.
+				if cataloged, err := (&SegmentRepository{}).Exists(row.ID); err != nil || !cataloged {
+					return err
+				}
 				finding.Kind = FindingLost
 				finding.Detail = fmt.Sprintf("%d rows, %s to %s", row.RowCount,
 					row.MinTime.UTC().Format(time.RFC3339), row.MaxTime.UTC().Format(time.RFC3339))
@@ -332,17 +336,19 @@ func describeOrphan(
 	}, nil
 }
 
-// markLost moves a row to lost_segments in one transaction.
+// markLost moves a row to lost_segments in one transaction; a row that is
+// already gone (merged away since it was read) is no loss.
 func markLost(row *SegmentRecord, reason string) error {
 	return storage.GetDb().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`INSERT INTO lost_segments
+		deleted := tx.Where("stream = ? AND id = ?", row.Stream, row.ID).Delete(&SegmentRecord{})
+		if deleted.Error != nil || deleted.RowsAffected == 0 {
+			return deleted.Error
+		}
+		return tx.Exec(`INSERT INTO lost_segments
 			(id, project_id, stream, object_key, row_count, size_bytes, min_time, max_time, reason)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 			row.ID, row.ProjectID, row.Stream, row.ObjectKey, row.RowCount, row.SizeBytes,
-			row.MinTime, row.MaxTime, reason).Error; err != nil {
-			return err
-		}
-		return tx.Where("stream = ? AND id = ?", row.Stream, row.ID).Delete(&SegmentRecord{}).Error
+			row.MinTime, row.MaxTime, reason).Error
 	})
 }
 

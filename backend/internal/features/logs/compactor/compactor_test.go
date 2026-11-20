@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -536,3 +537,73 @@ func Test_CompactSmallSegments_OneGroupFails_OtherGroupsStillMerge(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, after, 3)
 }
+
+// A worker's disk is not durable: a merge that replaced its sources before
+// it was uploaded lost its rows when the worker restarted in between.
+func Test_CompactSmallSegments_WithPublisher_MergeIsUploadedBeforeItReplacesItsSources(t *testing.T) {
+	test_utils.UseIsolatedSegmentWriter(t)
+	dataDir := t.TempDir()
+	projectID := uuid.New()
+	seedTinySegments(t, dataDir, projectID, 3, time.Now().UTC())
+	store, err := segments.NewObjectStore(context.Background(), "mem://")
+	require.NoError(t, err)
+	defer func() { _ = store.Close() }()
+	uploader := logs_uploader.NewLogUploader(store)
+	_, err = uploader.UploadPending(context.Background(), 10)
+	require.NoError(t, err)
+	compactor, err := logs_compactor.NewLogCompactor(dataDir, logs_compactor.WithObjectStore(store))
+	require.NoError(t, err)
+	defer compactor.Close()
+	compactor.SetPublisher(uploader)
+	test_utils.AgeSegments(t, projectID, "logs", 48*time.Hour)
+
+	result, err := compactor.CompactSmallSegments(projectID)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.MergedGroups)
+	repo := &segments.SegmentRepository{}
+	after, err := repo.ListByProject(projectID, "logs")
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	require.NotNil(t, after[0].UploadedAt, "the merge is recorded as uploaded")
+	exists, err := store.Exists(context.Background(), after[0].ObjectKey)
+	require.NoError(t, err)
+	require.True(t, exists, "the merge's rows survive losing this worker's disk")
+}
+
+func Test_CompactSmallSegments_PublishFails_KeepsTheSources(t *testing.T) {
+	test_utils.UseIsolatedSegmentWriter(t)
+	dataDir := t.TempDir()
+	projectID := uuid.New()
+	seedTinySegments(t, dataDir, projectID, 3, time.Now().UTC())
+	repo := &segments.SegmentRepository{}
+	before, err := repo.ListByProject(projectID, "logs")
+	require.NoError(t, err)
+	compactor, err := logs_compactor.NewLogCompactor(dataDir)
+	require.NoError(t, err)
+	defer compactor.Close()
+	compactor.SetPublisher(failingPublisher{})
+	test_utils.AgeSegments(t, projectID, "logs", 48*time.Hour)
+
+	result, err := compactor.CompactSmallSegments(projectID)
+
+	require.ErrorIs(t, err, segments.ErrMergeNotPublished)
+	require.Zero(t, result.MergedGroups)
+	after, err := repo.ListByProject(projectID, "logs")
+	require.NoError(t, err)
+	require.Len(t, after, len(before), "the sources stay until a merge is uploaded")
+	for _, record := range after {
+		require.FileExists(t, record.Path)
+	}
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(before[0].Path), "*.parquet"))
+	require.NoError(t, err)
+	require.Len(t, files, len(before), "the discarded merge leaves no file behind")
+}
+
+type failingPublisher struct{}
+
+func (failingPublisher) Publish(context.Context, *segments.SegmentRecord) error {
+	return errors.New("object storage unreachable")
+}
+
+func (failingPublisher) Published(*segments.SegmentRecord) error { return nil }

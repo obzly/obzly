@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -155,8 +156,15 @@ func (q *LogQuerier) windowSources(
 		if i > 0 && !reads {
 			continue
 		}
+		records := source.records
+		if i > 0 && !source.rollup {
+			// A raw edge input opens only the segments its ranges reach: a
+			// window ending at now has a zero-width edge there, which used to
+			// open every segment of the window.
+			records = recordsInRanges(records, ranges)
+		}
 		sources = append(sources, windowSource{
-			stream: source.stream, records: source.records, tail: source.tail, rollup: source.rollup, ranges: ranges,
+			stream: source.stream, records: records, tail: source.tail, rollup: source.rollup, ranges: ranges,
 		})
 	}
 	return sources, nil
@@ -485,4 +493,22 @@ func ternaryTokens(raw bool, filter *logs_core.QueryNode) []string {
 		return nil
 	}
 	return requiredTokens(filter)
+}
+
+// recordsInRanges is the records with rows that can fall in any of ranges
+// (per window), in order.
+func recordsInRanges(records []*segments.SegmentRecord, ranges [][]timeRange) []*segments.SegmentRecord {
+	var result []*segments.SegmentRecord
+	for _, record := range records {
+		for _, window := range ranges {
+			if slices.ContainsFunc(window, func(r timeRange) bool {
+				return len(overlapping([]*segments.SegmentRecord{record},
+					searchWindow{From: r.start, To: r.end, IncludeTo: r.includeEnd})) > 0
+			}) {
+				result = append(result, record)
+				break
+			}
+		}
+	}
+	return result
 }

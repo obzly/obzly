@@ -159,6 +159,26 @@ func Test_PlanCompaction_LargeBacklog_MergesAtMostThePassBudget(t *testing.T) {
 	require.LessOrEqual(t, merged, int64(segments.PassBudgetBytes))
 }
 
+// A busy project has an L0 merge in every pass, and an ended day's L1 merge
+// is bigger than the whole budget: both still run each pass, or L1 piles up
+// without ever going cold.
+func Test_PlanCompaction_L0MergesAndALargeColdMerge_BothRunEachPass(t *testing.T) {
+	endedDay := withLevel(flushes(40, 22<<20, 48*time.Hour), segments.LevelCompacted)
+	records := append(endedDay, flushes(9, 6<<20, time.Hour)...)
+	for _, record := range records[40:] {
+		record.RawSizeBytes = 60 << 20
+	}
+
+	plan := segments.PlanCompaction(records, planNow)
+
+	levels := map[int]int{}
+	for _, group := range plan.Merges {
+		levels[group.Level]++
+	}
+	require.Equal(t, 1, levels[segments.LevelCold], "the ended day's 880 MB goes cold")
+	require.Equal(t, 2, levels[segments.LevelCompacted], "both full 240 MB raw L0 runs still merge; the 9th waits")
+}
+
 // flushes returns n time-ordered L0 records of size bytes, created age ago.
 func flushes(n int, size int64, age time.Duration) []*segments.SegmentRecord {
 	records := make([]*segments.SegmentRecord, n)

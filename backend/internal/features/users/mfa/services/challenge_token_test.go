@@ -2,6 +2,7 @@ package mfa_services
 
 import (
 	"testing"
+	"time"
 
 	user_repositories "obzly/internal/features/users/repositories"
 
@@ -29,6 +30,26 @@ func Test_IssueParseChallengeToken_RoundTrips(t *testing.T) {
 	require.NoError(t, err)
 
 	parsedID, err := parseChallengeToken(repo, token, purposeLogin)
+	require.NoError(t, err)
+	assert.Equal(t, userID, parsedID)
+}
+
+// Sign-in issues the token on one replica and the code check may run on
+// another whose clock is slightly behind.
+func Test_ParseChallengeToken_WhenIssuedSecondsAheadOnAnotherReplica_Accepts(t *testing.T) {
+	repo := &user_repositories.SecretKeyRepository{}
+	secret, err := repo.GetSecretKey()
+	require.NoError(t, err)
+	userID := uuid.New()
+	now := time.Now().UTC()
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": userID.String(), "purpose": string(purposeLogin),
+		"iat": now.Add(2 * time.Second).Unix(), "exp": now.Add(5 * time.Minute).Unix(),
+	}).SignedString([]byte(secret))
+	require.NoError(t, err)
+
+	parsedID, err := parseChallengeToken(repo, token, purposeLogin)
+
 	require.NoError(t, err)
 	assert.Equal(t, userID, parsedID)
 }

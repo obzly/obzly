@@ -85,7 +85,7 @@ Caches, rate limits and leases only - no data that needs a backup.
 | Variable | Default | |
 | --- | --- | --- |
 | `ALERT_EVAL_SHARDS` | `1` | Rule evaluation split this many ways, each under its own leader lock |
-| `INVENTORY_RETENTION_DAYS` | `30` | Infrastructure inventory: an asset not seen for this many days is dropped (terminated pods and containers after 7 days; a Job or CronJob run's pod once it succeeds, or a day after it failed) |
+| `INVENTORY_RETENTION_DAYS` | `30` | Infrastructure inventory: an asset not seen for this many days is dropped (terminated pods and containers after 24 hours, deleted workloads after 7 days; a Job or CronJob run's pod once it succeeds, or a day after it failed) |
 | `INVENTORY_MAX_ASSETS_PER_PROJECT` | `50000` | Infrastructure inventory: past this many assets in a project the least recently seen are dropped, with a warning in the worker log |
 | `WEB_ANALYTICS_GEOIP_DB` | `/app/geoip/dbip-country-lite.mmdb` | Web analytics: the country database visitor IPs are looked up in. The image bundles DB-IP Lite (CC BY 4.0; the report shows "IP geolocation by DB-IP"); any GeoIP2-Country compatible `.mmdb` (e.g. your own MaxMind GeoLite2-Country) works. A missing or unreadable file only leaves the Countries panel empty |
 | `ALERT_EGRESS_ALLOWLIST` | empty | CIDRs webhooks, and Synthetics Tests run from the control plane, may reach although not public (in-network receivers) |

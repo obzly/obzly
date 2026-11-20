@@ -475,8 +475,15 @@ func (s *UserService) GetUserFromToken(token string) (*users_models.User, error)
 }
 
 // jwtParseOptions: HS256 only, and v4's checks kept on v5 (exp and nbf are
-// v5's defaults; iat in the future is rejected as v4 did).
-var jwtParseOptions = []jwt.ParserOption{jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuedAt()}
+// v5's defaults; iat in the future is rejected as v4 did). The leeway covers
+// clock skew between replicas: iat is whole seconds, so a token signed just
+// after a second ticked on one replica was "issued in the future" on another
+// whose clock was a few milliseconds behind, and the next request got a 401.
+var jwtParseOptions = []jwt.ParserOption{
+	jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuedAt(), jwt.WithLeeway(jwtClockLeeway),
+}
+
+const jwtClockLeeway = 30 * time.Second
 
 // GetUserAndClaimsFromToken is GetUserFromToken plus the verified claims, which
 // the middleware needs to tell exchanged and IdP-MFA sessions from local ones.

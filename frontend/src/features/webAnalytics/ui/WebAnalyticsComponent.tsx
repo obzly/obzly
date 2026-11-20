@@ -41,7 +41,9 @@ interface Props {
 const LIVE_REFRESH_MS = 30_000;
 const DB_IP_URL = 'https://db-ip.com';
 
-const names = (sources: WebAnalyticsSource[]) => sources.map((s) => s.name).join(', ');
+// A project can have dozens of sources; listing them all buries the message.
+const names = (sources: WebAnalyticsSource[]) =>
+  sources.length <= 2 ? sources.map((s) => s.name).join(' and ') : `${sources.length} sources`;
 
 const hitsColumn: PanelColumn = {
   label: 'Hits',
@@ -296,8 +298,10 @@ export const WebAnalyticsComponent = ({ projectId, onOpenLogs }: Props): JSX.Ele
         note={
           !noDuration.length
             ? `From ${names(durationSources)}.`
-            : `${durationSources.length ? `From ${names(durationSources)} only. ` : ''}${names(noDuration)} ` +
-              `${noDuration.length === 1 ? 'doesn’t' : 'don’t'} log response time. Add $request_time (Nginx) or %D (Apache) to the log format.`
+            : !durationSources.length
+              ? 'No data to show. Add $request_time (Nginx) or %D (Apache) to the log format.'
+              : `From ${names(durationSources)} only. ${names(noDuration)} ` +
+                `${noDuration.length === 1 ? 'doesn’t' : 'don’t'} log response time.`
         }
       />
     </section>
@@ -583,14 +587,19 @@ export const WebAnalyticsComponent = ({ projectId, onOpenLogs }: Props): JSX.Ele
               subtitle="Where visitors came from; own hosts left out"
               keyLabel="Site"
               rows={panels.referrers}
+              empty={
+                noReferrer.length === selectedSources.length && noReferrer.length > 0
+                  ? 'No data to show. The selected sources don’t log the referrer.'
+                  : undefined
+              }
               columns={[hitsColumn, visitorsColumn]}
               color={color(3)}
               tag={(r) => (r.tag === 'search' ? { text: 'search', tone: 'info' } : undefined)}
               note={
                 noReferrer.length === selectedSources.length && noReferrer.length > 0
-                  ? `${names(noReferrer)} ${noReferrer.length === 1 ? 'logs' : 'log'} no referrer, so this panel is empty.`
+                  ? undefined
                   : noReferrer.length
-                    ? `Leaves out ${names(noReferrer)} (no referrer in its log format).`
+                    ? `Leaves out ${names(noReferrer)} (no referrer in the log format).`
                     : undefined
               }
               onOpenRow={(r) =>
@@ -658,7 +667,7 @@ export const WebAnalyticsComponent = ({ projectId, onOpenLogs }: Props): JSX.Ele
               tag={(r) => (r.key === 'Crawlers' ? { text: 'bot', tone: 'muted' } : undefined)}
               note={
                 noReferrer.length
-                  ? `Leaves out ${names(noReferrer)} (no User-Agent in its log format).`
+                  ? `Leaves out ${names(noReferrer)} (no User-Agent in the log format).`
                   : undefined
               }
               onOpenRow={(r) =>
@@ -748,7 +757,7 @@ export const WebAnalyticsComponent = ({ projectId, onOpenLogs }: Props): JSX.Ele
               ]}
               color={color(2)}
               mono
-              empty="The selected sources don’t log the Host header."
+              empty="No data to show. The selected sources don’t log the Host header."
               onOpenRow={(r) => openLogs({ kind: 'equals', field: 'host', value: r.key })}
               csvName="virtual-hosts"
             />
@@ -781,7 +790,7 @@ export const WebAnalyticsComponent = ({ projectId, onOpenLogs }: Props): JSX.Ele
               subtitle={
                 selectedSources.length > noTls.length
                   ? `Protocol versions from ${names(selectedSources.filter((s) => s.hasTls))}`
-                  : 'Not logged by the selected sources'
+                  : 'Protocol versions'
               }
               keyLabel="Version"
               rows={panels.tls}
@@ -790,8 +799,7 @@ export const WebAnalyticsComponent = ({ projectId, onOpenLogs }: Props): JSX.Ele
               mono
               empty={
                 noTls.length
-                  ? `${names(noTls)} ${noTls.length === 1 ? 'terminates' : 'terminate'} TLS without logging the version. ` +
-                    'Add $ssl_protocol (Nginx) or %{SSL_PROTOCOL}x (Apache) to see it.'
+                  ? 'No data to show. Add $ssl_protocol (Nginx) or %{SSL_PROTOCOL}x (Apache) to the log format.'
                   : undefined
               }
               note={

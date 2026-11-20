@@ -115,6 +115,7 @@ func New(dataDir string, opts ...Option) (*SpanParquetStore, error) {
 	var uploader *spans_uploader.SpanUploader
 	if cfg.objectStore != nil {
 		uploader = spans_uploader.NewSpanUploader(cfg.objectStore)
+		compactor.SetPublisher(uploader)
 	}
 
 	return &SpanParquetStore{
