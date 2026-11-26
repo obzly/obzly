@@ -266,6 +266,14 @@ func (s *MetricCleanupBackgroundService) enforceAllProjectsRetention() error {
 		policy := projects_services.PolicyOf(policies, project.ID, projects_models.SignalMetrics)
 		days := project.EffectiveRetentionDays(policy)
 		if days <= 0 {
+			// Kept for good, but 1-minute partials still expire.
+			if err := metrics_core.GetMetricCoreRepository().DeleteOldMetrics(
+				project.ID, time.Time{}, time.Time{},
+			); err != nil {
+				cleanupFailures++
+				s.logger.Error("Failed to expire 1-minute metric partials for project",
+					slog.String("projectId", project.ID.String()), slog.String("error", err.Error()))
+			}
 			continue
 		}
 

@@ -10,8 +10,10 @@ type UsersSettings struct {
 	IsAllowMemberInvitations bool `json:"isAllowMemberInvitations" gorm:"column:is_allow_member_invitations"`
 	// means that any user with role MEMBER can create their own projects
 	IsMemberAllowedToCreateProjects bool `json:"isMemberAllowedToCreateProjects" gorm:"column:is_member_allowed_to_create_projects"`
-	// every user, not only admins, must set up MFA at their next sign-in
-	IsMFARequiredForEveryone bool `json:"isMfaRequiredForEveryone" gorm:"column:is_mfa_required_for_everyone"`
+	// Always true: MFA is required for every account. Kept in responses for API
+	// compatibility; the DB column is no longer read or written (a rollback to
+	// v1.2.x still selects it).
+	IsMFARequiredForEveryone bool `json:"isMfaRequiredForEveryone" gorm:"-"`
 	// Theme defaults for users who never picked one (light, dark or system).
 	DefaultThemeMode  string `json:"defaultThemeMode"  gorm:"column:default_theme_mode"`
 	DefaultLightTheme string `json:"defaultLightTheme" gorm:"column:default_light_theme"`

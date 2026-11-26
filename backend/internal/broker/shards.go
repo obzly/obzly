@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"obzly/internal/telemetry"
@@ -20,11 +21,14 @@ import (
 )
 
 // Shard ownership: a lease per shard, renewed every tick. A worker that
-// stops renewing loses its shards after leaseTicks ticks.
+// stops renewing loses its shards after leaseTicks ticks. A worker that can't
+// reach Valkey keeps consuming what it holds (see rebalance).
 const (
 	defaultShardTick = 5 * time.Second
-	leaseTicks       = 6
-	fetchMaxWait     = time.Second
+	// ackConfirmWait: how long AckAll waits for JetStream's confirmations.
+	ackConfirmWait = 5 * time.Second
+	leaseTicks     = 6
+	fetchMaxWait   = time.Second
 	// readMaxBytes caps one fetch or direct get, above maxServerPayload so the
 	// largest batch still fits, and well under the 64 MB a NATS client may have
 	// pending: past it the broker cuts the connection mid-fetch and acks are lost.
@@ -46,8 +50,9 @@ const (
 	poisonAge        = 24 * time.Hour
 )
 
-// ShardHandler writes one signal's messages. A project lives in one shard
-// and a shard runs on one goroutine, so calls for a project never overlap.
+// ShardHandler writes one signal's messages. A shard runs on one goroutine,
+// but a project with lanes (docs/INGEST_LANES.md) lives in several shards,
+// so calls for one project can overlap when this worker holds two of them.
 type ShardHandler interface {
 	// Handle buffers one message's rows and acks it once they are durable.
 	// An error naks it for redelivery.
@@ -82,6 +87,12 @@ type ShardRunner struct {
 
 	mu    sync.Mutex
 	owned map[int]*ownedShard
+	// balanced: a Balancer places the shards; rebalance only renews leases.
+	balanced atomic.Bool
+	// projectBytes: payload per project since the Balancer last sampled it,
+	// for the lane controller.
+	projectMu    sync.Mutex
+	projectBytes map[uuid.UUID]int64
 }
 
 // runners are this process's shard runners by signal (RegisterRunner).
@@ -97,6 +108,26 @@ type ownedShard struct {
 	lock   *leaderlock.Lock
 	cancel context.CancelFunc
 	done   chan struct{}
+	since  time.Time
+	// bytes / messages: payload and batches fetched since the Balancer last
+	// sampled it. pending: the consumer's undelivered batches as of the last
+	// one fetched (0 after a fetch that found none).
+	bytes    atomic.Int64
+	messages atomic.Int64
+	pending  atomic.Int64
+	// renewedAt: unix nanos of the last renewal Valkey confirmed; the lease
+	// is surely this worker's until leaseTTL after it.
+	renewedAt   atomic.Int64
+	unconfirmed atomic.Bool
+}
+
+// ownedLoad is one owned shard as the Balancer samples it.
+type ownedLoad struct {
+	shard    int
+	since    time.Time
+	bytes    int64
+	messages int64
+	pending  int64
 }
 
 // WithLeaseScope namespaces the leases and membership (default: the
@@ -121,6 +152,58 @@ func (a Ack) Ack() error {
 		return nil
 	}
 	return a.conn.Publish(a.reply, []byte("+ACK"))
+}
+
+// AckAll acks every message and waits up to ackConfirmWait for JetStream to
+// confirm each, returning those it didn't. A plain ack is a publish that a
+// broker restarting drops silently: the batch, already written, came back
+// after AckWait and was written twice (the lab's duplicate rows).
+func AckAll(acks []Ack) []Ack {
+	var conn *nats.Conn
+	for _, ack := range acks {
+		if ack.conn != nil {
+			conn = ack.conn
+			break
+		}
+	}
+	if conn == nil {
+		return nil
+	}
+	prefix := nats.NewInbox()
+	confirmed := make(chan *nats.Msg, len(acks))
+	sub, err := conn.ChanSubscribe(prefix+".*", confirmed)
+	if err != nil {
+		return acks
+	}
+	defer func() { _ = sub.Unsubscribe() }()
+
+	var unconfirmed []Ack
+	pending := make(map[string]Ack, len(acks))
+	for i, ack := range acks {
+		if ack.conn == nil {
+			continue
+		}
+		reply := prefix + "." + strconv.Itoa(i)
+		if err := conn.PublishRequest(ack.reply, reply, []byte("+ACK")); err != nil {
+			unconfirmed = append(unconfirmed, ack)
+			continue
+		}
+		pending[reply] = ack
+	}
+	timer := time.NewTimer(ackConfirmWait)
+	defer timer.Stop()
+	for len(pending) > 0 {
+		select {
+		case msg := <-confirmed:
+			delete(pending, msg.Subject)
+		case <-timer.C:
+			for _, ack := range pending {
+				unconfirmed = append(unconfirmed, ack)
+			}
+			return unconfirmed
+		}
+	}
+	return unconfirmed
 }
 
 // Term removes a message that can never be written, without redelivery.
@@ -201,7 +284,7 @@ func OwnsProject(signal string, projectID uuid.UUID) (owns, sharded bool) {
 	if runner == nil {
 		return false, false
 	}
-	return runner.isOwned(ShardFor(projectID)), true
+	return runner.ownsConfirmed(ShardFor(projectID)), true
 }
 
 // Run balances shards until ctx ends, then releases every owned shard
@@ -236,18 +319,43 @@ func (r *ShardRunner) rebalance(ctx context.Context) {
 	}
 
 	var lost []int
+	unconfirmed := 0
 	for _, shard := range r.ownedShards() {
 		r.mu.Lock()
-		lock := r.owned[shard].lock
+		owned := r.owned[shard]
 		r.mu.Unlock()
-		held, err := lock.TryAcquire(ctx)
-		if err != nil || !held {
-			r.log.Warn("Lost ingest shard lease", "shard", shard, "error", err)
+		if owned == nil {
+			continue // a Balancer handed it away meanwhile
+		}
+		held, err := owned.lock.TryAcquire(ctx)
+		switch {
+		case err == nil && held:
+			owned.renewedAt.Store(time.Now().UnixNano())
+			if owned.unconfirmed.Swap(false) {
+				r.log.Info("Renewed ingest shard lease again", "shard", shard)
+			}
+		case err == nil:
+			r.log.Warn("Lost ingest shard lease", "shard", shard)
 			lost = append(lost, shard)
+		default:
+			// Ownership changes only through Valkey, so while it can't answer
+			// keep consuming: dropping every shard stopped all ingest for the
+			// whole outage. Should another worker take the shard meanwhile
+			// (this one alone cut off), the two split its batches without loss
+			// until the next renewal answers; compaction waits for a confirmed
+			// lease (OwnsProject).
+			unconfirmed++
+			if !owned.unconfirmed.Swap(true) {
+				r.log.Warn("Can't renew ingest shard lease, keeping the shard", "shard", shard, "error", err)
+			}
 		}
 	}
+	telemetry.IngestShardLeaseUnconfirmed.WithLabelValues(r.signal).Set(float64(unconfirmed))
 	r.stopShards(lost, false)
 
+	if r.balanced.Load() {
+		return
+	}
 	owned := r.ownedShards()
 	if fair > 0 && len(owned) > fair {
 		r.stopShards(owned[fair:], true)
@@ -260,7 +368,7 @@ func (r *ShardRunner) rebalance(ctx context.Context) {
 		if r.isOwned(shard) {
 			continue
 		}
-		lock := leaderlock.New(r.valkey, fmt.Sprintf("ingest-%s-shard-%d", r.scope, shard), r.leaseTTL())
+		lock := r.lease(shard)
 		acquired, err := lock.TryAcquire(ctx)
 		if err != nil {
 			r.log.Warn("Failed to acquire ingest shard lease", "shard", shard, "error", err)
@@ -305,7 +413,8 @@ func (r *ShardRunner) startOffset() int {
 
 func (r *ShardRunner) startShard(parent context.Context, shard int, lock *leaderlock.Lock) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
-	owned := &ownedShard{lock: lock, cancel: cancel, done: make(chan struct{})}
+	owned := &ownedShard{lock: lock, cancel: cancel, done: make(chan struct{}), since: time.Now().UTC()}
+	owned.renewedAt.Store(time.Now().UnixNano())
 	r.mu.Lock()
 	r.owned[shard] = owned
 	telemetry.IngestOwnedShards.WithLabelValues(r.signal).Set(float64(len(r.owned)))
@@ -313,7 +422,7 @@ func (r *ShardRunner) startShard(parent context.Context, shard int, lock *leader
 
 	go func() {
 		defer close(owned.done)
-		r.consumeShard(ctx, shard)
+		r.consumeShard(ctx, shard, owned)
 	}()
 	r.log.Info("Took ingest shard", "shard", shard)
 }
@@ -344,6 +453,63 @@ func (r *ShardRunner) releaseAll() {
 	r.stopShards(r.ownedShards(), true)
 }
 
+// SetBalanced hands shard placement to a Balancer: rebalance then only
+// renews the leases held. Call before Run.
+func (r *ShardRunner) SetBalanced(balanced bool) {
+	r.balanced.Store(balanced)
+}
+
+// ownedLoads is every owned shard with the bytes and batches fetched since
+// the last call.
+func (r *ShardRunner) ownedLoads() []ownedLoad {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	loads := make([]ownedLoad, 0, len(r.owned))
+	for shard, owned := range r.owned {
+		loads = append(loads, ownedLoad{
+			shard: shard, since: owned.since, bytes: owned.bytes.Swap(0),
+			messages: owned.messages.Swap(0), pending: owned.pending.Load(),
+		})
+	}
+	return loads
+}
+
+// takeProjectBytes is each project's payload since the last call.
+func (r *ShardRunner) takeProjectBytes() map[uuid.UUID]int64 {
+	r.projectMu.Lock()
+	defer r.projectMu.Unlock()
+	taken := r.projectBytes
+	r.projectBytes = nil
+	return taken
+}
+
+// claim takes shard if its lease is free.
+func (r *ShardRunner) claim(ctx context.Context, shard int) (bool, error) {
+	if r.isOwned(shard) {
+		return true, nil
+	}
+	lock := r.lease(shard)
+	acquired, err := lock.TryAcquire(ctx)
+	if err != nil || !acquired {
+		return false, err
+	}
+	r.startShard(ctx, shard, lock)
+	return true, nil
+}
+
+// handOff gives shard away: flush, upload and ack, then free the lease.
+func (r *ShardRunner) handOff(shard int) {
+	r.stopShard(shard, true)
+}
+
+func (r *ShardRunner) lease(shard int) *leaderlock.Lock {
+	return leaderlock.New(r.valkey, r.leaseName(shard), r.leaseTTL())
+}
+
+func (r *ShardRunner) leaseName(shard int) string {
+	return fmt.Sprintf("ingest-%s-shard-%d", r.scope, shard)
+}
+
 // stopShards stops shards in parallel: each waits for its in-flight fetch.
 func (r *ShardRunner) stopShards(shards []int, releaseLease bool) {
 	var wg sync.WaitGroup
@@ -358,7 +524,9 @@ func (r *ShardRunner) stopShards(shards []int, releaseLease bool) {
 }
 
 // consumeShard fetches until ctx ends, then releases the shard's buffers.
-func (r *ShardRunner) consumeShard(ctx context.Context, shard int) {
+// It counts every fetched payload and batch in owned, and the batches still
+// undelivered after the last.
+func (r *ShardRunner) consumeShard(ctx context.Context, shard int, owned *ownedShard) {
 	defer func() {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -379,10 +547,23 @@ func (r *ShardRunner) consumeShard(ctx context.Context, shard int) {
 	lastTick := time.Now()
 	size := firstFetchBatch
 	largest := 0
+	// failing: a fetch failed and none has succeeded since. Logged when it
+	// starts and when it ends, not per attempt: a broker restart is seconds
+	// to minutes of failures on every shard.
+	failing := false
+	fetchFailed := func(message string, err error) {
+		if !failing {
+			r.log.Warn(message, "shard", shard, "error", err)
+		}
+		failing = true
+	}
+	fetchStep := telemetry.IngestStepDuration.WithLabelValues(r.signal, "fetch")
 	for ctx.Err() == nil {
+		started := time.Now()
+		var handling time.Duration
 		batch, err := consumer.Fetch(size, jetstream.FetchMaxWait(fetchMaxWait))
 		if err != nil {
-			r.log.Warn("Failed to fetch from ingest shard", "shard", shard, "error", err)
+			fetchFailed("Failed to fetch from ingest shard", err)
 			select {
 			case <-ctx.Done():
 			case <-time.After(time.Second):
@@ -393,13 +574,35 @@ func (r *ShardRunner) consumeShard(ctx context.Context, shard int) {
 				count++
 				bytes += len(msg.Data())
 				fetchLargest = max(fetchLargest, len(msg.Data()))
+				if meta, err := msg.Metadata(); err == nil {
+					owned.pending.Store(int64(meta.NumPending))
+				}
+				handled := time.Now()
 				r.handle(shard, msg)
+				handling += time.Since(handled)
+			}
+			owned.bytes.Add(int64(bytes))
+			owned.messages.Add(int64(count))
+			if count == 0 && (batch.Error() == nil || errors.Is(batch.Error(), nats.ErrTimeout)) {
+				owned.pending.Store(0)
+			}
+			if count > 0 {
+				fetchStep.Observe((time.Since(started) - handling).Seconds())
 			}
 			// Halving lets the cap recover once large messages stop.
 			largest = max(fetchLargest, largest/2)
 			size = min(nextFetchBatch(size, count, bytes), fetchBatchCap(largest))
 			if err := batch.Error(); err != nil && !errors.Is(err, nats.ErrTimeout) {
-				r.log.Warn("Ingest shard fetch ended with an error", "shard", shard, "error", err)
+				fetchFailed("Ingest shard fetch ended with an error", err)
+			} else if failing {
+				failing = false
+				r.log.Info("Ingest shard fetches work again", "shard", shard)
+			}
+			if fetchFailedEmpty(count, batch.Error()) {
+				select {
+				case <-ctx.Done():
+				case <-time.After(time.Second):
+				}
 			}
 		}
 
@@ -408,6 +611,14 @@ func (r *ShardRunner) consumeShard(ctx context.Context, shard int) {
 			lastTick = time.Now()
 		}
 	}
+}
+
+// fetchFailedEmpty reports a fetch that ended with an error before bringing
+// anything, which waits before the next: while a broker restarted, every
+// shard's fetch ended at once with "no responders" and the loops spun, two
+// workers logging 108,000 warnings in 40 s.
+func fetchFailedEmpty(count int, err error) bool {
+	return count == 0 && err != nil && !errors.Is(err, nats.ErrTimeout)
 }
 
 // nextFetchBatch sizes the next fetch so it brings about readMaxBytes, from
@@ -433,6 +644,12 @@ func (r *ShardRunner) handle(shard int, msg jetstream.Msg) {
 		_ = msg.Term()
 		return
 	}
+	r.projectMu.Lock()
+	if r.projectBytes == nil {
+		r.projectBytes = map[uuid.UUID]int64{}
+	}
+	r.projectBytes[projectID] += int64(len(msg.Data()))
+	r.projectMu.Unlock()
 	if meta, err := msg.Metadata(); err == nil && poisoned(meta.NumDelivered, meta.Timestamp, time.Now().UTC()) {
 		r.log.Error("Dropping an ingest batch that has failed to be written for too long",
 			"shard", shard, "project", projectID, "deliveries", meta.NumDelivered, "published", meta.Timestamp)
@@ -477,6 +694,14 @@ func (r *ShardRunner) ownedShards() []int {
 		shards = append(shards, shard)
 	}
 	return shards
+}
+
+// ownsConfirmed: shard is held and its lease surely still this worker's.
+func (r *ShardRunner) ownsConfirmed(shard int) bool {
+	r.mu.Lock()
+	owned := r.owned[shard]
+	r.mu.Unlock()
+	return owned != nil && time.Since(time.Unix(0, owned.renewedAt.Load())) < r.leaseTTL()
 }
 
 func (r *ShardRunner) isOwned(shard int) bool {

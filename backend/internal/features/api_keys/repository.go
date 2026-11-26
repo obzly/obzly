@@ -1,6 +1,7 @@
 package api_keys
 
 import (
+	"context"
 	"time"
 
 	"obzly/internal/storage"
@@ -47,10 +48,10 @@ func (r *ApiKeyRepository) GetApiKeyByID(apiKeyID uuid.UUID) (*ApiKey, error) {
 	return &apiKey, nil
 }
 
-func (r *ApiKeyRepository) GetApiKeyByTokenHash(tokenHash string) (*ApiKey, error) {
+func (r *ApiKeyRepository) GetApiKeyByTokenHash(ctx context.Context, tokenHash string) (*ApiKey, error) {
 	var apiKey ApiKey
 
-	err := storage.GetDb().
+	err := storage.GetDb().WithContext(ctx).
 		Where("token_hash = ? AND status = ?", tokenHash, ApiKeyStatusActive).
 		First(&apiKey).Error
 

@@ -95,6 +95,36 @@ func Test_SSOCallback_TrustedIdPMFA_AdminSignsInWithoutLocalMFA(t *testing.T) {
 	assert.False(t, status.SatisfiedByIdentityProvider)
 }
 
+// MFA is required for Members too, and trusting the provider's MFA still
+// satisfies it: a Member whose ID token shows MFA gets a session that passes
+// the gate; one whose token doesn't is sent to local setup.
+func Test_SSOCallback_Member_TrustedIdPMFASatisfiesRequiredMFA(t *testing.T) {
+	users_testing.EnableExternalRegistrations()
+	router := createSSOTestRouter()
+	fake := newFakeOIDCServer(t, "client-1")
+	trust := true
+	connector := createCognitoConnectorWithMFATrust(t, router, fake, &trust)
+	gate := createMFAGateRouter()
+
+	fake.amr = []string{"pwd", "mfa"}
+	email := "sso-member-mfa-" + uuid.New().String()[:8] + "@example.com"
+	withMFA := ssoSignIn(t, router, fake, connector.ID, "member-mfa-"+uuid.NewString()[:8], email, nil)
+	require.NotEmpty(t, withMFA.Token, "the provider enforced MFA, so the Member gets a session")
+	assert.False(t, withMFA.MFASetupRequired)
+	user, err := (&users_repositories.UserRepository{}).GetUserByEmail(email)
+	require.NoError(t, err)
+	assert.Equal(t, users_enums.UserRoleMember, user.Role)
+	assert.False(t, user.MFAEnabled)
+	test_utils.MakeGetRequest(t, gate, "/api/v1/probe", "Bearer "+withMFA.Token, http.StatusOK)
+
+	fake.amr = []string{"pwd"}
+	without := ssoSignIn(t, router, fake, connector.ID, "member-pwd-"+uuid.NewString()[:8],
+		"sso-member-pwd-"+uuid.New().String()[:8]+"@example.com", nil)
+	assert.Empty(t, without.Token)
+	assert.True(t, without.MFASetupRequired)
+	assert.NotEmpty(t, without.MFAToken)
+}
+
 // New connectors don't trust the provider's MFA unless asked to.
 func Test_CreateConnector_WithoutTrustIdPMFA_DefaultsToUntrusted(t *testing.T) {
 	router := createSSOTestRouter()

@@ -25,9 +25,9 @@ const (
 	// legacyCompactedBytes: rows from before the level column read 0, but
 	// one this big was already compaction output (writers flushed smaller).
 	legacyCompactedBytes = 32 << 20
-	// PassBudgetBytes: one pass merges at most this much input per project,
-	// so a backlog (e.g. right after an upgrade) is worked off over several
-	// passes instead of starving ingest of CPU.
+	// PassBudgetBytes: one pass merges at most this much input per project
+	// and level, so a backlog (e.g. right after an upgrade) is worked off over
+	// several passes instead of starving ingest of CPU.
 	PassBudgetBytes = 512 << 20
 	// L2 files hold one UTC day each (by their earliest row), so a query
 	// window only opens the days it covers. A day's L1 files merge once it
@@ -71,7 +71,7 @@ func EffectiveLevel(record *SegmentRecord) int {
 // UTC day merge (concatenated) once they reach L2MinBytes or the day is over
 // (a lone file too, then).
 // Legacy (version 1) files never merge with current ones; versions 2 and 3
-// do, into 3. At most PassBudgetBytes of input is merged per pass.
+// do, into 3. At most PassBudgetBytes of input per level is merged per pass.
 func PlanCompaction(records []*SegmentRecord, now time.Time) CompactionPlan {
 	var plan CompactionPlan
 	var l0, l1 []*SegmentRecord
@@ -133,19 +133,30 @@ func runs(records []*SegmentRecord, capBytes, capRawBytes int64, splitByDay bool
 	return result
 }
 
-// withinBudget keeps merges, oldest first, until PassBudgetBytes of input;
-// at least one, however large.
+// withinBudget keeps merges, oldest first, until PassBudgetBytes of input
+// per level; at least one per level, however large. One budget for both let
+// a busy project's L0 merges, planned first, crowd out its L1 merges (which
+// are bigger than the budget on their own) in every pass, so L1 piled up.
 func withinBudget(merges []CompactionGroup) []CompactionGroup {
-	var total int64
-	for i, group := range merges {
-		for _, record := range group.Records {
-			total += record.SizeBytes
+	var kept []CompactionGroup
+	spent := map[int]int64{}
+	for _, group := range merges {
+		size := totalSize(group.Records)
+		if _, started := spent[group.Level]; started && spent[group.Level]+size > PassBudgetBytes {
+			continue
 		}
-		if total > PassBudgetBytes && i > 0 {
-			return merges[:i]
-		}
+		spent[group.Level] += size
+		kept = append(kept, group)
 	}
-	return merges
+	return kept
+}
+
+func totalSize(records []*SegmentRecord) int64 {
+	var total int64
+	for _, record := range records {
+		total += record.SizeBytes
+	}
+	return total
 }
 
 func oldestCreated(records []*SegmentRecord) time.Time {

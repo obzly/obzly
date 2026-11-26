@@ -5,8 +5,8 @@ Scenarios, what is lost, and what to do. Backups and the restore procedure are i
 
 | Failure | Data at risk | Recovery |
 | --- | --- | --- |
-| An `api`, `worker` or `querier` pod | none | Kubernetes replaces it. Acknowledged ingest is in the brokers; a worker's shards move to the others when its lease expires. |
-| One broker (of 3) | none | R3 streams keep a quorum. Replace the pod; its PVC catches up. Upgrade status shows replicas behind until it does. |
+| An `api`, `worker` or `querier` pod | none | Kubernetes replaces it. Acknowledged ingest is in the brokers; a worker's shards move to the others when its lease expires. A batch the worker had written but not yet acknowledged is delivered again; the first merge of its files keeps one row per id (`obzly_compaction_repeated_rows_total` counts the repeats), so until then (minutes on a busy project, at most a day on a quiet one) searches can show it twice. |
+| One broker (of 3) | none | R3 streams keep a quorum. Replace the pod; its PVC catches up. Upgrade status shows replicas behind until it does. A broker that stopped uncleanly first rebuilds each stream's index from its files, minutes for a full buffer on a slow disk; its startup probe allows `broker.startupSeconds` (30 minutes) before restarting it, which would start the rebuild over. |
 | Two brokers, or the broker quorum's disks | acknowledged batches not yet written to Parquet | The one loss case: JetStream is a buffer, not a store of record, and isn't backed up. Bring brokers back with their PVCs if possible; otherwise restore them empty (delete the PVCs), and api/worker recreate the streams. The loss is bounded by the worker lag at the time (Upgrade status, ingest buffer). |
 | Postgres primary | writes since the last shipped WAL (RPO < 70 s at `archive_timeout = 60s`) | Fail over to a replica (RDS Multi-AZ, CNPG), or point-in-time restore, then [the restore order](backup-restore.md#restore-order). |
 | Object storage objects (deleted, corrupted) | the segments affected | Restore object versions; `reconcile` reports what's missing; the integrity audit finds silent damage within a week. |

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"obzly/internal/config"
+
 	audit_logs "obzly/internal/features/audit_logs"
 	projects_dto "obzly/internal/features/projects/dto"
 	projects_models "obzly/internal/features/projects/models"
@@ -16,6 +18,19 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// ErrMemberMustBeInvitedCentrally: on a Site enrolled in a control plane, people
+// come from the control plane. A local invite there made an INVITED account
+// whose invite link pointed at the control plane and that control-plane admins
+// couldn't delete (the proxy denies /users/).
+var ErrMemberMustBeInvitedCentrally = errors.New(
+	"this site is managed by a control plane, so new people are added there: invite them on the control " +
+		"plane's Users page and give them access under Sites -> Access (a project grant adds them to the " +
+		"project). People who have already signed in to this site can be added here",
+)
+
+// siteEnrolledInControlPlane is a var so tests can stand in for an enrolled Site.
+var siteEnrolledInControlPlane = func() bool { return config.GetEnv().SiteExchangeEnabled() }
 
 type MembershipService struct {
 	membershipRepository *projects_repositories.MembershipRepository
@@ -69,7 +84,10 @@ func (s *MembershipService) AddMember(
 	}
 
 	if targetUser == nil {
-		// User doesn't exist, invite them
+		if siteEnrolledInControlPlane() {
+			return nil, ErrMemberMustBeInvitedCentrally
+		}
+
 		settings, err := s.settingsService.GetSettings()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get settings: %w", err)
@@ -531,4 +549,12 @@ func (s *MembershipService) SyncCentralMemberships(
 		},
 		logPrefix: "Control-plane sync",
 	})
+}
+
+// SetSiteEnrolledInControlPlaneForTest makes AddMember behave as on a Site
+// enrolled (or not) in a control plane; call the returned func to restore.
+func SetSiteEnrolledInControlPlaneForTest(enrolled bool) (restore func()) {
+	previous := siteEnrolledInControlPlane
+	siteEnrolledInControlPlane = func() bool { return enrolled }
+	return func() { siteEnrolledInControlPlane = previous }
 }

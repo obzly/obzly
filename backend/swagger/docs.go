@@ -18137,7 +18137,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Range start, RFC3339",
+                        "description": "Range start, RFC3339 (at most 31 days before to)",
                         "name": "from",
                         "in": "query"
                     },
@@ -18192,7 +18192,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Each service's entry spans (SERVER/CONSUMER spans and trace roots) and failed ones in the range and the same-length range before it, most errors first. Ranges over 7 days are clamped to the last 7 days.",
+                "description": "Each service's entry spans (SERVER/CONSUMER spans and trace roots) and failed ones in the range and the same-length range before it, most errors first. Ranges over 31 days are clamped to the last 31 days (clamped says so).",
                 "consumes": [
                     "application/json"
                 ],
@@ -18300,7 +18300,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Range start, RFC3339",
+                        "description": "Range start, RFC3339 (at most 31 days before to)",
                         "name": "from",
                         "in": "query"
                     },
@@ -19000,7 +19000,7 @@ const docTemplate = `{
                 "tags": [
                     "mfa"
                 ],
-                "summary": "Disable MFA (Member accounts only - refused for Admin)",
+                "summary": "Disable MFA - always refused (MFA is required for every account), kept for API compatibility",
                 "parameters": [
                     {
                         "description": "Code",
@@ -20252,6 +20252,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/access_tokens.AccessTokenDTO"
                     }
+                },
+                "writeAvailable": {
+                    "description": "WriteAvailable: new tokens can ask for write access (MCP_WRITE_ENABLED).",
+                    "type": "boolean"
                 }
             }
         },
@@ -23943,6 +23947,16 @@ const docTemplate = `{
                     "description": "RateWindowMinutes: PerMinute averages over this window.",
                     "type": "integer"
                 },
+                "refused": {
+                    "description": "Refused: records refused in the last RefusedWindowHours, most first.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/ingestion.RefusedDTO"
+                    }
+                },
+                "refusedWindowHours": {
+                    "type": "integer"
+                },
                 "sources": {
                     "type": "array",
                     "items": {
@@ -23956,6 +23970,28 @@ const docTemplate = `{
                 "truncated": {
                     "description": "Truncated: more sources than the response holds; the quietest are left out.",
                     "type": "boolean"
+                }
+            }
+        },
+        "ingestion.RefusedDTO": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "lastAt": {
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "Reason: an error code such as RATE_LIMIT_EXCEEDED, LOG_TOO_LARGE or OTHER.",
+                    "type": "string"
+                },
+                "retried": {
+                    "description": "Retried: the sender was told to retry (429/503), so the data is late\nrather than lost. Otherwise the sender dropped it.",
+                    "type": "boolean"
+                },
+                "signal": {
+                    "type": "string"
                 }
             }
         },
@@ -31791,9 +31827,6 @@ const docTemplate = `{
                 "isMemberAllowedToCreateProjects": {
                     "type": "boolean"
                 },
-                "isMfaRequiredForEveryone": {
-                    "type": "boolean"
-                },
                 "isUserThemeChoiceAllowed": {
                     "type": "boolean"
                 }
@@ -32027,7 +32060,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "isMfaRequiredForEveryone": {
-                    "description": "every user, not only admins, must set up MFA at their next sign-in",
+                    "description": "Always true: MFA is required for every account. Kept in responses for API\ncompatibility; the DB column is no longer read or written (a rollback to\nv1.2.x still selects it).",
                     "type": "boolean"
                 },
                 "isUserThemeChoiceAllowed": {

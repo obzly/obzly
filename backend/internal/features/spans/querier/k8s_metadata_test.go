@@ -1,6 +1,7 @@
 package spans_querier_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -31,7 +32,9 @@ func Test_ServiceK8sMetadata_ExtractsFromResourceAttributes(t *testing.T) {
 	}
 	projectID, querier := seedProject(t, spanList)
 
-	metadata, err := querier.ServiceK8sMetadata(projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)))
+	metadata, err := querier.ServiceK8sMetadata(
+		context.Background(), projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)), 0,
+	)
 	require.NoError(t, err)
 
 	gateway, ok := metadata["gateway"]
@@ -69,7 +72,7 @@ func Test_ServiceK8sMetadata_MultipleSpans_PicksMostRecentPerField(t *testing.T)
 	projectID, querier := seedProject(t, spanList)
 
 	metadata, err := querier.ServiceK8sMetadata(
-		projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)),
+		context.Background(), projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)), 0,
 	)
 	require.NoError(t, err)
 

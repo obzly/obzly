@@ -152,7 +152,7 @@ export const LogAnomaliesComponent = ({
           <Alert
             type="info"
             showIcon
-            message="The baseline is from before patterns were regrouped (IDs, names and JSON values no longer make a pattern each), so new and dropped patterns leave out the ones that changed."
+            message="The baseline is from before patterns were regrouped (IDs, names, quoted and JSON values and access log paths no longer make a pattern each), so new and dropped patterns leave out the ones that changed."
           />
         )}
         {isLoading && (

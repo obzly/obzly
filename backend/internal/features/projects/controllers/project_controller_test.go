@@ -893,6 +893,8 @@ func Test_CreateProject_WhenThereAreNoPlans_ProjectCreatedWithoutPlan(t *testing
 	assert.Nil(t, response.PlanID)
 	assert.Equal(t, "Test Project", response.Name)
 	assert.NotEqual(t, uuid.Nil, response.ID)
+	assert.True(t, response.IsRateLimitingEnabled)
+	assert.Equal(t, 5000, response.LogsPerSecondLimit)
 }
 
 func Test_TransferProjectWithDefaultPlan_FromUserWithDefaultPlanToUserWithDefaultPlan_ProjectTransferred(t *testing.T) {

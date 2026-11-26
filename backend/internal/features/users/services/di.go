@@ -1,7 +1,6 @@
 package users_services
 
 import (
-	users_models "obzly/internal/features/users/models"
 	user_repositories "obzly/internal/features/users/repositories"
 	sso_services "obzly/internal/features/users/sso/services"
 )
@@ -36,10 +35,6 @@ var userPlanService = &UserPlanService{
 	userPlanRepository,
 	nil,
 	userService,
-}
-
-func init() {
-	users_models.SetMFAForEveryone(settingsService.MFARequiredForEveryone)
 }
 
 func GetUserService() *UserService {

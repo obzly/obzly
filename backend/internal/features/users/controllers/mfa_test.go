@@ -64,30 +64,11 @@ func Test_SignIn_AdminWithoutMFA_ReturnsSetupRequired(t *testing.T) {
 	assert.NotEmpty(t, response.MFAToken)
 }
 
-func Test_SignIn_MemberWithoutMFA_ReturnsRealTokenImmediately(t *testing.T) {
+// MFA is required for every role: a Member without it is sent to setup, with
+// no "require MFA for everyone" setting to turn on first.
+func Test_SignIn_MemberWithoutMFA_ReturnsSetupRequired(t *testing.T) {
 	router := createE2ETestRouter()
 	user := createUserWithPassword(t, users_enums.UserRoleMember, "memberpass123")
-
-	var response users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t, router, "/api/v1/users/signin", "",
-		users_dto.SignInRequestDTO{Email: user.Email, Password: "memberpass123"},
-		http.StatusOK, &response,
-	)
-
-	assert.False(t, response.MFASetupRequired)
-	assert.False(t, response.MFARequired)
-	assert.NotEmpty(t, response.Token)
-}
-
-func Test_SignIn_MemberWithoutMFA_WhenMFARequiredForEveryone_ReturnsSetupRequired(t *testing.T) {
-	router := createE2ETestRouter()
-	user := createUserWithPassword(t, users_enums.UserRoleMember, "memberpass123")
-	// The setting is shared by every test package's database, so stub it instead.
-	users_models.SetMFAForEveryone(func() bool { return true })
-	t.Cleanup(func() {
-		users_models.SetMFAForEveryone(users_services.GetSettingsService().MFARequiredForEveryone)
-	})
 
 	var response users_dto.SignInResponseDTO
 	test_utils.MakePostRequestAndUnmarshal(
@@ -97,7 +78,37 @@ func Test_SignIn_MemberWithoutMFA_WhenMFARequiredForEveryone_ReturnsSetupRequire
 	)
 
 	assert.True(t, response.MFASetupRequired)
+	assert.False(t, response.MFARequired)
 	assert.Empty(t, response.Token)
+	require.NotEmpty(t, response.MFAToken)
+
+	signIn := completeForcedMFASetup(t, router, response.MFAToken)
+	require.NotEmpty(t, signIn.Token)
+	var profile users_dto.UserProfileResponseDTO
+	test_utils.MakeGetRequestAndUnmarshal(t, router, "/api/v1/users/me", "Bearer "+signIn.Token, http.StatusOK, &profile)
+	assert.True(t, profile.MFAEnabled)
+}
+
+// A token for a Member without MFA (issued before MFA was required for everyone)
+// only reaches the MFA routes.
+func Test_Member_WithRealAccessTokenButNoMFA_BlockedFromOtherRoutes(t *testing.T) {
+	router := createE2ETestRouter()
+	token := users_testing.CreateTestUserWithoutMFA(users_enums.UserRoleMember)
+
+	resp := test_utils.MakeRequest(t, router, test_utils.RequestOptions{
+		Method:         "GET",
+		URL:            "/api/v1/users/me",
+		AuthToken:      "Bearer " + token.Token,
+		ExpectedStatus: http.StatusForbidden,
+	})
+	assert.Contains(t, string(resp.Body), "mfaSetupRequired")
+
+	var status mfa_dto.StatusResponseDTO
+	test_utils.MakeGetRequestAndUnmarshal(
+		t, router, "/api/v1/users/mfa/status", "Bearer "+token.Token, http.StatusOK, &status,
+	)
+	assert.True(t, status.Required)
+	assert.False(t, status.Enabled)
 }
 
 func Test_Admin_BlockedFromOtherRoutes_UntilMFASetupComplete(t *testing.T) {
@@ -163,7 +174,7 @@ func Test_ChallengeToken_CannotBeUsedAsRealAccessToken(t *testing.T) {
 	test_utils.MakeGetRequest(t, router, "/api/v1/users", "Bearer "+signIn.MFAToken, http.StatusUnauthorized)
 }
 
-func Test_AdminResetsAnotherUsersMFA_ThenTheyCanSignInWithoutACode(t *testing.T) {
+func Test_AdminResetsAnotherUsersMFA_ThenTheySetItUpAgain(t *testing.T) {
 	router := createE2ETestRouter()
 	adminAccess := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
 	member := createUserWithPassword(t, users_enums.UserRoleMember, "memberpass123")
@@ -196,8 +207,9 @@ func Test_AdminResetsAnotherUsersMFA_ThenTheyCanSignInWithoutACode(t *testing.T)
 		users_dto.SignInRequestDTO{Email: member.Email, Password: "memberpass123"},
 		http.StatusOK, &signIn,
 	)
-	assert.False(t, signIn.MFARequired)
-	assert.NotEmpty(t, signIn.Token)
+	assert.False(t, signIn.MFARequired, "the old authenticator is gone")
+	assert.True(t, signIn.MFASetupRequired, "and MFA is still required, so they set up a new one")
+	assert.Empty(t, signIn.Token)
 }
 
 func Test_ResetUserMFA_WhenNotAdmin_Forbidden(t *testing.T) {

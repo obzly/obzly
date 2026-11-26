@@ -11,8 +11,10 @@ import (
 )
 
 // duplicateWindow is how long JetStream remembers a publish's Nats-Msg-Id,
-// so a client retrying after a lost ack does not store the batch twice.
-const duplicateWindow = 2 * time.Minute
+// so a client retrying after a lost ack does not store the batch twice. It
+// covers a collector's retry backoff (up to 5 min by default); later
+// copies carry the same row ids, which compaction keeps once.
+const duplicateWindow = 10 * time.Minute
 
 // Signal tokens of the ingest subjects.
 const (

@@ -129,28 +129,33 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: "1.27.4"
           cache: false
 
       # Static binaries named without the version, so
       # releases/latest/download/... always works (deploy/probe/install.sh).
+      # Built outside the checkout: Go stamps vcs.modified=true when the tree
+      # has untracked files, and the first binary in dist/ made every later
+      # one "modified".
       - name: Build the probe binaries
         env:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p dist
+          DIST="$RUNNER_TEMP/dist"
+          mkdir -p "$DIST"
           for arch in amd64 arm64; do
             (cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
-              -ldflags "-s -w -X main.version=${VERSION}" -o "../dist/obzly-probe_linux_${arch}" ./cmd/probe)
+              -ldflags "-s -w -X main.version=${VERSION}" -o "$DIST/obzly-probe_linux_${arch}" ./cmd/probe)
+            go version -m "$DIST/obzly-probe_linux_${arch}" | grep "vcs.modified=false" > /dev/null
           done
-          cp deploy/probe/install.sh deploy/probe/obzly-probe.service dist/
+          cp deploy/probe/install.sh deploy/probe/obzly-probe.service "$DIST/"
           # The VM installer (README), its image tag pinned to this release.
-          sed "s/^OBZLY_DEFAULT_IMAGE_TAG=.*/OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"/" install-obzly.sh > dist/install-obzly.sh
-          grep -q "^OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"$" dist/install-obzly.sh
-          (cd dist && sha256sum obzly-probe_linux_* install.sh obzly-probe.service install-obzly.sh > checksums.txt)
+          sed "s/^OBZLY_DEFAULT_IMAGE_TAG=.*/OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"/" install-obzly.sh > "$DIST/install-obzly.sh"
+          grep -q "^OBZLY_DEFAULT_IMAGE_TAG=\"v${VERSION}\"$" "$DIST/install-obzly.sh"
+          (cd "$DIST" && sha256sum obzly-probe_linux_* install.sh obzly-probe.service install-obzly.sh > checksums.txt)
 
       # Notes: docs/releases/vX.Y.Z.md when there is one, the images, then
       # GitHub's list of PRs merged since the previous tag.
@@ -160,6 +165,7 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -euo pipefail
+          DIST="$RUNNER_TEMP/dist"
           {
             if [ -f "docs/releases/v${VERSION}.md" ]; then
               cat "docs/releases/v${VERSION}.md"
@@ -175,5 +181,5 @@ jobs:
           } > notes.md
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Obzly v${VERSION}" --notes-file notes.md --generate-notes \
-            dist/obzly-probe_linux_amd64 dist/obzly-probe_linux_arm64 dist/install.sh \
-            dist/obzly-probe.service dist/install-obzly.sh dist/checksums.txt
+            "$DIST/obzly-probe_linux_amd64" "$DIST/obzly-probe_linux_arm64" "$DIST/install.sh" \
+            "$DIST/obzly-probe.service" "$DIST/install-obzly.sh" "$DIST/checksums.txt"

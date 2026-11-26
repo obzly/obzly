@@ -408,7 +408,8 @@ func (s *projectScan) loadServiceGraph(
 	serviceSet := make(map[string]bool)
 	connected := make(map[[2]string]bool)
 
-	servicesResp, err := spans_core.GetSpanCoreRepository().ListServices(s.projectID, spansRange)
+	servicesResp, err := spans_core.GetSpanCoreRepository().
+		ListServices(context.Background(), s.projectID, spansRange, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list services: %w", err)
 	}
@@ -416,7 +417,8 @@ func (s *projectScan) loadServiceGraph(
 		serviceSet[name] = true
 	}
 
-	spanEdges, err := spans_core.GetSpanCoreRepository().ServiceCallEdges(s.projectID, spansRange)
+	spanEdges, err := spans_core.GetSpanCoreRepository().
+		ServiceCallEdges(context.Background(), s.projectID, spansRange, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load span service edges: %w", err)
 	}

@@ -9,6 +9,7 @@ import {
   projectApi,
 } from '../../../../entity/projects';
 import { Card } from '../../../../shared/ui/v2';
+import { IngestionRefusals } from './IngestionRefusals';
 import { IngestionSourcesDrawer } from './IngestionSourcesDrawer';
 import { dataSourceCatalog } from './catalog';
 import { type HealthFilter, healthCounts, needingAttention } from './ingestionSources';
@@ -161,7 +162,7 @@ export const IngestionStatusComponent = ({ projectId, onAddSource }: Props): JSX
       title="Ingestion status"
       subtitle={
         status
-          ? `Sources sending to this project. Quiet: nothing for ${status.quietAfterMinutes} minutes; stopped: nothing for ${status.stoppedAfterHours} hours.`
+          ? `Sources sending to this project, and data it refused. Quiet: nothing for ${status.quietAfterMinutes} minutes; stopped: nothing for ${status.stoppedAfterHours} hours.`
           : 'Sources sending to this project and their health.'
       }
       extra={
@@ -253,6 +254,14 @@ export const IngestionStatusComponent = ({ projectId, onAddSource }: Props): JSX
             />
           ))}
         </div>
+      )}
+
+      {status && (
+        <IngestionRefusals
+          refused={status.refused ?? []}
+          windowHours={status.refusedWindowHours ?? 24}
+          now={now}
+        />
       )}
 
       {status && drawer && (

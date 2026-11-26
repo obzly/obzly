@@ -54,16 +54,31 @@ func Test_GetServiceErrors_Limit_KeepsServicesWithMostErrors(t *testing.T) {
 	assert.Equal(t, int64(7), response.Services[0].Requests)
 }
 
-func Test_GetServiceErrors_RangeOverAWeek_IsClampedToTheLastWeek(t *testing.T) {
+// The Overview's 30-day range is counted whole: it reads span rollups now,
+// not a week of raw spans at most.
+func Test_GetServiceErrors_ThirtyDays_IsNotClamped(t *testing.T) {
+	router := CreateTraceQueryTestRouter()
+	now := time.Now().UTC().Truncate(time.Second)
+	owner, project := SetUpProjectWithSummarySpans(t, router, "Service Errors Thirty Days", now)
+
+	response := postServiceErrors(t, router, owner.Token, project.ID.String(), serviceErrorsRequest(now, 30*24*time.Hour), http.StatusOK)
+
+	assert.False(t, response.Clamped)
+	assert.True(t, response.From.Equal(now.Add(-30*24*time.Hour)))
+	assert.True(t, response.PreviousFrom.Equal(now.Add(-60*24*time.Hour)))
+	require.Len(t, response.Services, 2)
+}
+
+func Test_GetServiceErrors_RangeOver31Days_IsClampedToTheLast31(t *testing.T) {
 	router := CreateTraceQueryTestRouter()
 	now := time.Now().UTC().Truncate(time.Second)
 	owner, project := SetUpProjectWithSummarySpans(t, router, "Service Errors Clamp", now)
 
-	response := postServiceErrors(t, router, owner.Token, project.ID.String(), serviceErrorsRequest(now, 30*24*time.Hour), http.StatusOK)
+	response := postServiceErrors(t, router, owner.Token, project.ID.String(), serviceErrorsRequest(now, 90*24*time.Hour), http.StatusOK)
 
 	assert.True(t, response.Clamped)
-	assert.True(t, response.From.Equal(now.Add(-7*24*time.Hour)))
-	assert.True(t, response.PreviousFrom.Equal(now.Add(-14*24*time.Hour)))
+	assert.True(t, response.From.Equal(now.Add(-31*24*time.Hour)))
+	assert.True(t, response.PreviousFrom.Equal(now.Add(-62*24*time.Hour)))
 	require.Len(t, response.Services, 2)
 }
 

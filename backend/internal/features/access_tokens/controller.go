@@ -79,7 +79,8 @@ func (c *AccessTokenController) CreateAccessToken(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "mfaRequired": true})
 	case errors.Is(err, mfa_services.ErrTooManyAttempts):
 		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
-	case errors.Is(err, ErrMFACodeInvalid), errors.Is(err, ErrTooManyTokens), errors.Is(err, ErrWriteRequiresMFA):
+	case errors.Is(err, ErrMFACodeInvalid), errors.Is(err, ErrTooManyTokens), errors.Is(err, ErrWriteRequiresMFA),
+		errors.Is(err, ErrWriteDisabled):
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create access token"})

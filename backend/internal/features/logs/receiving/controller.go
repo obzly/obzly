@@ -2,6 +2,7 @@ package logs_receiving
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	logs_core "obzly/internal/features/logs/core"
 	"obzly/internal/ingest"
@@ -138,7 +139,7 @@ func (c *ReceivingController) handleError(ctx *gin.Context, err error) {
 
 		switch validationErr.Code {
 		case logs_core.ErrorRateLimitExceeded:
-			ctx.Header("Retry-After", "60") // Default retry after 60 seconds
+			ctx.Header("Retry-After", strconv.Itoa(max(1, int(math.Ceil(validationErr.RetryAfter.Seconds())))))
 		case logs_core.ErrorIngestBufferFull, logs_core.ErrorIngestUnavailable:
 			ctx.Header("Retry-After", strconv.Itoa(ingest.RetryAfterSeconds))
 		}

@@ -2,6 +2,7 @@ package logs_jetstream
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,6 +61,62 @@ func Test_Tail_PendingLogsAreQueryable_AndCountedOnceAfterAWorkerWritesThem(t *t
 	require.Equal(t, want, searchTotal(t, store, projectID))
 }
 
+// With lanes a project's shards ack on their own: once one lane writes its
+// batches the tail stops serving them, even while another lane still has
+// older batches pending.
+func Test_Tail_LaneAcksItsBatches_WhileAnotherLaneHasOlderOnesPending_CountsThemOnce(t *testing.T) {
+	test_utils.UseIsolatedSegmentWriter(t)
+	client := ingesttest.StartBroker(t, 64<<20)
+	dir := t.TempDir()
+	tail, err := NewTail(filepath.Join(dir, "tail"), discardLogger())
+	require.NoError(t, err)
+	store, err := logs_parquetstore.New(dir, logs_parquetstore.WithTail(tail))
+	require.NoError(t, err)
+	projectID := uuid.New()
+	laneA := fmt.Sprintf("ingest.logs.%d.%s", broker.LaneShard(projectID, 0), projectID)
+	laneB := fmt.Sprintf("ingest.logs.%d.%s", broker.LaneShard(projectID, 1), projectID)
+
+	publishLogsOn(t, client, laneB, projectID, 1)
+	requireEventuallyTotal(t, store, projectID, 1, "lane B's first batch")
+	publishLogsOn(t, client, laneA, projectID, 2)
+	publishLogsOn(t, client, laneB, projectID, 1)
+	publishLogsOn(t, client, laneA, projectID, 2)
+	requireEventuallyTotal(t, store, projectID, 6, "every lane's batches")
+
+	// What lane A's worker acking its batches does on a work-queue stream.
+	ctx := context.Background()
+	stream, err := client.JetStream.Stream(ctx, "INGEST_LOGS")
+	require.NoError(t, err)
+	pending, err := client.PendingIngest(ctx, broker.SignalLogs, projectID, 64<<20)
+	require.NoError(t, err)
+	for _, message := range pending {
+		if message.Subject == laneA {
+			require.NoError(t, stream.DeleteMsg(ctx, message.Seq))
+		}
+	}
+
+	requireEventuallyTotal(t, store, projectID, 2, "only lane B's batches are still pending")
+}
+
+// A segment that became readable after the tail's last refresh doesn't hide
+// the pending rows from the query: it waits for a newer tail instead.
+func Test_Tail_SegmentNewerThanTheTail_QueryStillGetsThePendingRows(t *testing.T) {
+	client := ingesttest.StartBroker(t, 64<<20)
+	tail, err := NewTail(filepath.Join(t.TempDir(), "tail"), discardLogger())
+	require.NoError(t, err)
+	ctx := context.Background()
+	projectID := uuid.New()
+	publishLogs(t, client, projectID, 3)
+	require.Eventually(t, func() bool {
+		return len(tail.TailFiles(ctx, projectID, logs_core.StreamLogs, time.Time{})) > 0
+	}, 15*time.Second, 50*time.Millisecond)
+
+	uploadedJustNow := time.Now().UTC()
+	files := tail.TailFiles(ctx, projectID, logs_core.StreamLogs, uploadedJustNow)
+
+	require.NotEmpty(t, files)
+}
+
 func publishLogs(t *testing.T, client *broker.Client, projectID uuid.UUID, rows int) {
 	t.Helper()
 	var items []*logs_core.LogItem
@@ -105,4 +162,19 @@ func aggregateTotal(t *testing.T, store *logs_parquetstore.LogParquetStore, proj
 		total += bucket.Count
 	}
 	return total
+}
+
+func publishLogsOn(t *testing.T, client *broker.Client, subject string, projectID uuid.UUID, rows int) {
+	t.Helper()
+	var items []*logs_core.LogItem
+	for range rows {
+		items = append(items, &logs_core.LogItem{ID: uuid.New(), ProjectID: projectID,
+			Timestamp: time.Now().UTC(), Level: "error", Message: "pending"})
+	}
+	payloads, err := ingest.EncodePayloads(items)
+	require.NoError(t, err)
+	for _, payload := range payloads {
+		_, err := client.JetStream.Publish(context.Background(), subject, payload)
+		require.NoError(t, err)
+	}
 }

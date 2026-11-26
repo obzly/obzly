@@ -25,9 +25,14 @@ import (
 )
 
 const (
+	// firstTraceWindow / traceWindowGrowth / traceWindowMargin: trace
+	// searches read the newest firstTraceWindow (plus the margin) first and
+	// widen traceWindowGrowth-fold until they have enough traces.
+	firstTraceWindow        = 5 * time.Minute
+	traceWindowGrowth       = 4
+	traceWindowMargin       = 5 * time.Minute
 	defaultTraceSearchLimit = 20
-	// maxTraceSearchLimit bounds request.Limit: it sizes a slice
-	// preallocation and an SQL LIMIT.
+	// maxTraceSearchLimit bounds request.Limit, an SQL LIMIT.
 	maxTraceSearchLimit = 1000
 	maxSpansPerTrace    = 10_000
 )
@@ -141,25 +146,21 @@ func (q *SpanQuerier) Close() error {
 	return err
 }
 
-// ListTraces returns one summary row per matching trace. As in Jaeger,
-// service/operation filters match if any span matches and duration/error
-// filters apply to the whole trace; filters are HAVING over the grouped
-// trace, so a summary covers all its spans, not just the matching ones.
+// ListTraces returns one summary row per matching trace, newest first. As
+// in Jaeger, service/operation filters match if any span matches and
+// duration/error filters apply to the whole trace; filters are HAVING over
+// the grouped trace, so a summary covers all its spans, not just the
+// matching ones. It searches newest first, window by window
+// (newestFirstWindows), and stops once a window holds enough traces that
+// started at least traceWindowMargin after its start: their spans are all
+// in it (a span starts after its parent), unless a span lasts longer than
+// the margin.
 func (q *SpanQuerier) ListTraces(
 	ctx context.Context,
 	projectID uuid.UUID,
 	request *spans_core.ListTracesRequestDTO,
 ) (*spans_core.ListTracesResponseDTO, error) {
-	empty := &spans_core.ListTracesResponseDTO{Traces: []spans_core.TraceSummaryDTO{}}
 	from, to := resolveTimeRange(request.TimeRange)
-	tail, records, err := q.inputs(projectID, from, to, segments.PruningHints{})
-	if err != nil {
-		return nil, err
-	}
-
-	whereClause := "project_id = ? AND start_time >= ? AND start_time <= ?"
-	whereArgs := []any{projectID.String(), from, to}
-
 	limit := request.Limit
 	if limit <= 0 {
 		limit = defaultTraceSearchLimit
@@ -167,6 +168,45 @@ func (q *SpanQuerier) ListTraces(
 	if limit > maxTraceSearchLimit {
 		limit = maxTraceSearchLimit
 	}
+
+	traces := []spans_core.TraceSummaryDTO{}
+	for _, windowFrom := range newestFirstWindows(from, to) {
+		found, err := q.listTracesIn(ctx, projectID, request, windowFrom, to, limit)
+		if err != nil {
+			return nil, err
+		}
+		if !windowFrom.After(from) {
+			traces = found
+			break
+		}
+		cutoff := windowFrom.Add(traceWindowMargin)
+		certain := 0
+		for certain < len(found) && !found[certain].StartTime.Before(cutoff) {
+			certain++
+		}
+		if certain >= limit {
+			traces = found[:limit]
+			break
+		}
+	}
+	return &spans_core.ListTracesResponseDTO{Traces: traces}, nil
+}
+
+// listTracesIn is the trace search over spans in [from, to].
+func (q *SpanQuerier) listTracesIn(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *spans_core.ListTracesRequestDTO,
+	from, to time.Time,
+	limit int,
+) ([]spans_core.TraceSummaryDTO, error) {
+	tail, records, err := q.inputs(projectID, from, to, segments.PruningHints{})
+	if err != nil {
+		return nil, err
+	}
+
+	whereClause := "project_id = ? AND start_time >= ? AND start_time <= ?"
+	whereArgs := []any{projectID.String(), from, to}
 
 	// A trace's spans can be in several fragments: each returns per-trace
 	// partials (and whether any of its spans matched the search), and the
@@ -184,8 +224,8 @@ func (q *SpanQuerier) ListTraces(
 		"array_agg(DISTINCT service_name) AS services " +
 		"FROM " + query.SourcePlaceholder + " WHERE " + whereClause + " GROUP BY trace_id" + search.having + order
 
-	traces := make([]spans_core.TraceSummaryDTO, 0, limit)
-	found, err := q.runContext(ctx, query.Request{
+	traces := make([]spans_core.TraceSummaryDTO, 0, defaultTraceSearchLimit)
+	_, err = q.runContext(ctx, query.Request{
 		Segments:     records,
 		LocalFiles:   tail,
 		FragmentSQL:  partials,
@@ -212,10 +252,7 @@ func (q *SpanQuerier) ListTraces(
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute trace search query: %w", err)
 	}
-	if !found {
-		return empty, nil
-	}
-	return &spans_core.ListTracesResponseDTO{Traces: traces}, nil
+	return traces, nil
 }
 
 // traceSearch is a trace search's filters three ways: as HAVING over raw
@@ -459,18 +496,17 @@ func decodeJSONMap(raw string) map[string]any {
 	return decoded
 }
 
-// ListServices returns every distinct service_name seen in the time range.
+// ListServices returns every distinct service_name seen in the time range,
+// from span stats.
 func (q *SpanQuerier) ListServices(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (*spans_core.ListServicesResponseDTO, error) {
 	from, to := resolveTimeRange(timeRange)
-	tail, records, err := q.inputs(projectID, from, to, segments.PruningHints{})
-	if err != nil {
-		return nil, err
-	}
-	values, err := q.distinctStrings(tail, records, "service_name",
-		"project_id = ? AND start_time >= ? AND start_time <= ?", []any{projectID.String(), from, to})
+	values, err := q.distinctStrings(
+		ctx, projectID, from, to, segments.PruningHints{}, scanBudget, "service_name", "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list services: %w", err)
 	}
@@ -478,45 +514,45 @@ func (q *SpanQuerier) ListServices(
 }
 
 // ListOperations returns every distinct span name for one service within
-// the time range.
+// the time range, from span stats.
 func (q *SpanQuerier) ListOperations(
+	ctx context.Context,
 	projectID uuid.UUID,
 	serviceName string,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (*spans_core.ListOperationsResponseDTO, error) {
 	from, to := resolveTimeRange(timeRange)
 	hints := segments.PruningHints{Services: []string{serviceName}}
-	tail, records, err := q.inputs(projectID, from, to, hints)
-	if err != nil {
-		return nil, err
-	}
-	values, err := q.distinctStrings(tail, records, "name",
-		"project_id = ? AND service_name = ? AND start_time >= ? AND start_time <= ?",
-		[]any{projectID.String(), serviceName, from, to})
+	values, err := q.distinctStrings(ctx, projectID, from, to, hints, scanBudget, "name", "service_name = ?",
+		[]any{serviceName})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list operations: %w", err)
 	}
 	return &spans_core.ListOperationsResponseDTO{Operations: values}, nil
 }
 
-// distinctStrings is column's distinct values where whereClause holds,
-// sorted.
+// distinctStrings is column's distinct values in [from, to] where
+// whereClause (over span stats) holds, sorted.
 func (q *SpanQuerier) distinctStrings(
-	tail []segments.ResolvedFile,
-	records []*segments.SegmentRecord,
+	ctx context.Context,
+	projectID uuid.UUID,
+	from, to time.Time,
+	hints segments.PruningHints,
+	scanBudget int64,
 	column, whereClause string,
 	whereArgs []any,
 ) ([]string, error) {
-	distinct := "SELECT DISTINCT " + column + " AS value FROM " + query.SourcePlaceholder + " WHERE " + whereClause
 	values := make([]string, 0)
-	_, err := q.run(query.Request{
-		Segments:     records,
-		LocalFiles:   tail,
-		FragmentSQL:  distinct,
-		FragmentArgs: whereArgs,
-		FinalSQL:     "SELECT DISTINCT value FROM " + query.ResultsPlaceholder + " ORDER BY value",
-		SingleSQL:    distinct + " ORDER BY value",
-		SingleArgs:   whereArgs,
+	_, err := q.runStats(ctx, projectID, statsQuery{
+		schema:     spanStats,
+		ranges:     []interval{{start: from, end: to, includeEnd: true}},
+		hints:      hints,
+		selectSQL:  "DISTINCT " + column + " AS value",
+		whereSQL:   whereClause,
+		whereArgs:  whereArgs,
+		finalSQL:   "SELECT DISTINCT value FROM " + query.ResultsPlaceholder + " ORDER BY value",
+		scanBudget: scanBudget,
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var value string
@@ -597,4 +633,18 @@ func clampToRepresentableRange(t time.Time) time.Time {
 		return maxRepresentableTime
 	}
 	return t
+}
+
+// newestFirstWindows are the starts of ever wider windows ending at to, the
+// last one from.
+func newestFirstWindows(from, to time.Time) []time.Time {
+	var starts []time.Time
+	span := to.Sub(from)
+	for width := firstTraceWindow; width+traceWindowMargin < span; width *= traceWindowGrowth {
+		starts = append(starts, to.Add(-(width + traceWindowMargin)))
+		if width > span/traceWindowGrowth {
+			break // the next width overflows or covers the span
+		}
+	}
+	return append(starts, from)
 }

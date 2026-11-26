@@ -239,9 +239,12 @@ func Test_SSOCallback_NewUser_CreatesAndSignsIn(t *testing.T) {
 		t, router, "/api/v1/auth/sso/callback", "", callbackRequest, http.StatusOK, &callbackResponse,
 	)
 
-	assert.NotEmpty(t, callbackResponse.Token)
-	assert.Equal(t, email, callbackResponse.Email)
-	assert.True(t, callbackResponse.IsNewUser)
+	// The account is created, then set up with MFA like every account.
+	assert.Empty(t, callbackResponse.Token)
+	require.True(t, callbackResponse.MFASetupRequired)
+	session, _ := finishMFASetup(t, callbackResponse.MFAToken)
+	assert.NotEmpty(t, session.Token)
+	assert.Equal(t, email, session.Email)
 }
 
 // An email match to a password account must not be auto-linked.
@@ -338,7 +341,8 @@ func Test_SSOCallback_SameIdentityTwice_ReusesLinkedAccount(t *testing.T) {
 		sso_dto.SSOCallbackRequestDTO{State: state, Code: code, RedirectUri: redirectURI},
 		http.StatusOK, &first,
 	)
-	assert.True(t, first.IsNewUser)
+	require.True(t, first.MFASetupRequired, "a new account sets MFA up")
+	firstSession, secret := finishMFASetup(t, first.MFAToken)
 
 	state2 := fetchStateForConnector(t, router, connector.ID, redirectURI)
 	code2 := fake.IssueCode("subject-reused", email, "New SSO User")
@@ -348,8 +352,9 @@ func Test_SSOCallback_SameIdentityTwice_ReusesLinkedAccount(t *testing.T) {
 		sso_dto.SSOCallbackRequestDTO{State: state2, Code: code2, RedirectUri: redirectURI},
 		http.StatusOK, &second,
 	)
-	assert.False(t, second.IsNewUser)
-	assert.Equal(t, first.UserID, second.UserID)
+	require.True(t, second.MFARequired, "the same account, now with MFA, is asked for a code")
+	secondSession := finishMFALogin(t, second.MFAToken, nextTOTPCode(t, secret))
+	assert.Equal(t, firstSession.UserID, secondSession.UserID)
 }
 
 func Test_SSOCallback_WithBadState_ReturnsBadRequest(t *testing.T) {

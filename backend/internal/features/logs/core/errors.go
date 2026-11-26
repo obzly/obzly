@@ -1,9 +1,22 @@
 package logs_core
 
+import (
+	"errors"
+	"time"
+)
+
+// ErrSQLOutOfMemory: a SQL-mode query needed more memory than its DuckDB
+// handle could get, spilling included.
+var ErrSQLOutOfMemory = errors.New(
+	"the query needed more memory than is available: narrow the time range or aggregate in fewer columns",
+)
+
 type ValidationError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Field   string `json:"field,omitempty"`
+	// RetryAfter: when a throttled batch may be sent again (RATE_LIMIT_EXCEEDED).
+	RetryAfter time.Duration `json:"-"`
 }
 
 func (e *ValidationError) Error() string {

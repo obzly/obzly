@@ -201,6 +201,7 @@ describe('mergeSummaries', () => {
           siteName: 'Site A',
           summary: summary({
             total: 5,
+            states: { active: 4, terminated: 1 },
             kinds: { pod: { healthy: 3, critical: 1 }, cluster: { healthy: 1 } },
             live: { healthy: 4, critical: 1 },
             projects: [{ id: 'p', name: 'shop', assets: 5, live: { healthy: 4, critical: 1 } }],
@@ -222,6 +223,7 @@ describe('mergeSummaries', () => {
           siteName: 'Site B',
           summary: summary({
             total: 2,
+            states: { new: 1, terminated: 1 },
             kinds: { pod: { warning: 2 } },
             live: { warning: 1 },
             projects: [{ id: 'q', name: 'shop', assets: 2, live: { warning: 1 } }],
@@ -250,6 +252,7 @@ describe('mergeSummaries', () => {
       true,
     );
     expect(merged.total).toBe(7);
+    expect(merged.terminated).toBe(2);
     expect(merged.kinds.get('pod')).toMatchObject({ healthy: 3, critical: 1, warning: 2 });
     expect(merged.live).toMatchObject({ healthy: 4, critical: 1, warning: 1 });
     expect([...merged.groups.keys()]).toEqual(['Site A', 'Site B']);

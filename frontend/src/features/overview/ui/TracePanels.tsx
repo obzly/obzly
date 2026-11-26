@@ -36,7 +36,7 @@ export const ServiceErrorsPanel = ({
       title="Services with the most errors"
       subtitle={
         state.data?.clamped
-          ? 'Error rate of entry spans, last 7 days (the longest range counted), change vs the 7 days before'
+          ? `Error rate of entry spans, last ${clampedDays(state.data)} days (the longest range counted), change vs the ${clampedDays(state.data)} days before`
           : 'Error rate of entry spans, change vs the previous period'
       }
       extra={<PanelLink onClick={onOpenServiceMap}>Service map</PanelLink>}
@@ -261,3 +261,7 @@ export const RequestsPanel = ({
     </Card>
   );
 };
+
+/** Days a clamped service errors range covers (the server's limit). */
+const clampedDays = (data: ServiceErrorsResponse) =>
+  Math.round((Date.parse(data.to) - Date.parse(data.from)) / 86_400_000);

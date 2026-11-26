@@ -14,10 +14,21 @@ import (
 	logs_core "obzly/internal/features/logs/core"
 	"obzly/internal/query"
 	"obzly/internal/storage/segments"
+	"obzly/internal/telemetry"
 
 	"github.com/google/uuid"
-	_ "github.com/marcboeker/go-duckdb/v2"
+	duckdb "github.com/marcboeker/go-duckdb/v2"
 )
+
+// userSQLErrorTypes: DuckDB errors that come from the user's statement, not
+// from us.
+var userSQLErrorTypes = map[duckdb.ErrorType]bool{
+	duckdb.ErrorTypeBinder: true, duckdb.ErrorTypeParser: true, duckdb.ErrorTypeSyntax: true,
+	duckdb.ErrorTypeCatalog: true, duckdb.ErrorTypeConversion: true, duckdb.ErrorTypeInvalidInput: true,
+	duckdb.ErrorTypeOutOfRange: true, duckdb.ErrorTypeMismatchType: true, duckdb.ErrorTypeDivideByZero: true,
+	duckdb.ErrorTypeInvalidType: true, duckdb.ErrorTypeNotImplemented: true, duckdb.ErrorTypePermission: true,
+	duckdb.ErrorTypeParameterNotResolved: true, duckdb.ErrorTypeParameterNotAllowed: true,
+}
 
 // maxSQLResultRows caps rows read and returned by ExecuteSQLQuery: a guard
 // against a query without its own LIMIT. SQL mode is not for bulk export.
@@ -70,7 +81,7 @@ func (q *LogQuerier) ExecuteSQLQueryContext(
 	defer cancelPrepare()
 	sandbox, err := q.openLogsSandbox(prepareCtx, projectID, from, to, tableShape{}, request.ScanBudget)
 	if err != nil {
-		return nil, err
+		return nil, outOfMemoryError(err)
 	}
 	defer sandbox.close()
 
@@ -79,13 +90,13 @@ func (q *LogQuerier) ExecuteSQLQueryContext(
 
 	rows, err := sandbox.db.QueryContext(ctx, statement)
 	if err != nil {
-		return nil, fmt.Errorf("query execution failed: %w", err)
+		return nil, userSQLError(err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	columns, resultRows, truncated, err := scanSQLRows(rows, maxSQLResultRows)
 	if err != nil {
-		return nil, err
+		return nil, userSQLError(err)
 	}
 
 	return &logs_core.SQLQueryResponseDTO{
@@ -220,11 +231,15 @@ func (s tableShape) columns() []rawColumn {
 type logsSandbox struct {
 	db       *sql.DB
 	spillDir string
+	// release returns the sandbox's memory to the gate.
+	release func()
 }
 
 func (s *logsSandbox) close() {
+	telemetry.UnregisterDuckDB(s.db)
 	_ = s.db.Close()
 	_ = os.RemoveAll(s.spillDir)
+	s.release()
 }
 
 // openLogsSandbox materializes the project's segments for [from, to] into a
@@ -246,14 +261,6 @@ func (q *LogQuerier) openLogsSandbox(
 		return nil, &query.ScanBudgetError{Planned: planned, Budget: scanBudget}
 	}
 
-	sandboxDB, err := sql.Open("duckdb", "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to open sandboxed duckdb handle: %w", err)
-	}
-	// TEMP tables and SET are per connection: one keeps every step on it.
-	sandboxDB.SetMaxOpenConns(1)
-	// Before prepareLogsTable turns off external access (temp_directory
-	// can't be set after that). Each sandbox spills to its own directory.
 	limit, threads := q.memoryLimit, q.threads
 	if shape.memoryLimit > 0 {
 		limit = fmt.Sprintf("%dMB", shape.memoryLimit/1_000_000)
@@ -261,6 +268,26 @@ func (q *LogQuerier) openLogsSandbox(
 	if shape.threads > 0 {
 		threads = shape.threads
 	}
+	// Each sandbox is a new handle with its own cap: the gate gives it what
+	// is free (it spills past that), so a few at once can't OOM the replica.
+	want := segments.MemoryLimitBytes(limit)
+	admitted, release, err := segments.QueryMemoryGate().Admit(ctx, want)
+	if err != nil {
+		return nil, err
+	}
+	if admitted < want {
+		limit = fmt.Sprintf("%dMB", admitted/1_000_000)
+	}
+
+	sandboxDB, err := sql.Open("duckdb", "")
+	if err != nil {
+		release()
+		return nil, fmt.Errorf("failed to open sandboxed duckdb handle: %w", err)
+	}
+	// TEMP tables and SET are per connection: one keeps every step on it.
+	sandboxDB.SetMaxOpenConns(1)
+	// Before prepareLogsTable turns off external access (temp_directory
+	// can't be set after that). Each sandbox spills to its own directory.
 	spillDir, err := segments.ConfigureMemory(sandboxDB, limit, filepath.Join(q.queryDir, "spill"))
 	if err == nil {
 		err = segments.SetHandleLimits(sandboxDB, "", threads)
@@ -270,9 +297,11 @@ func (q *LogQuerier) openLogsSandbox(
 		if spillDir != "" {
 			_ = os.RemoveAll(spillDir)
 		}
+		release()
 		return nil, err
 	}
-	sandbox := &logsSandbox{db: sandboxDB, spillDir: spillDir}
+	telemetry.RegisterDuckDB(segments.SandboxHandleKind, sandboxDB, segments.MemoryLimitBytes(limit))
+	sandbox := &logsSandbox{db: sandboxDB, spillDir: spillDir, release: release}
 	if err := q.prepareLogsTable(ctx, sandboxDB, records, projectID, from, to, shape); err != nil {
 		sandbox.close()
 		return nil, err
@@ -404,4 +433,28 @@ func jsonSafeValue(v any) any {
 	default:
 		return v
 	}
+}
+
+// userSQLError tells a mistake in the user's SQL ("invalid query", 400) and a
+// query that ran out of memory (422) from a failure of ours (500): a typo
+// answered 500 "Failed to execute query".
+func userSQLError(err error) error {
+	var duckErr *duckdb.Error
+	if errors.As(err, &duckErr) && userSQLErrorTypes[duckErr.Type] {
+		return fmt.Errorf("invalid query: %s", duckErr.Msg)
+	}
+	if wrapped := outOfMemoryError(err); wrapped != err {
+		return wrapped
+	}
+	return fmt.Errorf("query execution failed: %w", err)
+}
+
+// outOfMemoryError marks err as logs_core.ErrSQLOutOfMemory when DuckDB ran
+// out of the sandbox's memory, spilling included.
+func outOfMemoryError(err error) error {
+	var duckErr *duckdb.Error
+	if errors.As(err, &duckErr) && duckErr.Type == duckdb.ErrorTypeOutOfMemory {
+		return fmt.Errorf("%w: %w", logs_core.ErrSQLOutOfMemory, err)
+	}
+	return err
 }

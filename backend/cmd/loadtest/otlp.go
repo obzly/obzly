@@ -40,6 +40,7 @@ type otlpSender struct {
 	gzip      bool
 	client    *http.Client
 	conn      *grpc.ClientConn
+	timeout   time.Duration
 }
 
 func newOTLPSender(
@@ -48,7 +49,14 @@ func newOTLPSender(
 	useGzip, grpcTLS bool,
 	timeout time.Duration,
 ) (*otlpSender, error) {
-	s := &otlpSender{signal: signal, protocol: protocol, apiKey: apiKey, batchSize: batchSize, gzip: useGzip}
+	s := &otlpSender{
+		signal:    signal,
+		protocol:  protocol,
+		apiKey:    apiKey,
+		batchSize: batchSize,
+		gzip:      useGzip,
+		timeout:   timeout,
+	}
 	if protocol == "grpc" {
 		creds := insecure.NewCredentials()
 		if grpcTLS {

@@ -10,10 +10,13 @@ import (
 )
 
 // Stream setup at startup: a request sent while the broker cluster elects a
-// leader can go unanswered, so each attempt is bounded and retried.
+// leader can go unanswered, so each attempt is bounded and retried. While a
+// broker rebuilt a full stream the JetStream API was unavailable for over 8
+// minutes, and pods that gave up at 2 or 3 restarted again and again; the
+// deadline stays inside the api pods' 10 minute startup probe.
 const (
 	ensureAttemptTimeout = 10 * time.Second
-	ensureDeadline       = 2 * time.Minute
+	ensureDeadline       = 9 * time.Minute
 )
 
 // inProcessServer is the server StartInProcess started, if any.

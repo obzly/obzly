@@ -279,6 +279,21 @@ func Test_ValidateBrokerSettings(t *testing.T) {
 		{"control plane ignores jetstream", EnvVariables{
 			ServiceMode: ServiceModeControlPlane, IngestBuffer: IngestBufferJetStream,
 		}, true},
+		{"shard balance by count", EnvVariables{
+			ServiceMode: ServiceModeAll, IngestBuffer: IngestBufferJetStream, IngestShardBalance: IngestShardBalanceCount,
+		}, true},
+		{"unknown shard balance", EnvVariables{
+			ServiceMode: ServiceModeAll, IngestBuffer: IngestBufferJetStream, IngestShardBalance: "random",
+		}, false},
+		{"lanes off", EnvVariables{
+			ServiceMode: ServiceModeAll, IngestBuffer: IngestBufferJetStream, IngestLanes: IngestLanesOff,
+		}, true},
+		{"unknown lanes mode", EnvVariables{
+			ServiceMode: ServiceModeAll, IngestBuffer: IngestBufferJetStream, IngestLanes: "always",
+		}, false},
+		{"too many lanes", EnvVariables{
+			ServiceMode: ServiceModeAll, IngestBuffer: IngestBufferJetStream, IngestMaxLanes: 65,
+		}, false},
 	}
 	for _, tc := range cases {
 		err := ValidateBrokerSettings(tc.env)

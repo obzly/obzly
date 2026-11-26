@@ -47,6 +47,22 @@ type SelectSeriesResponseDTO struct {
 	Series []SeriesDTO `json:"series"`
 }
 
+// LimitError: a query refused for reading or returning too much. Its text
+// is written for the caller, unlike a storage failure's (which can name
+// files and executors).
+type LimitError struct {
+	Message string
+}
+
+func (e *LimitError) Error() string {
+	return e.Message
+}
+
+// FunctionInstant is a RangeFunctionRequestDTO.Function for an instant
+// selector: each series' latest sample in (t - RangeMs, t], RangeMs being
+// the engine's lookback.
+const FunctionInstant = "instant"
+
 // RangeFunctionRequestDTO is one PromQL range function over one selector,
 // optionally aggregated - e.g. sum by (job) (rate(x[5m])) - evaluated by
 // storage at every step. Times are Unix ms, as the engine's; an instant

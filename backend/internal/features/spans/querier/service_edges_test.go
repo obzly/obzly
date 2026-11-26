@@ -1,6 +1,7 @@
 package spans_querier_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -16,7 +17,9 @@ func Test_ServiceCallEdges_ReturnsAggregatedParentChildServicePairs(t *testing.T
 	// oneTrace is gateway(s1) -> payments(s2, OK), gateway(s1) -> inventory(s3, ERROR).
 	projectID, querier := seedProject(t, oneTrace("trace-a", base))
 
-	edges, err := querier.ServiceCallEdges(projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)))
+	edges, err := querier.ServiceCallEdges(
+		context.Background(), projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)), 0,
+	)
 	require.NoError(t, err)
 	require.Len(t, edges, 2)
 
@@ -58,7 +61,9 @@ func Test_ServiceCallEdges_MultipleCallsBetweenSamePairAreCountedTogether(t *tes
 	}
 	projectID, querier := seedProject(t, spanList)
 
-	edges, err := querier.ServiceCallEdges(projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)))
+	edges, err := querier.ServiceCallEdges(
+		context.Background(), projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)), 0,
+	)
 	require.NoError(t, err)
 	require.Len(t, edges, 1)
 	assert.Equal(t, "gateway", edges[0].SrcService)
@@ -79,7 +84,9 @@ func Test_ServiceCallEdges_RootSpanOnly_ReturnsNoEdges(t *testing.T) {
 	}
 	projectID, querier := seedProject(t, spanList)
 
-	edges, err := querier.ServiceCallEdges(projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)))
+	edges, err := querier.ServiceCallEdges(
+		context.Background(), projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)), 0,
+	)
 	require.NoError(t, err)
 	assert.Empty(t, edges)
 }
@@ -88,7 +95,9 @@ func Test_ServiceCallEdges_NoSegmentsForProject_ReturnsEmpty(t *testing.T) {
 	base := time.Now().UTC()
 	_, querier := seedProject(t, oneTrace("trace-a", base))
 
-	edges, err := querier.ServiceCallEdges(uuid.New(), timeRange(base.Add(-time.Minute), base.Add(time.Hour)))
+	edges, err := querier.ServiceCallEdges(
+		context.Background(), uuid.New(), timeRange(base.Add(-time.Minute), base.Add(time.Hour)), 0,
+	)
 	require.NoError(t, err)
 	assert.Empty(t, edges)
 }

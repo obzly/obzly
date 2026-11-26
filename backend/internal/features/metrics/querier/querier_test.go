@@ -2,6 +2,7 @@ package metrics_querier_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -36,6 +37,8 @@ func seedProject(t *testing.T, samples []*metrics_core.MetricSample) (uuid.UUID,
 	require.NoError(t, ingester.StoreSamplesBatch(map[uuid.UUID][]*metrics_core.MetricSample{projectID: samples}))
 	_, err = ingester.FlushAll()
 	require.NoError(t, err)
+	// As if series tracking started now (see parity_internal_test).
+	require.NoError(t, storage.GetDb().Exec("UPDATE metric_series_coverage SET since = now() WHERE project_id = ?", projectID).Error)
 
 	querier, err := metrics_querier.NewMetricQuerier()
 	require.NoError(t, err)
@@ -175,6 +178,28 @@ func Test_ListMetricNames_ReturnsDistinctNamesWithType(t *testing.T) {
 	}
 	assert.Equal(t, metrics_core.MetricTypeCounter, byName["http_requests_total"])
 	assert.Equal(t, metrics_core.MetricTypeGauge, byName["cpu_usage"])
+}
+
+// Without a time range the name index answers alone: the segments (gone
+// here) are never read, where every one since 1970 used to be.
+func Test_ListMetricNames_WithoutATimeRange_ReadsOnlyTheNameIndex(t *testing.T) {
+	base := time.Now().UTC().Add(-time.Hour)
+	projectID, querier := seedProject(t, []*metrics_core.MetricSample{
+		sample("http_requests_total", nil, 1, base, metrics_core.MetricTypeCounter),
+	})
+	records, err := (&segments.SegmentRepository{}).ListByProject(projectID, "metrics")
+	require.NoError(t, err)
+	require.NotEmpty(t, records)
+	for _, record := range records {
+		require.NoError(t, os.Remove(record.Path))
+	}
+
+	response, err := querier.ListMetricNames(context.Background(), projectID, nil)
+
+	require.NoError(t, err)
+	require.Len(t, response.Metrics, 1)
+	assert.Equal(t, "http_requests_total", response.Metrics[0].Name)
+	assert.Equal(t, metrics_core.MetricTypeCounter, response.Metrics[0].Type)
 }
 
 func Test_ListLabelNames_IncludesNameAndEveryLabelKey(t *testing.T) {

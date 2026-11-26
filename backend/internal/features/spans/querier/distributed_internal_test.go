@@ -75,20 +75,20 @@ func Test_SpanQueries_SpreadOverExecutors_MatchInProcess(t *testing.T) {
 	require.Len(t, gotTrace.Spans, 4)
 	require.Equal(t, wantTrace, gotTrace)
 
-	wantServices, err := inProcess.ListServices(projectID, window)
+	wantServices, err := inProcess.ListServices(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
-	gotServices, err := spread.ListServices(projectID, window)
+	gotServices, err := spread.ListServices(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
 	require.Equal(t, wantServices, gotServices)
-	wantOperations, err := inProcess.ListOperations(projectID, "svc-a", window)
+	wantOperations, err := inProcess.ListOperations(context.Background(), projectID, "svc-a", window, 0)
 	require.NoError(t, err)
-	gotOperations, err := spread.ListOperations(projectID, "svc-a", window)
+	gotOperations, err := spread.ListOperations(context.Background(), projectID, "svc-a", window, 0)
 	require.NoError(t, err)
 	require.Equal(t, wantOperations, gotOperations)
 
-	wantK8s, err := inProcess.ServiceK8sMetadata(projectID, window)
+	wantK8s, err := inProcess.ServiceK8sMetadata(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
-	gotK8s, err := spread.ServiceK8sMetadata(projectID, window)
+	gotK8s, err := spread.ServiceK8sMetadata(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
 	require.Equal(t, "ns-new", wantK8s["svc-a"].Namespace)
 	require.Equal(t, wantK8s, gotK8s)
@@ -109,9 +109,9 @@ func Test_SpanQueries_SpreadOverExecutors_MatchInProcess(t *testing.T) {
 		require.Equal(t, want, got, "aggregation %+v", request)
 	}
 
-	wantEdges, err := inProcess.ServiceCallEdges(projectID, window)
+	wantEdges, err := inProcess.ServiceCallEdges(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
-	gotEdges, err := spread.ServiceCallEdges(projectID, window)
+	gotEdges, err := spread.ServiceCallEdges(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
 	require.NotEmpty(t, wantEdges)
 	require.ElementsMatch(t, wantEdges, gotEdges)
@@ -168,9 +168,9 @@ func Test_SingleFragmentSpanQueries_OnOneExecutor_MatchInProcess(t *testing.T) {
 	from, to := now.Add(-time.Hour), now.Add(time.Hour)
 	window := &spans_core.TimeRangeDTO{From: &from, To: &to}
 
-	wantNodes, err := inProcess.ServiceNodeStats(projectID, window)
+	wantNodes, err := inProcess.ServiceNodeStats(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
-	gotNodes, err := remote.ServiceNodeStats(projectID, window)
+	gotNodes, err := remote.ServiceNodeStats(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
 	require.NotEmpty(t, wantNodes.Services)
 	// Rows come in GROUP BY order, which no query fixes.
@@ -178,9 +178,9 @@ func Test_SingleFragmentSpanQueries_OnOneExecutor_MatchInProcess(t *testing.T) {
 	require.ElementsMatch(t, wantNodes.PeerEdges, gotNodes.PeerEdges)
 	require.ElementsMatch(t, wantNodes.Peers, gotNodes.Peers)
 
-	wantEdges, err := inProcess.ServiceCallEdges(projectID, window)
+	wantEdges, err := inProcess.ServiceCallEdges(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
-	gotEdges, err := remote.ServiceCallEdges(projectID, window)
+	gotEdges, err := remote.ServiceCallEdges(context.Background(), projectID, window, 0)
 	require.NoError(t, err)
 	require.NotEmpty(t, wantEdges)
 	require.ElementsMatch(t, wantEdges, gotEdges)
@@ -214,11 +214,13 @@ func Test_SingleFragmentSpanQueries_OnOneExecutor_MatchInProcess(t *testing.T) {
 	for _, recorder := range recorders {
 		shipped += recorder.localFiles
 	}
-	// 7 single-fragment queries (2 node stats, edges, error counts, 2 tiles,
-	// 1 membership count), each with both local segments shipped; the
-	// first summary's root count is spread, its local part in-process.
-	require.Equal(t, 2*7, shipped, "every single-fragment query ran on an executor")
-	require.Equal(t, 1, local.fragments, "only the spread root count's local part ran here")
+	// 4 single-fragment queries (peers, edges, error counts, and the second
+	// summary's service + errors count, which joins each root to its trace),
+	// each with both local segments shipped. Span stats queries (services,
+	// tiles, root counts) merge partials, so they spread, their local parts
+	// in-process.
+	require.Equal(t, 2*4, shipped, "every single-fragment query ran on an executor")
+	require.Equal(t, 4, local.fragments, "only the spread stats queries' local parts ran here")
 }
 
 // seedSplitTraces writes 12 four-span traces (gateway -> svc-a -> svc-c,

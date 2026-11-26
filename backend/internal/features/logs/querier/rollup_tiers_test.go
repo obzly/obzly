@@ -74,6 +74,39 @@ func Test_CountsFromRollupTiers_MatchTheRawLogs(t *testing.T) {
 	assert.Equal(t, perMinute.deploys, mixed.deploys, "deploys, a mix of tiers")
 }
 
+// Keys past the IN-list limit are a semi-join, with the counts the unkeyed
+// count has for them (a week's keyed pattern count took 15 s as an IN list).
+func Test_GroupWindows_ManyKeys_CountTheSameAsWithoutKeys(t *testing.T) {
+	f := seedTieredFixture(t)
+	require.NoError(t, f.compactor.RollupSegments(f.projectID))
+	request := func(keys []string) *logs_core.GroupWindowsResponseDTO {
+		response, err := f.querier.ExecuteGroupWindows(context.Background(), f.projectID,
+			&logs_core.GroupWindowsRequestDTO{
+				GroupField: logs_core.PatternHashField, Keys: keys,
+				Windows:    []logs_core.CountWindowDTO{{From: f.base, To: f.base.Add(3 * time.Hour)}},
+				Selections: []logs_core.GroupSelectionDTO{{Where: "w0 > 0", Limit: 1000}},
+			})
+		require.NoError(t, err)
+		return response
+	}
+	counts := func(response *logs_core.GroupWindowsResponseDTO) map[string]int64 {
+		result := map[string]int64{}
+		for _, row := range response.Selections[0].Rows {
+			result[row.Key] = row.Counts[0]
+		}
+		return result
+	}
+
+	keys := manyPatternKeys()
+	all, keyed := counts(request(nil)), counts(request(keys))
+
+	require.Len(t, keyed, 2)
+	for _, key := range keys[:2] {
+		require.Positive(t, keyed[key])
+		require.Equal(t, all[key], keyed[key])
+	}
+}
+
 // Whole hours grouped by pattern come from logs_1h_patterns alone: with the
 // raw files and logs_1m gone, the counts are unchanged.
 func Test_GroupWindows_WholeHoursByPattern_ReadOnlyTheHourlyCounts(t *testing.T) {
@@ -439,6 +472,11 @@ func (f tieredFixture) windowRequests() map[string]*logs_core.GroupWindowsReques
 			Keys:       []string{logs_core.PatternHash("cache flushed"), logs_core.PatternHash("user 7 signed in")},
 			Windows:    hourly, Selections: top,
 		},
+		"patterns keyed past the IN-list limit": {
+			GroupField: logs_core.PatternHashField,
+			Keys:       manyPatternKeys(),
+			Windows:    hourly, Selections: top,
+		},
 		"pattern and pod": {
 			GroupField: logs_core.JoinGroupFields(logs_core.PatternHashField, "k8s_pod_name"),
 			Windows:    []logs_core.CountWindowDTO{{From: ragged, To: end}}, Selections: top,
@@ -508,4 +546,14 @@ func singleRollup(
 	require.NotNil(t, rollups[0].Stats)
 	assert.Equal(t, source.ID.String(), rollups[0].Stats.Source, stream)
 	return rollups[0]
+}
+
+// manyPatternKeys is two patterns the fixture logs and 40 it doesn't: past
+// the 32 values an IN list may have, so the keys are a semi-join.
+func manyPatternKeys() []string {
+	keys := []string{logs_core.PatternHash("cache flushed"), logs_core.PatternHash("user 7 signed in")}
+	for i := range 40 {
+		keys = append(keys, logs_core.PatternHash(fmt.Sprintf("never logged %c", 'a'+i)))
+	}
+	return keys
 }

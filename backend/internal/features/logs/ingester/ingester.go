@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	"obzly/internal/util/logger"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 )
 
 // LogSchema is the logs stream's Parquet segment schema. Column order here
@@ -131,6 +133,15 @@ func init() {
 	segments.RegisterSchemaAnchor(LogPatternRollupSchema)
 }
 
+// rowsPerWorker: a batch converts on one more goroutine per this many logs.
+const rowsPerWorker = 128
+
+type builtRow struct {
+	row    []any
+	bytes  int64
+	fields map[string]any
+}
+
 type LogIngester struct {
 	writer      *segments.Writer
 	segmentRepo *segments.SegmentRepository
@@ -164,16 +175,16 @@ func NewLogIngesterForStream(dataDir, stream string, opts ...segments.Option) (*
 // threshold. Returns the first error; other projects' buffered rows are kept.
 func (i *LogIngester) StoreLogsBatch(entries map[uuid.UUID][]*logs_core.LogItem) error {
 	for projectID, logItems := range entries {
-		for _, logItem := range logItems {
-			row, rowBytes, fields, err := rowFor(projectID, logItem)
-			if err != nil {
-				return fmt.Errorf("failed to convert log item %s: %w", logItem.ID, err)
-			}
+		rows, err := buildRows(projectID, logItems)
+		if err != nil {
+			return err
+		}
+		for k, logItem := range logItems {
 			if i.sources != nil {
-				i.sources.observe(projectID, fields, logItem.Timestamp)
+				i.sources.observe(projectID, rows[k].fields, logItem.Timestamp)
 			}
 
-			segment, err := i.writer.Append(projectID, row, rowBytes, logItem.Timestamp)
+			segment, err := i.writer.Append(projectID, rows[k].row, rows[k].bytes, logItem.Timestamp)
 			if err != nil {
 				return fmt.Errorf("failed to append log item %s: %w", logItem.ID, err)
 			}
@@ -277,6 +288,35 @@ func (i *LogIngester) Close() error {
 }
 
 // rowFor also returns the log's normalized fields.
+// buildRows converts a batch's logs on up to GOMAXPROCS goroutines, in
+// order: a row's message pattern (regexes) is most of its cost, and each
+// ingest shard hands its batches over on a single goroutine, so one busy
+// project was capped at one core.
+func buildRows(projectID uuid.UUID, logItems []*logs_core.LogItem) ([]builtRow, error) {
+	rows := make([]builtRow, len(logItems))
+	convert := func(from, to int) error {
+		for k := from; k < to; k++ {
+			row, rowBytes, fields, err := rowFor(projectID, logItems[k])
+			if err != nil {
+				return fmt.Errorf("failed to convert log item %s: %w", logItems[k].ID, err)
+			}
+			rows[k] = builtRow{row: row, bytes: rowBytes, fields: fields}
+		}
+		return nil
+	}
+
+	workers := min(runtime.GOMAXPROCS(0), (len(logItems)+rowsPerWorker-1)/rowsPerWorker)
+	if workers <= 1 {
+		return rows, convert(0, len(logItems))
+	}
+	chunk := (len(logItems) + workers - 1) / workers
+	var group errgroup.Group
+	for from := 0; from < len(logItems); from += chunk {
+		group.Go(func() error { return convert(from, min(from+chunk, len(logItems))) })
+	}
+	return rows, group.Wait()
+}
+
 func rowFor(projectID uuid.UUID, logItem *logs_core.LogItem) ([]any, int64, map[string]any, error) {
 	// Every write path ends here, so current-version segments always hold
 	// normalized names and lowercase levels (segments.CurrentSchemaVersion).

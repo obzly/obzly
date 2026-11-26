@@ -54,7 +54,7 @@ func (s *RemoteWriteService) Write(apiKey string, request *prompb.WriteRequest) 
 
 	resolved, err := s.apiKeyService.ResolveProjectFromApiKey(apiKey)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to resolve API key: %w", err)
+		return 0, 0, &WriteError{Code: WriteErrorUnavailable, Message: api_keys.LookupUnavailableMessage}
 	}
 	if !resolved.IsValid {
 		return 0, 0, &WriteError{Code: WriteErrorUnauthenticated, Message: "invalid API key"}
@@ -64,7 +64,19 @@ func (s *RemoteWriteService) Write(apiKey string, request *prompb.WriteRequest) 
 	if len(converted) == 0 {
 		return 0, 0, nil
 	}
+	// The same rows for a resent request (ingest.RowIDs).
+	encoded, err := request.Marshal()
+	if err != nil {
+		random := uuid.New()
+		encoded = random[:]
+	}
+	ids := ingest.NewRowIDs(resolved.ProjectID, encoded)
+	for _, sample := range converted {
+		sample.ID = ids.Next()
+	}
 	if len(converted) > maxSamplesPerWrite {
+		ingestion.GetTracker().
+			Refused(resolved.ProjectID, ingestion.SignalMetrics, ingestion.TooLargeReason, len(converted))
 		return 0, 0, &WriteError{
 			Code: WriteErrorInvalidArgument,
 			Message: fmt.Sprintf(
@@ -78,6 +90,8 @@ func (s *RemoteWriteService) Write(apiKey string, request *prompb.WriteRequest) 
 	entries := map[uuid.UUID][]*metrics_core.MetricSample{resolved.ProjectID: converted}
 	if client := broker.Default(); client != nil {
 		if err := ingest.Publish(client, broker.SignalMetrics, resolved.ProjectID, converted); err != nil {
+			ingestion.GetTracker().Refused(resolved.ProjectID, ingestion.SignalMetrics,
+				ingestion.PublishRefusalReason(err), len(converted))
 			return 0, 0, publishError(err)
 		}
 	} else if err := metrics_core.GetMetricCoreRepository().StoreSamplesBatch(entries); err != nil {

@@ -69,18 +69,21 @@ func Test_AccessToken_AfterMFAReset_IsRejected(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, postMCP(t, server.URL, created.Token))
 }
 
-// A Member's token was created without MFA; after promotion to Admin it
-// must not let MCP calls skip the Admin's MFA requirement.
-func Test_MCP_TokenCreatedAsMember_AfterPromotionToAdmin_RequiresMFA(t *testing.T) {
+// A token created before MFA was required for everyone, by a Member who never
+// set it up, doesn't let MCP calls skip the requirement; it works again once
+// the Member has set MFA up.
+func Test_MCP_TokenFromAMemberWithoutMFA_WorksOnceTheyHaveSetItUp(t *testing.T) {
 	router := createRouter()
 	server := httptest.NewServer(router)
 	defer server.Close()
 
-	user := users_testing.CreateTestUser(users_enums.UserRoleMember)
-	session := connect(t, server.URL, createToken(t, router, user))
-	callText(t, session, "list_projects", map[string]any{})
-
-	require.NoError(t, (&users_repositories.UserRepository{}).UpdateUserRole(user.UserID, users_enums.UserRoleAdmin))
+	signIn := users_testing.CreateTestUserWithoutMFA(users_enums.UserRoleMember)
+	member, err := (&users_repositories.UserRepository{}).GetUserByID(signIn.UserID)
+	require.NoError(t, err)
+	created, err := access_tokens.GetAccessTokenService().Create(member,
+		&access_tokens.CreateAccessTokenRequestDTO{Name: "legacy", ExpiresInDays: 30}, false)
+	require.NoError(t, err)
+	session := connect(t, server.URL, created.Token)
 
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "list_projects", Arguments: map[string]any{},
@@ -88,4 +91,7 @@ func Test_MCP_TokenCreatedAsMember_AfterPromotionToAdmin_RequiresMFA(t *testing.
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, text(result), "MFA")
+
+	users_testing.EnableRealMFAForTestUser(signIn.UserID, signIn.Email)
+	callText(t, session, "list_projects", map[string]any{})
 }

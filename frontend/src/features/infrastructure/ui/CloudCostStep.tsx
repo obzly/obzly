@@ -49,7 +49,7 @@ export const CloudCostStep = ({ provider, draft, onChange, connections, selfId }
       price: aws ? `${storage}; API calls only until the first export lands` : storage,
       pros: [
         'Data within minutes from the API, then the export takes over day by day',
-        'Single resources and amortized cost once the export has data',
+        'Single resources once the export has data',
       ],
       cons: ['Needs both the export setup and the API permission'],
     },
@@ -74,11 +74,15 @@ export const CloudCostStep = ({ provider, draft, onChange, connections, selfId }
       value: 'api',
       label: 'Billing API only',
       price: api,
-      pros: ['Nothing to set up', 'Data within minutes', 'The provider forecast is included'],
+      pros: [
+        'Nothing to set up',
+        'Data within minutes',
+        'Billed and amortized (effective) cost',
+        'The provider forecast is included',
+      ],
       cons: [
-        aws ? 'Charged per call' : 'Throttled per tenant',
+        aws ? 'Charged per call' : 'Throttled per tenant, slower for many subscriptions',
         'By account, service and region only: no single resources',
-        aws ? 'Unblended cost; amortized needs the export' : 'Slower for many subscriptions',
       ],
     },
   ];
@@ -110,7 +114,7 @@ export const CloudCostStep = ({ provider, draft, onChange, connections, selfId }
                   <span className="font-medium">
                     {aws
                       ? 'Every account this payer (management account) pays for'
-                      : 'The whole billing scope (management group or billing account)'}
+                      : 'Every subscription in this management group, or that its FOCUS export covers'}
                   </span>
                   <span className="block text-xs text-gray-500 dark:text-gray-400">
                     Read once here; member connections then read their cost through this one.
@@ -243,8 +247,8 @@ export const CloudCostStep = ({ provider, draft, onChange, connections, selfId }
               </span>
               <span className="text-xs text-gray-500 dark:text-gray-400">
                 {aws
-                  ? 'In the payer account: Billing and Cost Management → Data Exports → Create → FOCUS 1.x with AWS columns, delivered daily (overwrite) to this bucket and prefix.'
-                  : 'Cost Management → Exports → Add → FOCUS cost and usage, daily, to this storage account, container and directory.'}
+                  ? 'In the payer account: Billing and Cost Management → Data Exports → Create → "FOCUS 1.2 with AWS columns", daily granularity, Parquet, overwrite, to this bucket and prefix.'
+                  : 'Cost Management → Exports → Create → "Cost and usage details (FOCUS)", daily, Parquet, to this storage account, container and directory. To cover several subscriptions, create it at the billing account or billing profile (MCA) or enrollment (EA): management groups can\'t export FOCUS.'}
                 {draft.source === 'auto' &&
                   ' Leave it empty to start with the API and add it later.'}
               </span>
@@ -310,7 +314,7 @@ export const CloudCostStep = ({ provider, draft, onChange, connections, selfId }
               title={
                 aws
                   ? 'Run the template in the management account: Cost Explorer and the export there cover every member account.'
-                  : 'Assign the roles at the management group or billing scope so every subscription is included.'
+                  : 'Assign the roles at the management group so every subscription is included: Cost Management Reader there is enough, no billing role is needed. Microsoft has no management group cost for MCA or CSP subscriptions: for those, choose "FOCUS export only" with the export at the billing account or billing profile.'
               }
             />
           )}

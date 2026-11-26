@@ -147,6 +147,9 @@ func Test_InventorySummary_WithHistory_ReturnsHourlyCountsAndThoseOfADayAgo(t *t
 	// A day and an hour later a fifth pod appears; two builds in that hour keep one count.
 	now = testNow.Add(25 * time.Hour)
 	later := clusterSnapshot()
+	for i := range later.series {
+		later.series[i].LastSeen = now // the first four pods still run
+	}
 	later.series = append(later.series, series("k8s_pod_memory_working_set", now.Add(-time.Minute), now,
 		map[string]string{"k8s_cluster_name": "prd", "k8s_namespace_name": "shop",
 			"k8s_pod_name": "checkout-api-7d9f8b6c5d-new99", "k8s_pod_uid": "uid-new"}))

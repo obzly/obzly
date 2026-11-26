@@ -87,15 +87,19 @@ func Test_SSOCallback_GroupMapping_GrantsThenRevokesProjectAccessAcrossLogins(t 
 		return m.Role, true
 	}
 
+	// Groups sync before MFA, so each sign-in syncs even while it waits for MFA setup.
 	first := signIn([]string{"obzly-viewers", "unmapped-group"})
-	require.NotEmpty(t, first.Token)
-	role, found := roleOf(first.UserID)
+	require.True(t, first.MFASetupRequired)
+	user, err := (&users_repositories.UserRepository{}).GetUserByEmail(email)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	role, found := roleOf(user.ID)
 	require.True(t, found, "new user in a mapped group should be added to the project")
 	assert.Equal(t, users_enums.ProjectRoleViewer, role)
 
 	second := signIn(nil) // Cognito omits the claim when the user is in no group
-	require.Equal(t, first.UserID, second.UserID)
-	_, found = roleOf(first.UserID)
+	require.True(t, second.MFASetupRequired)
+	_, found = roleOf(user.ID)
 	assert.False(t, found, "leaving the group should remove the synced membership on next sign-in")
 }
 
@@ -192,7 +196,7 @@ func Test_SSOCallback_AdminGroup_PromotesWithMFAThenDemotesWhenGroupLeft(t *test
 	assert.Equal(t, connector.ID, *user.SSOAdminConnectorID)
 
 	second := ssoSignIn(t, router, fake, connector.ID, "admin-subject", email, nil)
-	assert.NotEmpty(t, second.Token, "after demotion no MFA is required, so sign-in completes")
+	assert.True(t, second.MFASetupRequired, "a demoted Member still needs MFA, like every account")
 	user, err = users.GetUserByEmail(email)
 	require.NoError(t, err)
 	assert.Equal(t, users_enums.UserRoleMember, user.Role)

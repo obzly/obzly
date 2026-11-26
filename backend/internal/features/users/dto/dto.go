@@ -109,12 +109,12 @@ type UpdateUIPreferencesRequestDTO struct {
 
 // UpdateUsersSettingsRequestDTO: an empty theme field or a missing
 // isUserThemeChoiceAllowed keeps the stored value, so clients that predate
-// them don't reset the theme defaults.
+// them don't reset the theme defaults. isMfaRequiredForEveryone is no longer
+// accepted (MFA is always required); clients that still send it are ignored.
 type UpdateUsersSettingsRequestDTO struct {
 	IsAllowExternalRegistrations    bool   `json:"isAllowExternalRegistrations"`
 	IsAllowMemberInvitations        bool   `json:"isAllowMemberInvitations"`
 	IsMemberAllowedToCreateProjects bool   `json:"isMemberAllowedToCreateProjects"`
-	IsMFARequiredForEveryone        bool   `json:"isMfaRequiredForEveryone"`
 	DefaultThemeMode                string `json:"defaultThemeMode"`
 	DefaultLightTheme               string `json:"defaultLightTheme"`
 	DefaultDarkTheme                string `json:"defaultDarkTheme"`

@@ -1,5 +1,6 @@
 import type {
   IngestionHealth,
+  IngestionRefusal,
   IngestionSignalStatus,
   IngestionSource,
 } from '../../../../entity/projects';
@@ -9,6 +10,30 @@ export const HEALTH_LABEL: Record<IngestionHealth, string> = {
   quiet: 'Quiet',
   stopped: 'Stopped',
 };
+
+// Refusal reasons are the backend's error codes (logs_core); unknown ones fall back to the code.
+const REFUSAL_LABEL: Record<string, string> = {
+  RATE_LIMIT_EXCEEDED: "Over the project's logs per second limit",
+  INGEST_BUFFER_FULL: 'Ingest buffer full',
+  INGEST_UNAVAILABLE: 'Ingest briefly unavailable',
+  LOG_TOO_LARGE: 'Log larger than the size limit',
+  INVALID_LOG_LEVEL: 'Unknown log level',
+  MESSAGE_EMPTY: 'Empty message',
+  FUTURE_TIMESTAMP: 'Timestamp in the future',
+  BATCH_TOO_LARGE: 'Request over the size limit',
+  PROJECT_QUOTA_EXCEEDED: 'Project quota reached',
+  API_KEY_INVALID: 'Invalid API key',
+  API_KEY_REQUIRED: 'Missing API key',
+  IP_NOT_ALLOWED: 'Sender IP not allowed',
+  DOMAIN_NOT_ALLOWED: 'Origin domain not allowed',
+  OTHER: 'Other validation errors',
+};
+
+export const refusalLabel = (reason: string): string => REFUSAL_LABEL[reason] ?? reason;
+
+/** Lines the senders dropped (not told to retry), the ones that are lost. */
+export const droppedCount = (refused: IngestionRefusal[]): number =>
+  refused.filter((r) => !r.retried).reduce((sum, r) => sum + r.count, 0);
 
 const SIGNAL_LABEL: Record<IngestionSignalStatus['signal'], string> = {
   logs: 'Logs',
@@ -49,6 +74,14 @@ export const locationText = (source: IngestionSource): string => {
   if (host && host !== source.name) parts.push(host);
   return parts.join(' · ');
 };
+
+const RECORD_NOUN: Record<IngestionSignalStatus['signal'], string> = {
+  logs: 'log lines',
+  traces: 'spans',
+  metrics: 'data points',
+};
+
+export const recordNoun = (signal: IngestionSignalStatus['signal']): string => RECORD_NOUN[signal];
 
 export const signalChip = (signal: IngestionSignalStatus): string => {
   const label = SIGNAL_LABEL[signal.signal];

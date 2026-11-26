@@ -397,3 +397,89 @@ func Test_ExchangeCentralAssertion_AllProjectsRole_RejectsElevatedRoles(t *testi
 		assert.ErrorIs(t, err, ErrCentralExchangeForbidden, role)
 	}
 }
+
+// Regression: an account first added from a project's Members page is INVITED
+// with no password; its first central sign-in activates and links it instead
+// of refusing it as "deactivated on this site".
+func Test_ExchangeCentralAssertion_InvitedPasswordlessUser_ActivatedAndLinked(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	env := cp.Env("site-a")
+	repo := &users_repositories.UserRepository{}
+
+	email := "invited-" + uuid.NewString() + "@example.com"
+	tokenHash := "hash-" + uuid.NewString()
+	expires := time.Now().UTC().Add(time.Hour)
+	invited := &users_models.User{
+		ID:                   uuid.New(),
+		Email:                email,
+		Name:                 "User",
+		PasswordCreationTime: time.Now().UTC(),
+		Role:                 users_enums.UserRoleMember,
+		Status:               users_enums.UserStatusInvited,
+		CreatedAt:            time.Now().UTC(),
+		InviteTokenHash:      &tokenHash,
+		InviteTokenExpiresAt: &expires,
+	}
+	require.NoError(t, repo.CreateUser(invited))
+
+	subject := "cp-subject-" + uuid.NewString()
+	assertion := cp.Mint(t, "site-a", centralAssertionOptions{
+		Subject: subject, Email: email, Name: "Fabrikam Viewer", AllProjectsRole: "PROJECT_VIEWER",
+	})
+	response, err := GetUserService().exchangeCentralAssertion(env, assertion, "")
+	require.NoError(t, err)
+	assert.Equal(t, invited.ID, response.UserID)
+	assert.NotEmpty(t, response.Token)
+
+	user, err := repo.GetUserByID(invited.ID)
+	require.NoError(t, err)
+	assert.Equal(t, users_enums.UserStatusActive, user.Status)
+	assert.Equal(t, "Fabrikam Viewer", user.Name)
+	assert.Nil(t, user.InviteTokenHash, "the invite can't be redeemed after a central sign-in")
+	assert.Equal(t, users_enums.UserRoleMember, user.Role)
+
+	linked, err := (&users_repositories.CentralIdentityRepository{}).GetUserByIdentity(env.ControlPlaneIssuer, subject)
+	require.NoError(t, err)
+	require.NotNil(t, linked)
+	assert.Equal(t, invited.ID, linked.ID)
+
+	again := cp.Mint(t, "site-a", centralAssertionOptions{
+		Subject: subject, Email: email, AllProjectsRole: "PROJECT_VIEWER",
+	})
+	second, err := GetUserService().exchangeCentralAssertion(env, again, "")
+	require.NoError(t, err)
+	assert.Equal(t, invited.ID, second.UserID)
+}
+
+// A deactivated (INACTIVE) local account is still refused, whether found by
+// email or by an earlier link.
+func Test_ExchangeCentralAssertion_DeactivatedPasswordlessUser_StillRefused(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	env := cp.Env("site-a")
+	repo := &users_repositories.UserRepository{}
+
+	email := "deactivated-" + uuid.NewString() + "@example.com"
+	deactivated := &users_models.User{
+		ID:                   uuid.New(),
+		Email:                email,
+		Name:                 "Contoso Former",
+		PasswordCreationTime: time.Now().UTC(),
+		Role:                 users_enums.UserRoleMember,
+		Status:               users_enums.UserStatusInactive,
+		CreatedAt:            time.Now().UTC(),
+	}
+	require.NoError(t, repo.CreateUser(deactivated))
+
+	subject := "cp-subject-" + uuid.NewString()
+	for range 2 {
+		assertion := cp.Mint(t, "site-a", centralAssertionOptions{
+			Subject: subject, Email: email, AllProjectsRole: "PROJECT_VIEWER",
+		})
+		_, err := GetUserService().exchangeCentralAssertion(env, assertion, "")
+		require.ErrorIs(t, err, ErrCentralExchangeAccountInactive)
+	}
+
+	user, err := repo.GetUserByID(deactivated.ID)
+	require.NoError(t, err)
+	assert.Equal(t, users_enums.UserStatusInactive, user.Status)
+}

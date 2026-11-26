@@ -50,3 +50,6 @@ func (l *LogItem) ToDTO() LogItemDTO {
 		PatternHash: PatternHash(l.Message),
 	}
 }
+
+// RowID is the row's id (ingest.Identified).
+func (r *LogItem) RowID() uuid.UUID { return r.ID }

@@ -96,6 +96,41 @@ func Test_AssertionService_Mint_CarriesGrantedProjectsAndAdminRole(t *testing.T)
 	assert.Equal(t, "PROJECT_VIEWER", entry["role"])
 }
 
+// The assertion tells the Site whether the control plane vouches for the
+// user's email: a Site matches a local account by email only when it does.
+func Test_AssertionService_Mint_CarriesWhetherTheEmailIsVerified(t *testing.T) {
+	require.NoError(t, signingKeyService.EnsureActiveKey())
+	site := createTestSiteRow(t, "https://site.example.com")
+	userRepository := &users_repositories.UserRepository{}
+
+	user := createTestUserRow(t)
+	require.NoError(t, grantRepository.Create(&control_plane_models.SiteGrant{
+		UserID: user.ID, SiteID: site.ID, ProjectID: nil, Role: "ADMIN", CreatedBy: user.ID,
+	}))
+
+	raw, err := assertionService.Mint(user, site.ID, "https://cp.example.com", []string{"mfa"})
+	require.NoError(t, err)
+	assert.Equal(t, false, decodeUnverifiedJWTPayload(t, raw)["email_verified"])
+
+	require.NoError(t, userRepository.SetEmailVerified(user.ID, true))
+	vouched, err := userRepository.GetUserByID(user.ID)
+	require.NoError(t, err)
+	raw, err = assertionService.Mint(vouched, site.ID, "https://cp.example.com", []string{"mfa"})
+	require.NoError(t, err)
+	assert.Equal(t, true, decodeUnverifiedJWTPayload(t, raw)["email_verified"])
+
+	// A self-service email change (which passes false) withdraws it.
+	changed := "contoso-changed-" + uuid.NewString() + "@example.com"
+	require.NoError(t, userRepository.UpdateUserInfo(user.ID, nil, &changed, false))
+	renamed, err := userRepository.GetUserByID(user.ID)
+	require.NoError(t, err)
+	raw, err = assertionService.Mint(renamed, site.ID, "https://cp.example.com", []string{"mfa"})
+	require.NoError(t, err)
+	claims := decodeUnverifiedJWTPayload(t, raw)
+	assert.Equal(t, changed, claims["email"])
+	assert.Equal(t, false, claims["email_verified"])
+}
+
 // A user with no grant on a Site must never get an assertion for it.
 func Test_AssertionService_Mint_NoGrant_Errors(t *testing.T) {
 	require.NoError(t, signingKeyService.EnsureActiveKey())

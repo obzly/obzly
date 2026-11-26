@@ -71,14 +71,31 @@ spec:
       {{- include "obzly.podSpec" (dict "root" . "tier" .Values.broker) | nindent 6 }}
       # Above the 30 s lame-duck period.
       terminationGracePeriodSeconds: 60
-      {{- if .Values.broker.zoneSpread }}
+      {{- if or .Values.broker.zoneSpread .Values.broker.hostSpread }}
+      # Constraints set here replace the scheduler's default node spreading, so
+      # the node spread is explicit too.
       topologySpreadConstraints:
+        {{- if .Values.broker.zoneSpread }}
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: DoNotSchedule
           labelSelector:
             matchLabels:
               {{- include "obzly.selectorLabels" $ctx | nindent 14 }}
+        {{- end }}
+        {{- if .Values.broker.hostSpread }}
+        # One broker per node where there are enough nodes; on one or two nodes
+        # they still schedule, as evenly as possible. Nodes the brokers can't
+        # use (taints, nodeSelector) don't count.
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          nodeAffinityPolicy: Honor
+          nodeTaintsPolicy: Honor
+          labelSelector:
+            matchLabels:
+              {{- include "obzly.selectorLabels" $ctx | nindent 14 }}
+        {{- end }}
       {{- end }}
       containers:
         - name: obzly
@@ -108,12 +125,15 @@ spec:
               containerPort: 8222
             {{- include "obzly.metricsPort" . | nindent 12 }}
           # NATS's own health endpoint on the monitoring port.
+          # Recovery rebuilds a stream's index after an unclean stop: with 5
+          # minutes a broker holding a full buffer was killed midway, again
+          # and again (broker.startupSeconds).
           startupProbe:
             httpGet:
               path: /healthz?js-enabled-only=true
               port: monitor
             periodSeconds: 5
-            failureThreshold: 60
+            failureThreshold: {{ max 1 (div .Values.broker.startupSeconds 5) }}
           readinessProbe:
             httpGet:
               path: /healthz?js-enabled-only=true

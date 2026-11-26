@@ -7,6 +7,8 @@ import (
 	"time"
 
 	users_middleware "obzly/internal/features/users/middleware"
+	"obzly/internal/util/logger"
+	"obzly/internal/util/querylimit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -324,7 +326,11 @@ func (c *AIUsageController) handleError(ctx *gin.Context, err error) {
 		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, ErrInvalidRequest):
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	// segments.ErrMemoryBusy among them: the replica is short of memory for now.
+	case errors.Is(err, querylimit.ErrTooManyQueries):
+		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
 	default:
+		logger.GetLogger().Error("AI usage query failed", "error", err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query AI usage"})
 	}
 }

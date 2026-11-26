@@ -18,7 +18,8 @@ import (
 // any other stream lands in stream_segments_other.
 var PartitionedStreams = []string{
 	"logs", "ai_logs", "spans", "metrics", "metrics_series", "metrics_5m", "metrics_1h", "logs_1m",
-	"logs_1m_pods", "logs_1h_patterns",
+	"logs_1m_pods", "logs_1h_patterns", "spans_1m", "spans_1h", "spans_1m_edges",
+	"spans_1m_traces", "spans_1h_traces",
 }
 
 // partitionMonthsAhead: months created ahead of time, so new rows never land

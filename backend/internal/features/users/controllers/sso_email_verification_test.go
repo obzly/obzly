@@ -105,7 +105,8 @@ func Test_SSOCallback_UnverifiedEmail_AllowedWhenConnectorDoesNotRequireVerifica
 
 	response, _ := signInWithVerification(t, router, fake, connector.ID, "unv-ok", email, false, http.StatusOK)
 
-	assert.NotEmpty(t, response.Token)
+	assert.True(t, response.MFASetupRequired, "the account is created and goes on to MFA setup")
+	assert.NotEmpty(t, response.MFAToken)
 }
 
 func Test_SSOCallback_AlreadyLinkedIdentity_SignsInEvenIfEmailNowUnverified(t *testing.T) {
@@ -115,10 +116,12 @@ func Test_SSOCallback_AlreadyLinkedIdentity_SignsInEvenIfEmailNowUnverified(t *t
 	email := "linked-" + uuid.New().String()[:8] + "@example.com"
 
 	first, _ := signInWithVerification(t, router, fake, connector.ID, "linked-subject", email, true, http.StatusOK)
-	require.NotEmpty(t, first.Token)
+	require.True(t, first.MFASetupRequired)
+	firstSession, secret := finishMFASetup(t, first.MFAToken)
 
 	second, _ := signInWithVerification(t, router, fake, connector.ID, "linked-subject", email, false, http.StatusOK)
 
-	assert.Equal(t, first.UserID, second.UserID)
-	assert.NotEmpty(t, second.Token)
+	require.True(t, second.MFARequired, "the linked account is found and asked for its code")
+	secondSession := finishMFALogin(t, second.MFAToken, nextTOTPCode(t, secret))
+	assert.Equal(t, firstSession.UserID, secondSession.UserID)
 }

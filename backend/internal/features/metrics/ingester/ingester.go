@@ -68,6 +68,14 @@ type MetricIngester struct {
 	seriesWriter *segments.Writer
 	mu           sync.Mutex
 	series       map[uuid.UUID]map[uint64]*seriesEntry
+	// coverage caches each project's metric_series_coverage row, so a flush
+	// writes it only when it can move since back.
+	coverage map[uuid.UUID]coverageRow
+}
+
+type coverageRow struct {
+	Since        time.Time
+	Backfillable bool
 }
 
 type seriesEntry struct {
@@ -89,6 +97,7 @@ func NewMetricIngester(dataDir string, opts ...segments.Option) (*MetricIngester
 		return nil, fmt.Errorf("failed to create metrics series writer: %w", err)
 	}
 	ingester.series = map[uuid.UUID]map[uint64]*seriesEntry{}
+	ingester.coverage = map[uuid.UUID]coverageRow{}
 	return ingester, nil
 }
 
@@ -166,7 +175,11 @@ func (i *MetricIngester) FlushSeries(projectID uuid.UUID) (*segments.SegmentReco
 		return nil, nil
 	}
 
+	earliest := time.Time{}
 	for seriesID, entry := range buffered {
+		if earliest.IsZero() || entry.firstSeen.Before(earliest) {
+			earliest = entry.firstSeen
+		}
 		row := []any{
 			projectID.String(), seriesID, entry.metricName, entry.labels, entry.metricType,
 			entry.firstSeen, entry.lastSeen,
@@ -180,7 +193,7 @@ func (i *MetricIngester) FlushSeries(projectID uuid.UUID) (*segments.SegmentReco
 	if err != nil || segment == nil {
 		return nil, err
 	}
-	if err := recordCoverage(projectID); err != nil {
+	if err := i.recordCoverage(projectID, earliest); err != nil {
 		return nil, err
 	}
 	// The index only serves label/name autocomplete: a row Postgres
@@ -300,15 +313,49 @@ func (i *MetricIngester) flushAllSeries() error {
 	return nil
 }
 
+// preCoverageAge: a metrics segment created longer ago than this when a
+// project's series stream starts predates it (its samples may have no
+// series rows); younger ones are this flush's or another worker's, whose
+// series flush goes with them.
+const preCoverageAge = "10 minutes"
+
+// recordCoverageSQL records projectID's series coverage: its first series
+// flush sets since to now, or - when the project has no segment older than
+// that flush, so every sample has series rows - to the flush's earliest
+// sample, and marks it backfillable; a backfillable project's since then
+// moves back to any older sample a later flush brings (a backfill).
+// Parameters: project id, earliest sample, project id, earliest sample.
+const recordCoverageSQL = `INSERT INTO metric_series_coverage (project_id, since, backfillable)
+SELECT ?, CASE WHEN fresh THEN least(now(), ?::timestamptz) ELSE now() END, fresh
+FROM (SELECT NOT EXISTS (
+	SELECT 1 FROM stream_segments
+	WHERE project_id = ? AND stream = 'metrics' AND created_at < now() - interval '` + preCoverageAge + `'
+) AS fresh) f
+ON CONFLICT (project_id) DO UPDATE SET since = CASE
+	WHEN metric_series_coverage.backfillable THEN least(metric_series_coverage.since, ?::timestamptz)
+	ELSE metric_series_coverage.since END
+RETURNING since, backfillable`
+
 // recordCoverage notes when projectID's series stream started (its first
-// series flush): samples with later timestamps all have series rows.
-func recordCoverage(projectID uuid.UUID) error {
-	err := storage.GetDb().Exec(
-		"INSERT INTO metric_series_coverage (project_id, since) VALUES (?, NOW()) ON CONFLICT (project_id) DO NOTHING",
-		projectID,
-	).Error
+// series flush), or how far back a backfillable project's series rows go:
+// samples at or after since all have series rows. Written once per
+// project and process, and again only when earliest could move since back.
+func (i *MetricIngester) recordCoverage(projectID uuid.UUID, earliest time.Time) error {
+	i.mu.Lock()
+	known, ok := i.coverage[projectID]
+	i.mu.Unlock()
+	if ok && (!known.Backfillable || !earliest.Before(known.Since)) {
+		return nil
+	}
+	var rows []coverageRow
+	err := storage.GetDb().Raw(recordCoverageSQL, projectID, earliest, projectID, earliest).Scan(&rows).Error
 	if err != nil {
 		return fmt.Errorf("failed to record metric series coverage: %w", err)
+	}
+	if len(rows) == 1 {
+		i.mu.Lock()
+		i.coverage[projectID] = rows[0]
+		i.mu.Unlock()
 	}
 	return nil
 }

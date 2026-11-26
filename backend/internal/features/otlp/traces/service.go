@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	collectortracev1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
@@ -61,7 +62,7 @@ func (s *OtlpTracesService) Export(
 
 	resolved, err := s.apiKeyService.ResolveProjectFromApiKey(apiKey)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to resolve API key: %w", err)
+		return 0, 0, &ExportError{Code: ExportErrorUnavailable, Message: api_keys.LookupUnavailableMessage}
 	}
 	if !resolved.IsValid {
 		return 0, 0, &ExportError{Code: ExportErrorUnauthenticated, Message: "invalid API key"}
@@ -77,6 +78,7 @@ func (s *OtlpTracesService) Export(
 		return 0, 0, nil
 	}
 	if spanCount > maxSpansPerExport {
+		ingestion.GetTracker().Refused(resolved.ProjectID, ingestion.SignalTraces, ingestion.TooLargeReason, spanCount)
 		return 0, 0, &ExportError{
 			Code: ExportErrorInvalidArgument,
 			Message: fmt.Sprintf(
@@ -88,9 +90,15 @@ func (s *OtlpTracesService) Export(
 	}
 
 	converted := ConvertResourceSpans(resolved.ProjectID, resourceSpans)
+	ids := otlp.RowIDs(resolved.ProjectID, &collectortracev1.ExportTraceServiceRequest{ResourceSpans: resourceSpans})
+	for _, span := range converted {
+		span.ID = ids.Next()
+	}
 	entries := map[uuid.UUID][]*spans_core.Span{resolved.ProjectID: converted}
 	if client := broker.Default(); client != nil {
 		if err := ingest.Publish(client, broker.SignalSpans, resolved.ProjectID, converted); err != nil {
+			ingestion.GetTracker().Refused(resolved.ProjectID, ingestion.SignalTraces,
+				ingestion.PublishRefusalReason(err), len(converted))
 			return 0, 0, publishError(err)
 		}
 	} else if err := spans_core.GetSpanCoreRepository().StoreSpansBatch(entries); err != nil {

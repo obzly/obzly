@@ -124,14 +124,17 @@ envFrom:
       app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{/* The HTTP tier's probes; migrations run at startup, hence the budget. */}}
+{{/* The HTTP tier's probes. Startup runs migrations and waits up to 9 minutes
+for the brokers to accept the ingest streams: while a broker rebuilt a full
+stream, new pods given 3.5 minutes restarted again and again, where waiting
+holds the rollout with the old pods serving. */}}
 {{- define "obzly.httpProbes" -}}
 startupProbe:
   httpGet:
     path: /api/v1/system/health
     port: http
   periodSeconds: 5
-  failureThreshold: 42
+  failureThreshold: 120
 readinessProbe:
   httpGet:
     path: /api/v1/system/ready

@@ -169,12 +169,7 @@ func resolvePartial(
 	group.SetLimit(partialFetchers)
 	for _, r := range ranges {
 		group.Go(func() error {
-			data, err := store.ReadRange(groupCtx, record.ObjectKey, r.offset, r.length)
-			if err != nil {
-				return err
-			}
-			_, err = file.WriteAt(data, r.offset)
-			return err
+			return store.CopyRange(groupCtx, record.ObjectKey, r.offset, r.length, file)
 		})
 	}
 	if err := group.Wait(); err != nil {

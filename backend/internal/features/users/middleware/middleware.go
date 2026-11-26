@@ -67,8 +67,9 @@ func SessionSatisfiesMFA(ctx *gin.Context) bool {
 	return ctx.GetBool(mfaSatisfiedContextKey)
 }
 
-// RequireMFAIfEnforced blocks an Admin without MFA set up on every request, not
-// just at login. Mount the MFA self-service routes before adding it (see cmd/main.go).
+// RequireMFAIfEnforced blocks any account without MFA set up on every request,
+// not just at login: MFA is required for every role. Mount the MFA
+// self-service routes before adding it (see cmd/main.go).
 func RequireMFAIfEnforced() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		user, ok := GetUserFromContext(ctx)
@@ -84,7 +85,7 @@ func RequireMFAIfEnforced() gin.HandlerFunc {
 			return
 		}
 
-		if user.IsMFARequired() && !user.MFAEnabled {
+		if !user.MFAEnabled {
 			ctx.JSON(http.StatusForbidden, gin.H{
 				"error":            "MFA setup required",
 				"mfaSetupRequired": true,

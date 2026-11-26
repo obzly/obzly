@@ -120,3 +120,19 @@ func withSearchLimit(handles []telemetry.DuckDBHandleKind, limit string) []telem
 	}
 	return result
 }
+
+// Go collects harder while DuckDB uses memory, never below a quarter of the
+// container where collection would spin.
+func Test_GoMemoryLimit_LeavesDuckDBItsShare(t *testing.T) {
+	const gib = int64(1 << 30)
+
+	if got := goMemoryLimit(4*gib, 0); got != 4*gib*9/10 {
+		t.Errorf("idle: got %d", got)
+	}
+	if got := goMemoryLimit(4*gib, 2*gib); got != 4*gib*9/10-2*gib {
+		t.Errorf("DuckDB busy: got %d", got)
+	}
+	if got := goMemoryLimit(4*gib, 4*gib); got != gib {
+		t.Errorf("DuckDB full: got %d, want the quarter floor", got)
+	}
+}

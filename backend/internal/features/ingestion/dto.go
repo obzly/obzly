@@ -21,6 +21,22 @@ type IngestionStatusDTO struct {
 	StoppedAfterHours int `json:"stoppedAfterHours"`
 	// RateWindowMinutes: PerMinute averages over this window.
 	RateWindowMinutes int `json:"rateWindowMinutes"`
+	// Refused: records refused in the last RefusedWindowHours, most first.
+	Refused            []RefusedDTO `json:"refused"`
+	RefusedWindowHours int          `json:"refusedWindowHours"`
+}
+
+// RefusedDTO is what receivers refused for one signal and reason. Counts are
+// per attempt: a batch refused and retried counts each time.
+type RefusedDTO struct {
+	Signal string `json:"signal"`
+	// Reason: an error code such as RATE_LIMIT_EXCEEDED, LOG_TOO_LARGE or OTHER.
+	Reason string    `json:"reason"`
+	Count  int64     `json:"count"`
+	LastAt time.Time `json:"lastAt"`
+	// Retried: the sender was told to retry (429/503), so the data is late
+	// rather than lost. Otherwise the sender dropped it.
+	Retried bool `json:"retried"`
 }
 
 type SourceStatusDTO struct {

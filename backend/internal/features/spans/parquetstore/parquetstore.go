@@ -5,6 +5,7 @@ package spans_parquetstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,8 +33,10 @@ type SpanParquetStore struct {
 	querier   *spans_querier.SpanQuerier
 	compactor *spans_compactor.SpanCompactor
 	// uploader is nil unless object storage is configured.
-	uploader    *spans_uploader.SpanUploader
-	segmentRepo *segments.SegmentRepository
+	uploader *spans_uploader.SpanUploader
+	// rollupUploaders upload the span rollups (nil without object storage).
+	rollupUploaders []*spans_uploader.SpanUploader
+	segmentRepo     *segments.SegmentRepository
 }
 
 type Option func(*options)
@@ -113,17 +116,23 @@ func New(dataDir string, opts ...Option) (*SpanParquetStore, error) {
 	}
 
 	var uploader *spans_uploader.SpanUploader
+	var rollupUploaders []*spans_uploader.SpanUploader
 	if cfg.objectStore != nil {
 		uploader = spans_uploader.NewSpanUploader(cfg.objectStore)
+		compactor.SetPublisher(uploader)
+		for _, stream := range spans_core.SpanRollupStreams {
+			rollupUploaders = append(rollupUploaders, spans_uploader.NewSpanUploaderForStream(cfg.objectStore, stream))
+		}
 	}
 
 	return &SpanParquetStore{
-		dataDir:     dataDir,
-		ingester:    ingester,
-		querier:     querier,
-		compactor:   compactor,
-		uploader:    uploader,
-		segmentRepo: &segments.SegmentRepository{},
+		dataDir:         dataDir,
+		ingester:        ingester,
+		querier:         querier,
+		compactor:       compactor,
+		uploader:        uploader,
+		rollupUploaders: rollupUploaders,
+		segmentRepo:     &segments.SegmentRepository{},
 	}, nil
 }
 
@@ -158,18 +167,22 @@ func (s *SpanParquetStore) GetTrace(
 }
 
 func (s *SpanParquetStore) ListServices(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (*spans_core.ListServicesResponseDTO, error) {
-	return s.querier.ListServices(projectID, timeRange)
+	return s.querier.ListServices(ctx, projectID, timeRange, scanBudget)
 }
 
 func (s *SpanParquetStore) ListOperations(
+	ctx context.Context,
 	projectID uuid.UUID,
 	serviceName string,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (*spans_core.ListOperationsResponseDTO, error) {
-	return s.querier.ListOperations(projectID, serviceName, timeRange)
+	return s.querier.ListOperations(ctx, projectID, serviceName, timeRange, scanBudget)
 }
 
 func (s *SpanParquetStore) ExecuteAggregation(
@@ -180,24 +193,30 @@ func (s *SpanParquetStore) ExecuteAggregation(
 }
 
 func (s *SpanParquetStore) ServiceCallEdges(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) ([]spans_core.ServiceCallEdge, error) {
-	return s.querier.ServiceCallEdges(projectID, timeRange)
+	return s.querier.ServiceCallEdges(ctx, projectID, timeRange, scanBudget)
 }
 
 func (s *SpanParquetStore) ServiceK8sMetadata(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (map[string]spans_core.K8sResourceInfo, error) {
-	return s.querier.ServiceK8sMetadata(projectID, timeRange)
+	return s.querier.ServiceK8sMetadata(ctx, projectID, timeRange, scanBudget)
 }
 
 func (s *SpanParquetStore) ServiceNodeStats(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (*spans_core.ServiceNodeStats, error) {
-	return s.querier.ServiceNodeStats(projectID, timeRange)
+	return s.querier.ServiceNodeStats(ctx, projectID, timeRange, scanBudget)
 }
 
 func (s *SpanParquetStore) TraceSummary(
@@ -276,12 +295,17 @@ func (s *SpanParquetStore) DeleteOldSpans(projectID uuid.UUID, olderThan time.Ti
 	return nil
 }
 
+// CompactSmallSegments merges (each merge is uploaded before it replaces its
+// sources), then builds the span rollups.
 func (s *SpanParquetStore) CompactSmallSegments(projectID uuid.UUID, sampling spans_core.SpanSampling) error {
 	_, err := s.compactor.CompactSmallSegments(projectID, sampling)
 	if err != nil {
-		return fmt.Errorf("failed to compact segments: %w", err)
+		err = fmt.Errorf("failed to compact segments: %w", err)
 	}
-	return nil
+	if rollupErr := s.compactor.RollupSegments(projectID); rollupErr != nil {
+		err = errors.Join(err, fmt.Errorf("failed to build span rollups: %w", rollupErr))
+	}
+	return err
 }
 
 // UploadPendingSegments uploads a batch of pending segments to object
@@ -294,10 +318,17 @@ func (s *SpanParquetStore) UploadPendingSegments() error {
 	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
 	defer cancel()
 
+	// Rollups upload even when a segment fails (see logs_parquetstore).
+	var uploadErr error
 	if _, err := s.uploader.UploadPending(ctx, uploadBatchLimit); err != nil {
-		return fmt.Errorf("failed to upload pending segments: %w", err)
+		uploadErr = fmt.Errorf("failed to upload pending segments: %w", err)
 	}
-	return nil
+	for _, rollupUploader := range s.rollupUploaders {
+		if _, err := rollupUploader.UploadPending(ctx, uploadBatchLimit); err != nil {
+			uploadErr = errors.Join(uploadErr, fmt.Errorf("failed to upload pending span rollups: %w", err))
+		}
+	}
+	return uploadErr
 }
 
 // ReconcileSegments retires orphaned catalog rows and checks uploaded
@@ -309,8 +340,12 @@ func (s *SpanParquetStore) ReconcileSegments() error {
 
 	// Only with object storage (s.uploader): without it nothing is ever
 	// uploaded, so every row would look orphaned.
-	if _, err := (&segments.SegmentRepository{}).MarkOrphansLost(streamSpans, time.Now().UTC()); err != nil {
-		return fmt.Errorf("failed to retire orphaned segments: %w", err)
+	// A lost rollup's row marks its source rolled up, so it is never rebuilt
+	// and views undercount; retired, the next pass rebuilds it.
+	for _, stream := range append([]string{streamSpans}, spans_core.SpanRollupStreams...) {
+		if _, err := (&segments.SegmentRepository{}).MarkOrphansLost(stream, time.Now().UTC()); err != nil {
+			return fmt.Errorf("failed to retire orphaned %s segments: %w", stream, err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)

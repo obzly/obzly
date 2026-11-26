@@ -16,46 +16,17 @@ import (
 )
 
 // CreateTestUser creates a user and issues a token via GenerateAccessToken,
-// bypassing SignIn. Admin-role users are marked MFA-enabled so they pass
-// RequireMFAIfEnforced.
+// bypassing SignIn. MFA is required for every role, so the user is marked
+// MFA-enabled (without a real secret) to pass RequireMFAIfEnforced; a step-up
+// check needs EnableRealMFAForTestUser.
 func CreateTestUser(role users_enums.UserRole) *users_dto.SignInResponseDTO {
-	userID := uuid.New()
-	// The whole id: the shared test database keeps every run's users, and a short
-	// prefix collides.
-	email := fmt.Sprintf("%s-%s@test.com", strings.ToLower(string(role)), userID)
+	return createTestUser(role, true)
+}
 
-	hashedPassword := "$2a$10$test"
-	user := &users_models.User{
-		ID:                   userID,
-		Email:                email,
-		Name:                 "Test User",
-		HashedPassword:       &hashedPassword,
-		PasswordCreationTime: time.Now().UTC(),
-		CreatedAt:            time.Now().UTC(),
-		Role:                 role,
-		Status:               users_enums.UserStatusActive,
-	}
-
-	userRepository := &users_repositories.UserRepository{}
-	err := userRepository.CreateUser(user)
-	if err != nil {
-		panic(err)
-	}
-
-	if role == users_enums.UserRoleAdmin {
-		if err := userRepository.EnableMFA(userID, 0); err != nil {
-			panic(err)
-		}
-	}
-
-	response, err := users_services.GetUserService().GenerateAccessToken(user)
-	if err != nil {
-		panic(err)
-	}
-
-	response.Email = user.Email
-
-	return response
+// CreateTestUserWithoutMFA is CreateTestUser for an account that hasn't set MFA
+// up yet: its token only reaches the MFA self-service routes.
+func CreateTestUserWithoutMFA(role users_enums.UserRole) *users_dto.SignInResponseDTO {
+	return createTestUser(role, false)
 }
 
 // EnableRealMFAForTestUser gives the user a real TOTP secret and returns a valid
@@ -125,4 +96,43 @@ func RecreateInitialAdmin() string {
 		panic(err)
 	}
 	return token
+}
+
+func createTestUser(role users_enums.UserRole, withMFA bool) *users_dto.SignInResponseDTO {
+	userID := uuid.New()
+	// The whole id: the shared test database keeps every run's users, and a short
+	// prefix collides.
+	email := fmt.Sprintf("%s-%s@example.com", strings.ToLower(string(role)), userID)
+
+	hashedPassword := "$2a$10$test"
+	user := &users_models.User{
+		ID:                   userID,
+		Email:                email,
+		Name:                 "Test User",
+		HashedPassword:       &hashedPassword,
+		PasswordCreationTime: time.Now().UTC(),
+		CreatedAt:            time.Now().UTC(),
+		Role:                 role,
+		Status:               users_enums.UserStatusActive,
+	}
+
+	userRepository := &users_repositories.UserRepository{}
+	if err := userRepository.CreateUser(user); err != nil {
+		panic(err)
+	}
+
+	if withMFA {
+		if err := userRepository.EnableMFA(userID, 0); err != nil {
+			panic(err)
+		}
+	}
+
+	response, err := users_services.GetUserService().GenerateAccessToken(user)
+	if err != nil {
+		panic(err)
+	}
+
+	response.Email = user.Email
+
+	return response
 }

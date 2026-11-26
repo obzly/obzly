@@ -39,6 +39,17 @@ export interface IngestionSource {
   signals: IngestionSignalStatus[];
 }
 
+/** Records a receiver refused for one signal and reason. */
+export interface IngestionRefusal {
+  signal: IngestionSignal;
+  /** An error code such as RATE_LIMIT_EXCEEDED or LOG_TOO_LARGE, or OTHER. */
+  reason: string;
+  count: number;
+  lastAt: string;
+  /** The sender was told to retry (429/503): late, not lost. Otherwise dropped. */
+  retried: boolean;
+}
+
 export interface IngestionStatus {
   sources: IngestionSource[];
   truncated: boolean;
@@ -46,4 +57,7 @@ export interface IngestionStatus {
   quietAfterMinutes: number;
   stoppedAfterHours: number;
   rateWindowMinutes: number;
+  /** Refused in the last refusedWindowHours, most first; absent from older Sites. */
+  refused?: IngestionRefusal[];
+  refusedWindowHours?: number;
 }

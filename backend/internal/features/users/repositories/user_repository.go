@@ -113,6 +113,8 @@ func (r *UserRepository) CreateInitialAdmin(email, bootstrapTokenHash string) (c
 		IsRootAdmin:          true,
 		CreatedAt:            time.Now().UTC(),
 		BootstrapTokenHash:   &bootstrapTokenHash,
+		// ADMIN_EMAIL is the operator's word.
+		EmailVerified: true,
 	}
 
 	if err := storage.GetDb().Create(admin).Error; err != nil {
@@ -290,7 +292,9 @@ func (r *UserRepository) RetireRootAdminForTests(newEmail string) error {
 		}).Error
 }
 
-func (r *UserRepository) UpdateUserInfo(userID uuid.UUID, name *string, email *string) error {
+// UpdateUserInfo changes the name and/or email. emailVerified says who vouches
+// for a new email (see User.EmailVerified) and is ignored when email is nil.
+func (r *UserRepository) UpdateUserInfo(userID uuid.UUID, name *string, email *string, emailVerified bool) error {
 	updates := make(map[string]any)
 
 	if name != nil {
@@ -298,6 +302,7 @@ func (r *UserRepository) UpdateUserInfo(userID uuid.UUID, name *string, email *s
 	}
 	if email != nil {
 		updates["email"] = normalizeEmail(*email)
+		updates["email_verified"] = emailVerified
 	}
 
 	if len(updates) == 0 {
@@ -351,6 +356,14 @@ func (r *UserRepository) GetUserByGoogleOAuthID(googleID string) (*users_models.
 		return nil, err
 	}
 	return &user, nil
+}
+
+// SetEmailVerified records that the account's current email was vouched for
+// (see User.EmailVerified).
+func (r *UserRepository) SetEmailVerified(userID uuid.UUID, verified bool) error {
+	return storage.GetDb().Model(&users_models.User{}).
+		Where("id = ?", userID).
+		Update("email_verified", verified).Error
 }
 
 func (r *UserRepository) LinkOAuthID(userID uuid.UUID, oauthColumn, oauthID string) error {
@@ -468,7 +481,7 @@ func (r *UserRepository) SyncRootAdminEmail(newEmail string) (bool, error) {
 
 	if err := storage.GetDb().Model(&users_models.User{}).
 		Where("id = ?", admin.ID).
-		Update("email", newEmail).Error; err != nil {
+		Updates(map[string]any{"email": newEmail, "email_verified": true}).Error; err != nil {
 		return false, fmt.Errorf("failed to update root admin email: %w", err)
 	}
 

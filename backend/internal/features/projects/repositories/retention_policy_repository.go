@@ -1,6 +1,7 @@
 package projects_repositories
 
 import (
+	"context"
 	"time"
 
 	projects_models "obzly/internal/features/projects/models"
@@ -13,8 +14,15 @@ import (
 type RetentionPolicyRepository struct{}
 
 func (r *RetentionPolicyRepository) ListByProject(projectID uuid.UUID) ([]projects_models.RetentionPolicy, error) {
+	return r.ListByProjectContext(context.Background(), projectID)
+}
+
+func (r *RetentionPolicyRepository) ListByProjectContext(
+	ctx context.Context,
+	projectID uuid.UUID,
+) ([]projects_models.RetentionPolicy, error) {
 	var policies []projects_models.RetentionPolicy
-	err := storage.GetDb().Where("project_id = ?", projectID).Find(&policies).Error
+	err := storage.GetDb().WithContext(ctx).Where("project_id = ?", projectID).Find(&policies).Error
 	return policies, err
 }
 

@@ -5,14 +5,17 @@
 package servicemap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"time"
 
+	"obzly/internal/config"
 	projects_services "obzly/internal/features/projects/services"
 	spans_core "obzly/internal/features/spans/core"
 	users_models "obzly/internal/features/users/models"
+	"obzly/internal/util/querylimit"
 
 	"github.com/google/uuid"
 )
@@ -35,10 +38,12 @@ const (
 
 type ServiceMapService struct {
 	projectService *projects_services.ProjectService
+	queryLimiter   *querylimit.Limiter
 }
 
 // GetServiceMap merges span call edges with network-metric edges into one graph.
 func (s *ServiceMapService) GetServiceMap(
+	ctx context.Context,
 	projectID uuid.UUID,
 	from, to *time.Time,
 	user *users_models.User,
@@ -46,11 +51,19 @@ func (s *ServiceMapService) GetServiceMap(
 	if err := s.requireAccess(projectID, user); err != nil {
 		return nil, err
 	}
+	// One slot for the map's three span queries, which stop with ctx and are
+	// refused past the scan budget: they ran unbounded, whoever was waiting.
+	release, err := s.queryLimiter.Acquire(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	resolvedFrom, resolvedTo := clampTimeRange(from, to)
 	timeRange := &spans_core.TimeRangeDTO{From: &resolvedFrom, To: &resolvedTo}
+	scanBudget := config.GetEnv().QueryMaxScanBytes
 
-	spanEdges, err := spans_core.GetSpanCoreRepository().ServiceCallEdges(projectID, timeRange)
+	spanEdges, err := spans_core.GetSpanCoreRepository().ServiceCallEdges(ctx, projectID, timeRange, scanBudget)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load span-derived service edges: %w", err)
 	}
@@ -60,12 +73,12 @@ func (s *ServiceMapService) GetServiceMap(
 		return nil, fmt.Errorf("failed to load network-derived service edges: %w", err)
 	}
 
-	spanK8sMetadata, err := spans_core.GetSpanCoreRepository().ServiceK8sMetadata(projectID, timeRange)
+	spanK8sMetadata, err := spans_core.GetSpanCoreRepository().ServiceK8sMetadata(ctx, projectID, timeRange, scanBudget)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load span-derived service k8s metadata: %w", err)
 	}
 
-	nodeStats, err := spans_core.GetSpanCoreRepository().ServiceNodeStats(projectID, timeRange)
+	nodeStats, err := spans_core.GetSpanCoreRepository().ServiceNodeStats(ctx, projectID, timeRange, scanBudget)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load service node stats: %w", err)
 	}

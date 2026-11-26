@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 
 	"github.com/cespare/xxhash/v2"
@@ -37,14 +36,17 @@ const (
 	bloomMinBits = 8 * 1024
 	bloomHeader  = len(bloomMagic) + 1 + 8 // magic, hash count, bit count
 
-	// Lists a file's distinct ID-like tokens, matching IsIDToken.
-	tokenRunsSQL = `SELECT DISTINCT token FROM (
+	// Lists a file's ID-like tokens (with repeats), matching IsIDToken.
+	tokenRunsSQL = `SELECT token FROM (
 		SELECT unnest(regexp_extract_all(%[1]s, '[A-Za-z0-9]{12,}')) AS token FROM read_parquet(?)
 		UNION ALL
 		SELECT unnest(regexp_extract_all(%[1]s, '[A-Za-z0-9-]*` + uuidCore + `[A-Za-z0-9-]*')) FROM read_parquet(?)
 	) WHERE (regexp_full_match(token, '[A-Za-z0-9]{12,}') AND regexp_matches(token, '[0-9]'))
 		OR regexp_full_match(token, '` + uuidCore + `')`
-	uuidCore = `[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}`
+	// bloomCountMargin covers approx_count_distinct's error (about 2%), so
+	// the filter keeps its false positive rate.
+	bloomCountMargin = 1.05
+	uuidCore         = `[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}`
 )
 
 var (
@@ -110,43 +112,25 @@ func (t *TokenBlooms) Close() error {
 }
 
 // BuildTokenBloom writes the filter of stream's file at path to
-// BloomPath(path), using db (a handle whose memory limit and spill
-// directory bound the DISTINCT). False when the stream keeps no filters.
+// BloomPath(path), using db. False when the stream keeps no filters. The
+// tokens are counted approximately, then streamed into the filter: both run
+// in fixed memory, where an exact DISTINCT ran out of it on a 1 GB file.
 func BuildTokenBloom(ctx context.Context, db *sql.DB, stream, path string) (bool, error) {
 	column, ok := TokenBloomColumns[stream]
 	if !ok {
 		return false, nil
 	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = conn.Close() }()
-	table := "tokens_" + strings.ReplaceAll(filepath.Base(path), ".", "_")
-	table = strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' {
-			return r
-		}
-		return '_'
-	}, table)
-	if _, err := conn.ExecContext(
-		ctx,
-		"CREATE TEMP TABLE "+table+" AS "+fmt.Sprintf(tokenRunsSQL, column),
-		path,
-		path,
-	); err != nil {
-		return false, fmt.Errorf("failed to list tokens of %s: %w", path, err)
-	}
-	defer func() { _, _ = conn.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+table) }()
+	tokens := fmt.Sprintf(tokenRunsSQL, column)
 
 	var count int64
-	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
-		return false, err
+	if err := db.QueryRowContext(ctx, "SELECT approx_count_distinct(token) FROM ("+tokens+")", path, path).
+		Scan(&count); err != nil {
+		return false, fmt.Errorf("failed to count tokens of %s: %w", path, err)
 	}
-	bloom := newBloom(count)
-	rows, err := conn.QueryContext(ctx, "SELECT token FROM "+table)
+	bloom := newBloom(int64(math.Ceil(float64(count) * bloomCountMargin)))
+	rows, err := db.QueryContext(ctx, tokens, path, path)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to list tokens of %s: %w", path, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -157,7 +141,7 @@ func BuildTokenBloom(ctx context.Context, db *sql.DB, stream, path string) (bool
 		bloom.add(token)
 	}
 	if err := rows.Err(); err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to list tokens of %s: %w", path, err)
 	}
 
 	target := BloomPath(path)

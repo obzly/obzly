@@ -5,18 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"obzly/internal/telemetry"
+	"obzly/internal/util/logger"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 	"golang.org/x/sync/errgroup"
@@ -42,6 +47,22 @@ const (
 	deleteParallelism = 8
 )
 
+// TransferTimeout caps moving one object of size bytes: 30 s plus the time
+// at minTransferBytesPerSecond. A flat 30 s needed 33 MB/s for a 1 GB cold
+// segment; a hung transfer is caught sooner by the stall watchdog.
+func TransferTimeout(size int64) time.Duration {
+	return 30*time.Second + time.Duration(size/minTransferBytesPerSecond)*time.Second
+}
+
+const (
+	minTransferBytesPerSecond = 1 << 20
+	// transferStallTimeout: an upload or download that moves no bytes for
+	// this long is cancelled, however long it is allowed in all.
+	transferStallTimeout = 2 * time.Minute
+)
+
+var errTransferStalled = errors.New("object storage transfer stalled")
+
 // ObjectStore wraps a gocloud.dev/blob.Bucket for the cold tier: segment
 // uploads and on-demand downloads. The provider comes from NewObjectStore's
 // URL ("s3://bucket", "gs://bucket", "azblob://container", "file:///path",
@@ -52,6 +73,15 @@ type ObjectStore struct {
 	// DeleteBatch uses DeleteObjects - gocloud blob has no batch delete.
 	s3Client *s3.Client
 	s3Bucket string
+	// batchDeleteRefused: the S3-compatible store doesn't do DeleteObjects
+	// (Incus buckets, GCS's S3 interop), so DeleteBatch deletes one by one.
+	batchDeleteRefused atomic.Bool
+}
+
+// progressReader calls progress on every read that returns bytes.
+type progressReader struct {
+	reader   io.Reader
+	progress func()
 }
 
 func NewObjectStore(ctx context.Context, bucketURL string) (*ObjectStore, error) {
@@ -83,19 +113,21 @@ func (o *ObjectStore) Upload(ctx context.Context, key, localPath string) (err er
 	}
 	defer func() { _ = file.Close() }()
 
+	ctx, progress, stop := watchTransfer(ctx, transferStallTimeout)
+	defer stop()
 	writer, err := o.bucket.NewWriter(ctx, key, writerOptions(key))
 	if err != nil {
 		return fmt.Errorf("failed to open object storage writer for %q: %w", key, err)
 	}
 
-	written, err := io.Copy(writer, file)
+	written, err := io.Copy(writer, &progressReader{reader: file, progress: progress})
 	if err != nil {
 		_ = writer.Close()
-		return fmt.Errorf("failed to upload %q: %w", key, err)
+		return fmt.Errorf("failed to upload %q: %w", key, stalledOr(ctx, err))
 	}
 
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to finalize upload of %q: %w", key, err)
+		return fmt.Errorf("failed to finalize upload of %q: %w", key, stalledOr(ctx, err))
 	}
 
 	telemetry.ObjectStoreBytes.WithLabelValues(opUpload).Add(float64(written))
@@ -112,6 +144,8 @@ func (o *ObjectStore) Download(ctx context.Context, key, localPath string) (err 
 		return fmt.Errorf("failed to create local directory for %q: %w", localPath, err)
 	}
 
+	ctx, progress, stop := watchTransfer(ctx, transferStallTimeout)
+	defer stop()
 	reader, err := o.bucket.NewReader(ctx, key, nil)
 	if err != nil {
 		return fmt.Errorf("failed to open object storage reader for %q: %w", key, err)
@@ -130,9 +164,9 @@ func (o *ObjectStore) Download(ctx context.Context, key, localPath string) (err 
 		}
 	}()
 
-	read, err := io.Copy(file, reader)
+	read, err := io.Copy(file, &progressReader{reader: reader, progress: progress})
 	if err != nil {
-		return fmt.Errorf("failed to download %q: %w", key, err)
+		return fmt.Errorf("failed to download %q: %w", key, stalledOr(ctx, err))
 	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("failed to write %q: %w", localPath, err)
@@ -160,6 +194,30 @@ type ObjectInfo struct {
 	Key     string
 	Size    int64
 	ModTime time.Time
+}
+
+// CopyRange writes length bytes of key from offset into file at the same
+// offset, streaming: column chunks of a cold segment run to hundreds of MB,
+// and reading each into memory (eight at a time, per query) OOM-killed an
+// api replica.
+func (o *ObjectStore) CopyRange(ctx context.Context, key string, offset, length int64, file io.WriterAt) (err error) {
+	defer observeObjectStoreOp(opDownload, time.Now(), &err)
+	ctx, progress, stop := watchTransfer(ctx, transferStallTimeout)
+	defer stop()
+	reader, err := o.bucket.NewRangeReader(ctx, key, offset, length, nil)
+	if err != nil {
+		return fmt.Errorf("failed to open a range of %q: %w", key, err)
+	}
+	defer func() { _ = reader.Close() }()
+	written, err := io.Copy(io.NewOffsetWriter(file, offset), &progressReader{reader: reader, progress: progress})
+	if err != nil {
+		return fmt.Errorf("failed to read a range of %q: %w", key, stalledOr(ctx, err))
+	}
+	if written != length {
+		return fmt.Errorf("read %d of %d bytes of a range of %q", written, length, key)
+	}
+	telemetry.ObjectStoreBytes.WithLabelValues(opDownload).Add(float64(written))
+	return nil
 }
 
 // ReadRange is length bytes of key from offset - a column chunk of a
@@ -235,15 +293,28 @@ func (o *ObjectStore) DeleteBatch(ctx context.Context, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	if o.s3Client != nil {
+	if o.s3Client != nil && !o.batchDeleteRefused.Load() {
 		for start := 0; start < len(keys); start += deleteBatchSize {
-			if err := o.deleteObjects(ctx, keys[start:min(start+deleteBatchSize, len(keys))]); err != nil {
+			err := o.deleteObjects(ctx, keys[start:min(start+deleteBatchSize, len(keys))])
+			if err == nil {
+				continue
+			}
+			if !batchDeleteUnsupported(err) {
 				return err
 			}
+			if o.batchDeleteRefused.CompareAndSwap(false, true) {
+				logger.GetLogger().
+					Warn("object storage refuses batch deletes (DeleteObjects), deleting objects one at a time",
+						"error", err)
+			}
+			return o.deleteEach(ctx, keys[start:])
 		}
 		return nil
 	}
+	return o.deleteEach(ctx, keys)
+}
 
+func (o *ObjectStore) deleteEach(ctx context.Context, keys []string) error {
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(deleteParallelism)
 	for _, key := range keys {
@@ -272,6 +343,25 @@ func observeObjectStoreOp(op string, start time.Time, err *error) {
 	}
 	telemetry.ObjectStoreRequests.WithLabelValues(op, result).Inc()
 	telemetry.ObjectStoreDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
+}
+
+// batchDeleteUnsupported tells a store that has no DeleteObjects from a
+// failed batch: Incus answers InvalidRequest ("Bucket lifecycle is managed by
+// the Incus API"), others NotImplemented or 405/501.
+func batchDeleteUnsupported(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NotImplemented", "XNotImplemented", "InvalidRequest", "MethodNotAllowed":
+			return true
+		}
+	}
+	var respErr *smithyhttp.ResponseError
+	if errors.As(err, &respErr) {
+		status := respErr.HTTPStatusCode()
+		return status == http.StatusNotImplemented || status == http.StatusMethodNotAllowed
+	}
+	return false
 }
 
 func (o *ObjectStore) deleteObjects(ctx context.Context, keys []string) (err error) {
@@ -334,4 +424,53 @@ func writerOptions(key string) *blob.WriterOptions {
 		}
 		return nil
 	}}
+}
+
+// watchTransfer returns a context cancelled with errTransferStalled once
+// progress hasn't been called for stall, the progress callback and a stop
+// to call when the transfer ends.
+func watchTransfer(ctx context.Context, stall time.Duration) (context.Context, func(), func()) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(min(stall/4, 5*time.Second))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				if now.Sub(time.Unix(0, last.Load())) > stall {
+					cancel(errTransferStalled)
+					return
+				}
+			}
+		}
+	}()
+	progress := func() { last.Store(time.Now().UnixNano()) }
+	stop := func() {
+		close(done)
+		cancel(nil)
+	}
+	return ctx, progress, stop
+}
+
+// stalledOr names a stall as the cause of err.
+func stalledOr(ctx context.Context, err error) error {
+	if errors.Is(context.Cause(ctx), errTransferStalled) {
+		return fmt.Errorf("%w (no bytes moved for %s): %w", errTransferStalled, transferStallTimeout, err)
+	}
+	return err
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.progress()
+	}
+	return n, err
 }

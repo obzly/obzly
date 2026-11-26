@@ -18,9 +18,16 @@ import (
 // streams: samples and their series, compacted, expired and deleted alike.
 var streams = []string{"metrics", "metrics_series"}
 
-// allStreams adds the rollups, which are expired and deleted but
-// never merged: each stays tied to the cold segment it was built from.
-var allStreams = []string{"metrics", "metrics_series", "metrics_5m", "metrics_1h"}
+// allStreams adds the rollups and partials, which are expired and deleted
+// but never merged: each stays tied to the segment it was built from.
+var allStreams = []string{
+	"metrics",
+	"metrics_series",
+	"metrics_5m",
+	"metrics_1h",
+	segments.MetricPartialsStream,
+	segments.MetricPartials1mStream,
+}
 
 // rollupBudget: cold segments rolled up per project per pass (each is up to
 // L2MaxBytes; the backlog of existing ones drains over passes).
@@ -38,6 +45,9 @@ type MetricCompactor struct {
 	compactor   *segments.Compactor
 	// objectStore is nil unless object storage is configured (WithObjectStore).
 	objectStore *segments.ObjectStore
+	// publisher uploads each merge before it replaces its sources (nil
+	// without object storage).
+	publisher segments.Publisher
 }
 
 type Option func(*options)
@@ -74,12 +84,17 @@ func NewMetricCompactor(dataDir string, opts ...Option) (*MetricCompactor, error
 	}, nil
 }
 
+// SetPublisher uploads each merge before it replaces its sources.
+func (c *MetricCompactor) SetPublisher(publisher segments.Publisher) {
+	c.publisher = publisher
+}
+
 func (c *MetricCompactor) Close() error {
 	return c.compactor.Close()
 }
 
 // CompactSmallSegments merges runs of consecutive (by time) small segments
-// into fewer, larger ones, then builds missing rollups.
+// into fewer, larger ones, then builds missing rollups and partials.
 func (c *MetricCompactor) CompactSmallSegments(projectID uuid.UUID) (*CompactionResult, error) {
 	result := &CompactionResult{}
 	for _, stream := range streams {
@@ -87,7 +102,7 @@ func (c *MetricCompactor) CompactSmallSegments(projectID uuid.UUID) (*Compaction
 			return result, err
 		}
 	}
-	return result, c.RollupColdSegments(projectID)
+	return result, errors.Join(c.RollupColdSegments(projectID), c.BuildPartials(projectID))
 }
 
 // RollupColdSegments builds the 5m and 1h rollups of cold (L2) metrics
@@ -125,14 +140,16 @@ func (c *MetricCompactor) RollupColdSegments(projectID uuid.UUID) error {
 	return nil
 }
 
-// AgeOut retires raw samples older than rawBefore, and rollups and the
-// series stream older than rollupsBefore (the same time for no aging). A raw segment aging out gets its rollups first (kept for
+// AgeOut retires raw samples older than rawBefore, 1-minute partials past
+// METRICS_PARTIALS_1M_DAYS, and rollups and the series stream older than
+// rollupsBefore (the same time for no aging). A raw segment aging out gets its rollups first (kept for
 // the next pass if that fails), marked aged so queries read them as the
 // only data for that time.
 func (c *MetricCompactor) AgeOut(projectID uuid.UUID, rawBefore, rollupsBefore time.Time) (int, error) {
 	if rollupsBefore.After(rawBefore) {
 		rollupsBefore = rawBefore
 	}
+	partials1mBefore := segments.MetricPartials1mCutoff(time.Now().UTC())
 	var expired, aging []*segments.SegmentRecord
 	for _, stream := range allStreams {
 		records, err := c.segmentRepo.ListByProject(projectID, stream)
@@ -141,7 +158,9 @@ func (c *MetricCompactor) AgeOut(projectID uuid.UUID, rawBefore, rollupsBefore t
 		}
 		for _, record := range records {
 			switch {
-			case record.MaxTime.Before(rollupsBefore):
+			case record.MaxTime.Before(rollupsBefore),
+				isPartials(stream) && record.MaxTime.Before(rawBefore),
+				stream == segments.MetricPartials1mStream && !record.MaxTime.After(partials1mBefore):
 				expired = append(expired, record)
 			case stream == "metrics" && record.MaxTime.Before(rawBefore):
 				aging = append(aging, record)
@@ -292,23 +311,17 @@ func (c *MetricCompactor) compactStream(projectID uuid.UUID, stream string, resu
 			continue
 		}
 
-		mergedRecord := segments.FromSegment(*merged)
-		if err := c.segmentRepo.ReplaceSegments(idsOf(group), mergedRecord); err != nil {
-			// Discard the merged file; its rows are either still in the
-			// sources or were deliberately deleted.
-			if cleanupErr := c.compactor.DeleteSegmentFiles(
-				[]*segments.SegmentRecord{mergedRecord},
-			); cleanupErr != nil {
-				return fmt.Errorf("failed to discard merged segment: %w", cleanupErr)
-			}
-			if errors.Is(err, segments.ErrSegmentsGone) {
-				continue
-			}
-			return fmt.Errorf("failed to record merged segment: %w", err)
+		committed, err := segments.CommitMerge(context.Background(), c.segmentRepo, c.publisher,
+			c.deleteSegmentData, group, segments.FromSegment(*merged))
+		if errors.Is(err, segments.ErrMergeNotPublished) {
+			mergeErrs = append(mergeErrs, err)
+			continue
 		}
-
-		if err := c.deleteSegmentData(group); err != nil {
-			return fmt.Errorf("failed to clean up merged-away segments: %w", err)
+		if err != nil {
+			return err
+		}
+		if !committed {
+			continue
 		}
 
 		result.MergedGroups++
@@ -391,4 +404,13 @@ func idsOf(records []*segments.SegmentRecord) []uuid.UUID {
 // (see segments.MigrateLegacySegment).
 func (c *MetricCompactor) MigrateLegacySegment(ctx context.Context, record *segments.SegmentRecord) error {
 	return segments.MigrateLegacySegment(ctx, c.segmentRepo, c.compactor, c.objectStore, c.dataDir, record)
+}
+
+func isPartials(stream string) bool {
+	for _, tier := range segments.MetricPartialTiers {
+		if tier.Stream == stream {
+			return true
+		}
+	}
+	return false
 }

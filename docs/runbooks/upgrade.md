@@ -335,7 +335,8 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
       rightsizing; until then that part says "not enabled".
     - AWS posture: `SecurityAudit`, and `securityhub:DescribeHub`, `GetEnabledStandards` and
       `GetFindings`.
-    - Azure cost: Cost Management Reader (and Storage Blob Data Reader on the export container).
+    - Azure cost: Cost Management Reader on the subscription or management group (no billing role)
+      and Storage Blob Data Reader on the export's storage account.
       Existing reservations and savings plans also need **Reservations Reader** at
       `/providers/Microsoft.Capacity`, which only a tenant-level admin can assign; the script prints
       the command, and until then that part says "needs permission".
@@ -452,6 +453,27 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
   - **Verify:** no `web analytics hour failed` lines after an hour; `logs_1m_pods` and
     `logs_1h_patterns` segments appear (Settings › Storage) and Logs › Volume & noise answers in
     seconds once the backfill is done.
+- **Next release after v1.2.3** (MFA for every account, central sign-in for Members-page accounts) -
+  no migration.
+  - **MFA is required for every role** and can't be turned off: Settings → Identity & access shows
+    it as a fixed statement instead of the **Require MFA for everyone** switch, and
+    `PUT /users/settings` ignores `isMfaRequiredForEveryone` (responses still report `true`). Users
+    without MFA set it up at their next sign-in; an existing session without MFA only reaches the
+    MFA setup screen. Sign-ins through an SSO connector that trusts the provider's MFA, when the
+    sign-in satisfies it, still don't ask. API keys are unaffected; MCP access tokens created by a
+    Member without MFA work again once that Member has set it up. Tell users before upgrading.
+  - **Control plane:** between upgrading a Site and the control plane, Members without MFA reached
+    through an older control plane get "MFA setup required" on that Site; upgrade the control plane
+    right after the Sites, as usual.
+  - **MCP write access is off by default** (`MCP_WRITE_ENABLED`, default `false`): tokens and
+    connected apps that were granted write access keep working but are read-only, the write tools
+    are no longer listed, and new tokens and app connections can't ask for it. Set
+    `MCP_WRITE_ENABLED=true` on the server that serves `/mcp` to turn it back on; earlier grants
+    then work again without being re-created.
+  - **Members page on a control plane:** people first added from a project's Members page (local
+    `INVITED` accounts) can now sign in centrally; their first central sign-in activates them.
+    Adding an email the Site doesn't know is refused there with a pointer to inviting the person on
+    the control plane (Users, then Sites → Access); people already on the Site are still added.
 
 ## Order
 
@@ -459,7 +481,8 @@ broker replicas behind (roll brokers one at a time), a failed integrity audit (r
    be newer than the Sites it proxies by more than one version.
 2. Within a Site: brokers one at a time (the PodDisruptionBudget allows one), then workers, then
    api and queriers. Migrations run at startup, under a lock, on whichever pod starts first;
-   the others wait. Startup probes allow 3.5 minutes for them.
+   the others wait. Startup probes allow 10 minutes for them and for the brokers to accept the
+   ingest streams (a broker rebuilding a full stream can take that long).
 3. After each Site: Upgrade status shows the new version, schema up to date.
 
 With Helm: `helm upgrade obzly deploy/helm/obzly -n obzly -f values.yaml --set image.tag=vX.Y.Z`.

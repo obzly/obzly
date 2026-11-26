@@ -62,6 +62,12 @@ type Lock struct {
 	ttl    time.Duration
 }
 
+// Key is the Valkey key of the lock named name, for reading whether it is
+// held without taking it.
+func Key(name string) string {
+	return keyPrefix + name
+}
+
 // New creates a lock named name (under a fixed key prefix). Callers holding it across a
 // ticker loop should renew well before ttl (e.g. ttl >= 3x the tick) so a slow tick or
 // a Valkey hiccup doesn't cause a handoff.

@@ -11,6 +11,7 @@ import (
 	api_keys "obzly/internal/features/api_keys"
 	metrics_core "obzly/internal/features/metrics/core"
 	metrics_promapi "obzly/internal/features/metrics/promapi"
+	metrics_testsupport "obzly/internal/features/metrics/testsupport"
 	projects_controllers "obzly/internal/features/projects/controllers"
 	projects_testing "obzly/internal/features/projects/testing"
 	users_enums "obzly/internal/features/users/enums"
@@ -191,4 +192,45 @@ func Test_Query_WithInvalidSyntax_BadRequest(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
+}
+
+// Storage failing under a query answers 500 "internal" with a fixed
+// message: the cause, which names the fragment, the executor and the segment
+// file, used to be the 422's error text.
+func Test_Query_WhenStorageFails_Returns500WithoutTheCause(t *testing.T) {
+	router, apiKey, projectID := setUpFixtureWithData(t, "Promapi Storage Failure")
+	metrics_testsupport.FailSampleReads(t, nil)
+
+	for _, expression := range []string{"sum(rate(http_requests_total[5m]))", "http_requests_total"} {
+		url := fmt.Sprintf("/api/v1/metrics/%s/api/v1/query?query=%s", projectID, expression)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		require.NoError(t, err)
+		req.Header.Set("X-API-Key", apiKey)
+
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+
+		var envelope apiEnvelope
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+		assert.Equal(t, "error", envelope.Status)
+		assert.Equal(t, "failed to execute the query", envelope.Error)
+		assert.NotContains(t, recorder.Body.String(), "querier-0")
+		assert.NotContains(t, recorder.Body.String(), ".parquet")
+	}
+}
+
+// A mistake in the expression still comes back with its text, as a 422.
+func Test_Query_InvalidExpression_ReturnsTheParseError(t *testing.T) {
+	router, apiKey, projectID := setUpFixtureWithData(t, "Promapi Parse Error")
+
+	url := fmt.Sprintf("/api/v1/metrics/%s/api/v1/query?query=%s", projectID, "rate(http_requests_total[5m")
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Header.Set("X-API-Key", apiKey)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "parse error")
 }

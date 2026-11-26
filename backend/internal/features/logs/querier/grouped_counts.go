@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,8 @@ import (
 const (
 	// maxCountWindows: Volume & noise counts one window per day (31 at most).
 	maxCountWindows = 40
+	// inListMaxValues: longer IN lists are a semi-join (inList).
+	inListMaxValues = 32
 	// maxGroupKeys bounds GroupWindowsRequestDTO.Keys (an IN list).
 	maxGroupKeys  = 5_000
 	maxSelections = 10
@@ -155,8 +158,15 @@ func (q *LogQuerier) windowSources(
 		if i > 0 && !reads {
 			continue
 		}
+		records := source.records
+		if i > 0 && !source.rollup {
+			// A raw edge input opens only the segments its ranges reach: a
+			// window ending at now has a zero-width edge there, which used to
+			// open every segment of the window.
+			records = recordsInRanges(records, ranges)
+		}
 		sources = append(sources, windowSource{
-			stream: source.stream, records: source.records, tail: source.tail, rollup: source.rollup, ranges: ranges,
+			stream: source.stream, records: records, tail: source.tail, rollup: source.rollup, ranges: ranges,
 		})
 	}
 	return sources, nil
@@ -225,7 +235,7 @@ func (q *LogQuerier) windowFragment(
 	}
 	if len(request.Keys) > 0 {
 		keyExpr, keyExprArgs := windowKeyExpression(builder, request.GroupField)
-		where += " AND " + keyExpr + " IN (" + placeholders(len(request.Keys)) + ")"
+		where += " AND " + inList(keyExpr, len(request.Keys))
 		whereArgs = append(append(whereArgs, keyExprArgs...), toAny(request.Keys)...)
 	}
 	sqlText := "SELECT " + strings.Join(selectParts, ", ") + " FROM " + query.SourcePlaceholder +
@@ -472,6 +482,17 @@ func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
 }
 
+// inList is expr IN n values. Past inListMaxValues it is a semi-join on a
+// VALUES list: DuckDB compares an IN list a value at a time unless expr is a
+// bare column, and a week's pattern counts for 1,250 keys, keyed
+// COALESCE(pattern_hash, ”), took 15 s on a querier instead of 0.6 s.
+func inList(expr string, n int) string {
+	if n <= inListMaxValues {
+		return expr + " IN (" + placeholders(n) + ")"
+	}
+	return expr + " IN (SELECT v FROM (VALUES " + strings.TrimSuffix(strings.Repeat("(?), ", n), ", ") + ") AS l(v))"
+}
+
 func toAny(values []string) []any {
 	result := make([]any, len(values))
 	for i, value := range values {
@@ -485,4 +506,22 @@ func ternaryTokens(raw bool, filter *logs_core.QueryNode) []string {
 		return nil
 	}
 	return requiredTokens(filter)
+}
+
+// recordsInRanges is the records with rows that can fall in any of ranges
+// (per window), in order.
+func recordsInRanges(records []*segments.SegmentRecord, ranges [][]timeRange) []*segments.SegmentRecord {
+	var result []*segments.SegmentRecord
+	for _, record := range records {
+		for _, window := range ranges {
+			if slices.ContainsFunc(window, func(r timeRange) bool {
+				return len(overlapping([]*segments.SegmentRecord{record},
+					searchWindow{From: r.start, To: r.end, IncludeTo: r.includeEnd})) > 0
+			}) {
+				result = append(result, record)
+				break
+			}
+		}
+	}
+	return result
 }

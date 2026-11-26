@@ -596,7 +596,10 @@ tackling that — see Phase 6's implementation notes below.
   request to build, since the query language itself already does everything ExecuteAggregation was
   reimplementing for the other two signals. `executeMetricPanelQuery` runs it as a range query over the
   panel's time window (defaulting to the last hour, since — unlike logs/spans' "unbounded" default — a
-  PromQL range query needs concrete bounds to evaluate at all) and normalizes each resulting series into
+  PromQL range query needs concrete bounds to evaluate at all; the automatic step, about 120 points,
+  rounds up to 1s/2s/5s/10s/15s/30s/1m/2m/5m/10m/15m/30m/1h/2h/3h/6h/12h/1d and the window's start and
+  end move to multiples of it, as Grafana does, so steps of 5 m and more read the 5-minute partials
+  below) and normalizes each resulting series into
   the same shared `PanelBucketDTO` shape, with a compact `"key=value, key2=value2"` legend built from
   the series' non-`__name__` labels. `GenerateOverview` gains a discovery pass over
   `ListMetricNames`, generating one time-series panel per metric name present (`rate()` for a counter-
@@ -636,7 +639,10 @@ tackling that — see Phase 6's implementation notes below.
   deferral `dashboards/services/overview.go` had explicitly flagged as future work rather than
   contradicting any prior direction. Clamped to a 24h max lookback and a 50-node ranked cap
   (collapsing the remainder into a synthetic "other" node) — both real safeguards against an
-  unbounded aggregation on every page load, not just documented intentions.
+  unbounded aggregation on every page load, not just documented intentions. Since the span
+  rollups, the span side reads per-minute call edges (`spans_1m_edges`) for compacted segments and
+  joins raw spans only for the rest (see "Span rollups" under Distributed query): the raw join over
+  a day of spans outlasted the 170 s query deadline at 1,000 spans/s.
 - **Correlation engine is dimensional + temporal only, explicitly not semantic/ML-based** — stated
   plainly in the `correlation` package's doc comments and in the Incidents UI itself, to avoid
   implying root-cause-analysis capability that doesn't exist. A leader-locked worker groups
@@ -869,8 +875,8 @@ per project. Built for AWS Cognito first; the mechanism is generic OIDC.
   root admin may create or delete such mappings (same rule as manually promoting an admin). A group-granted
   admin is tagged (`users.sso_admin_connector_id`); a later sync demotes only tagged admins, never the root
   admin, manually promoted admins, or the last remaining admin, and a manual role change clears the tag.
-  Admins must complete TOTP MFA, so the login re-reads the user after the sync and a freshly promoted user
-  gets the MFA-setup challenge instead of a token (IdP-side MFA does not count).
+  Every account must complete TOTP MFA (unless the connector trusts the provider's MFA and this sign-in
+  satisfies it); the login re-reads the user after the sync so the token's role claim is current.
 - **Not covered**: revocation only happens at the user's next sign-in, not immediately (a demoted admin's
   existing session keeps working until then); a new SSO user still needs "allow external registrations" (or
   a prior invite) to get an account at all.
@@ -883,28 +889,41 @@ per project. Built for AWS Cognito first; the mechanism is generic OIDC.
   `_claim_names` handling are implemented from Microsoft's docs and tested against a fake Graph server,
   not yet a real tenant.
 
-## Multi-factor authentication (TOTP, enforced for Admin)
+## Multi-factor authentication (TOTP, required for every account)
 
 Requested as: MFA enforced for Admin-role accounts, optional for Members, with anti-replay
 guaranteed and the bootstrap admin's email configurable via `.env`. Shipped as `internal/features/
 users/mfa` (mirrors the `sso` subpackage's shape: `dto`/`services`/`controllers`) plus a few
 generalizations to existing auth code.
 
-- **Who:** every Admin-role account, always; every account when Settings → Identity & access →
-  **Require MFA for everyone** is on (v0.56.0, `users_settings.is_mfa_required_for_everyone`).
-  `User.IsMFARequired()` reads that setting through a 15 s in-process cache
-  (`users_models.SetMFAForEveryone`), so every replica applies a change within 15 s without a
-  database read per request.
+- **Who:** every account, whatever its role, with no way to turn it off (earlier releases: Admins
+  always, everyone else only with the v0.56.0 "Require MFA for everyone" setting). A user
+  without MFA is sent through `login-setup`/`login-enable` at their next sign-in, in Site and
+  control-plane mode alike. Exceptions are only where a second factor was already verified elsewhere:
+  an SSO connector trusting its provider's MFA when the sign-in satisfies it (`auth_origin`
+  `sso-idp-mfa`), a control-plane session whose assertion says `amr: mfa`, and MCP calls with a token
+  whose creating session passed MFA (`access-token`). API keys never go through this gate.
+  `GET/PUT /users/settings` still report `isMfaRequiredForEveryone: true` (the demo app mocks that
+  shape) and ignore attempts to turn it off. The `users_settings.is_mfa_required_for_everyone`
+  column is no longer read or written but stays: v1.2.x still selects it on rollback, so dropping it
+  is left to a later release. `Disable` (`POST /users/mfa/disable`) is kept for API compatibility and
+  always refused; an admin's **Reset MFA** is the lost-device path.
+- **Step-up codes**: creating or deleting API keys, access tokens and SSO connectors, and changing
+  password or email, ask for a code whenever the account has an authenticator (now every local
+  account). A session that passed MFA through a trusted IdP or a control plane, with no local
+  authenticator, has nothing to verify against and isn't asked; the UI decides the same way from
+  `GET /users/mfa/status`. Access tokens created earlier by a Member without MFA stop working
+  through `/mcp` until that Member sets MFA up (their internal session hits the same gate).
 - **Enforcement is checked twice, not once**: at sign-in (`users_services.completeAuthentication`,
   the single chokepoint `SignIn` and `getOrCreateUserFromOAuth`'s existing-user branches both funnel
   through) and on every subsequent request (`users_middleware.RequireMFAIfEnforced`, added to the
   protected route group *after* MFA's own self-service routes are registered, so only they stay
-  reachable to an Admin who hasn't set MFA up yet). The second check matters because access tokens
-  here are long-lived (10 years) — enforcing only at login would leave an already-signed-in Admin,
-  or one just promoted from Member, unaffected until their next fresh login.
+  reachable to a user who hasn't set MFA up yet). The second check matters because access tokens
+  are long-lived (30 days) — enforcing only at login would leave an already-signed-in user without
+  MFA unaffected until their next fresh login.
 - **Two-step login, not a bolt-on second factor check**: `SignIn`/OAuth no longer always return a
-  real token. If MFA is enabled, they return `{mfaRequired, mfaToken}`; if MFA is required by role
-  but not yet enabled, `{mfaSetupRequired, mfaToken}`. The frontend completes the flow against
+  real token. If MFA is enabled, they return `{mfaRequired, mfaToken}`; if it isn't set up yet,
+  `{mfaSetupRequired, mfaToken}` (new GitHub/Google/SSO accounts included). The frontend completes the flow against
   `mfa_controllers`' public `login-verify` (already enabled) or `login-setup`+`login-enable`
   (forced first-time setup) endpoints, which return the real access token on success.
 - **The `mfaToken` is not a real access token**, even though it's signed with the exact same key
@@ -923,8 +942,9 @@ generalizations to existing auth code.
   connector secrets already used — pulled out of `sso_services` into the shared repository so both
   features (and anything future) use one reviewed implementation instead of a copy each.
 - **Admin can reset another user's MFA** (including another admin's) as the lost-device safety
-  valve — necessary because `Disable` itself refuses to let an Admin remove their own *required*
-  MFA, so without this a lost device would be a permanent lockout for that account.
+  valve — necessary because `Disable` refuses to let anyone remove their own *required* MFA, so
+  without this a lost device would be a permanent lockout for that account. The user sets MFA up
+  again at their next sign-in.
 - **Root admin, generalized past a fixed email**: the bootstrap admin was previously identified
   purely by `Email == "admin"` in several permission checks (only *that* account can activate/
   deactivate/promote other Admins) — fragile, and blocking the requested "admin email configurable
@@ -1290,7 +1310,7 @@ embedded in `api` replicas in HA.
   in-process with no listener (R1) and `api`/`worker` connect via `NATS_URL` (R3); every replica
   creates the ingest streams idempotently — `INGEST_LOGS`/`INGEST_SPANS`/`INGEST_METRICS`, subjects
   `ingest.<signal>.>`, work-queue retention, file storage, `DiscardNew` at
-  `INGEST_STREAM_MAX_BYTES` (10 GiB), 2-minute duplicate window — retrying bounded attempts because a
+  `INGEST_STREAM_MAX_BYTES` (10 GiB), 10-minute duplicate window (2 minutes until 2026-11-25) — retrying bounded attempts because a
   request sent during a leader election can go unanswered. Nothing publishes yet (steps 1b–1e move
   logs, then spans/metrics, then Live Tail, then drop the Valkey queue). Workers export
   `obzly_jetstream_stream_{bytes,max_bytes,messages,replicas_lagging}`; alerts at 80% full and on a
@@ -1303,11 +1323,42 @@ embedded in `api` replicas in HA.
   `ingest.logs.<shard>.<project>` (64 shards, FNV of the project id; JSON arrays of at most 1 MB per
   message, broker `max_payload` 8 MB) and answer only after every message's JetStream ack. A full
   stream answers 429 / `RESOURCE_EXHAUSTED` with RetryInfo, no ack 503 / `UNAVAILABLE`, both with
-  `Retry-After: 5`, and nothing of the batch counts as accepted. `all`/`worker` replicas run
-  `broker.ShardRunner`: each registers in a Valkey sorted set, holds up to ceil(64 / live workers)
-  shard leases (`leaderlock`, renewed every 5 s, 30 s TTL), gives extras back when a worker joins,
-  and runs one durable pull consumer per shard (`logs-shard-NN`, `MaxAckPending` unlimited, AckWait =
-  max-age + 10 min). Each pull aims at 12 MB (`broker.readMaxBytes`): its message count is sized from
+  `Retry-After: 5`, and nothing of the batch counts as accepted. A batch's row ids come from a
+  digest of the request (`ingest.RowIDs`) and each message's `Nats-Msg-Id` from its rows' ids, so a
+  sender resending a batch JetStream stored but never answered (a publish timeout while a broker
+  stalls) is dropped by the duplicate window, even through another client IP, and a later copy by
+  compaction's one row per id; a batch with a line lacking a timestamp gets random ids, since that
+  line is stamped on arrival and the same request sent again is new data. The project's logs per
+  second limit decides per batch (`RateLimiter.TakeBatch`, one Valkey call): past it the whole batch
+  gets 429 / `RESOURCE_EXHAUSTED` with a Retry-After for the shortfall, a batch larger than the
+  burst is admitted when the bucket is full and repaid before the next one, and when Valkey is
+  unreachable (250 ms) the replica's own bucket decides. Until 2026-11-25 it was checked per line,
+  refused lines went back inside a 200 partial success, which OTLP senders drop, and a Valkey error
+  refused every line: in the chaos lab a 5-minute Valkey outage lost 258,000 lines per project and a
+  broker restart 4,000, all of them refused this way. Refusals are counted per project, signal and
+  reason (`ingestion_refusals`, a week) and shown on the Ingestion status card as retried or dropped
+  by the sender. A Valkey outage no longer stalls ingest: request-path cache calls time out after
+  300 ms (was 10 s, several per request) and skip Valkey for 2 s after a call gets no reply
+  (`cache.Breaker`), projects and API keys fall back to a 30 s in-process copy (read only while
+  Valkey is unreachable, so a revoked key can work that long during an outage), and a shard worker
+  keeps the shards it holds while their lease can't be renewed (it dropped them all after one
+  failed renewal); compaction waits for a confirmed lease, since a worker cut off alone may share a
+  shard with its new owner until Valkey answers. New projects start at 5,000 logs/s (1,000 until 2026-11-25): a throttled sender
+  catches up after an outage only at the limit minus its normal traffic. An API key or project lookup that fails on a database error answers 503 and is not
+  cached; only a missing row is 401/404. `all`/`worker` replicas run
+  `broker.ShardRunner`: each registers in a Valkey sorted set, holds shard leases (`leaderlock`,
+  renewed every 5 s, 30 s TTL) placed by a `broker.Balancer` by load across all three signals (or,
+  with `INGEST_SHARD_BALANCE=count`, up to ceil(64 / live workers) and gives extras back when a
+  worker joins; see docs/INGEST_SHARD_BALANCING.md; a project busier than half a worker, or whose
+  shard stays a minute or more behind, gets several lanes, i.e. shards, spread over workers, with
+  `INGEST_LANES=auto`, docs/INGEST_LANES.md; lane counts are kept in Postgres (`ingest_lanes`), so
+  Valkey restarting empty doesn't put a busy project back on one lane; receivers weight a project's
+  lanes by how far behind each shard is, and send none to a lane a minute behind while another
+  keeps up),
+  and runs one durable pull consumer per shard (`logs-shard-NN`, `MaxAckPending` unlimited, AckWait
+  5 min, `ingest.AckWait`; until 2026-11-23 it was max-age + 10 min, so a delivery lost while a
+  broker restarted, which JetStream counts as delivered though the worker never got it, came back
+  only 70 minutes later: the lab saw a minute 10,000 lines short for that long). Each pull aims at 12 MB (`broker.readMaxBytes`): its message count is sized from
   the previous pull's average message, between 1 and 256 (`nextFetchBatch`), and capped by the
   largest message seen lately, assumed at least 256 KB (`fetchBatchCap`), so a shard that switches
   from small batches to 1 MB ones pulls at most 48 MB at once; the embedded server
@@ -1318,9 +1369,19 @@ embedded in `api` replicas in HA.
   after AckWait. The sink (`ingest.Sink`) buffers each project's rows in its own writer (outside the
   30 s force-flush) and writes an L0 segment at `INGEST_L0_TARGET_BYTES` (64 MB) of batches or
   `INGEST_L0_MAX_AGE` (1 h, floor 5 min), then uploads it and only then acks the batches it covers;
-  a failed upload keeps them held (`+WPI`) and retries each tick. Giving a shard away flushes,
-  uploads and acks first. Delivery is at-least-once: a worker lost between upload and ack, or a
-  flush failure, redelivers after AckWait and writes those rows twice. A batch delivered 50 times and
+  a failed upload keeps them held (`+WPI`) and retries each tick. Uploads and acks run in the
+  background, in order per project and at most 8 at once per signal, while the shard keeps fetching;
+  a project with 2 flushes waiting for their upload holds its shard until one is done, and while
+  uploads fail the shard retries them itself as before. In the lab a metrics shard spent a fifth of
+  its time blocked on uploads (4-5 s per 3.6 MB segment). Batches held longer than 2 minutes
+  (a quiet project waiting for max-age) get `+WPI` every 2 minutes, so the short AckWait never
+  redelivers what a live worker holds. A buffer only a project's extra lanes carry is flushed
+  after a minute without batches (its lane was dropped) instead of waiting for max-age. Giving a shard away flushes,
+  waits for its background uploads, and uploads and acks what is left first. Delivery is at-least-once: a worker lost between upload and ack, or a
+  flush failure, redelivers after AckWait and writes those rows twice. Acks wait for JetStream's
+  confirmation (`broker.AckAll`, one inbox for a flush's acks) and unconfirmed ones are retried
+  every tick, up to AckWait: a plain ack is a publish a restarting broker drops, which in the lab
+  wrote a rollout's in-flight batches twice (14,000 duplicate lines in one minute). A batch delivered 50 times and
   published over a day ago is terminated instead, logged and counted in
   `obzly_ingest_terminated_messages_total` (the consumer's own `MaxDeliver` stays unlimited: it counts
   deliveries only, and an outage of a few hours would reach it). The metrics label index is
@@ -1366,13 +1427,31 @@ embedded in `api` replicas in HA.
   shard consumers) and writes them to uncatalogued Parquet files under `LOGS_DATA_DIR/tail`
   (`logs_jetstream.Tail`); every logs query (`LogQuerier.queryFiles`: search, count, aggregations,
   patterns, field discovery, the SQL sandbox) adds them to its segment files - no merge logic.
-  Queries never wait for the broker: they take the files built so far and start a background
-  refresh when they are over 2 s old. A refresh drops delta files whose batches a worker has acked,
-  re-reads one only partly acked, and adds a delta for batches newer than the last one seen, so it
-  decodes only new data; past 8 deltas they merge Parquet-to-Parquet. (The first version rebuilt
-  everything synchronously: ~5 s per rebuild on a busy project, with every Logs page query waiting
-  on it.) A query skips the tail when a segment it planned became readable after the last refresh,
-  so flushed rows are never counted twice; the newest rows then appear on the next refresh. The
+  A query finding its tail over 2 s old (`ingest.TailRefreshAfter`) refreshes it and waits for that,
+  so it sees what was acked up to then; nothing refreshes in the background, so an idle replica
+  spends no CPU on tails. A refresh drops delta files whose batches workers have acked, re-reads
+  those only partly acked, and adds deltas for batches newer than the last one seen, so it decodes
+  only new data; past 8 deltas they merge Parquet-to-Parquet. (The first version rebuilt everything
+  synchronously: ~5 s per rebuild on a busy project, with every Logs page query waiting on it.)
+  Acks are judged per subject, from each lane shard's oldest pending sequence, since a project
+  with ingest lanes ([docs/INGEST_LANES.md](docs/INGEST_LANES.md)) is acked by each lane on its own.
+  A delta is served only if a refresh checked it was still pending after the newest segment the
+  query planned became readable, so flushed rows are never counted twice. On a replica queried
+  often a refresh is a few seconds of ingest (milliseconds); on one nobody queried since the
+  project's last upload it is the whole pending window, at most about `INGEST_L0_TARGET_BYTES`:
+  the new batches are split into up to 4 chunks of at least 4 MB, written by the signal's 4 tail
+  writers at once (a cold 64 MB of logs: ~0.55 s against ~1.1 s with one writer, M5 Pro), and each
+  chunk is served as soon as it is written. A query waits up to 3 s (`ingest.TailWaitForRefresh`),
+  and up to 8 s in all (`TailMaxWaitForRefresh`) once its refresh has read its batches and is still
+  writing them, then takes the chunks written so far. Until 2026-11-26 a query used any tail still
+  usable as it was (refreshing it in the background for the next query), and skipped one older
+  than a segment it planned after 3 s, so the newest rows were often missing on a replica not
+  queried for a while: with a busy project (8,000 lines/s, a segment every ~20 s) and a replica
+  queried every 9 s, 8 of 12 queries missed rows (everything since the previous query, or the
+  whole window), 598,000 in all; now none of 12 misses any, median query 320 ms against 215 ms,
+  worst ~3.4 s both, the same idle CPU. Keeping tails warm in the background instead cost every
+  API replica 1.3-1.9 cores in the homelab (6 replicas each re-decoding every batch), so it is not
+  done. The
   same tail serves spans and metrics (2026-10-01): `ingest.Tail` is signal-agnostic, each signal
   supplies its decode-and-write step (`logs_jetstream`/`spans_jetstream`/`metrics_jetstream.NewTail`),
   and the queriers add it through `segments.AppendTail` (logs `queryFiles`, spans/metrics
@@ -1655,6 +1734,37 @@ the audit columns with their consumers (items 6, 10c).
   service and pattern - `logs_1h_patterns` for whole hours (in histograms only with whole-hour
   buckets), `logs_1m` for the other whole minutes; partial minutes raw. A segment lacking a tier
   falls back to `logs_1m`, then raw, and each segment's time is read from exactly one input.
+- **Span rollups (`spans_1m`, `spans_1h`, `spans_1m_edges`, `spans_1m_traces`).** Built like
+  `logs_1m`, by the same compaction pass and budgets (`spans_compactor.RollupSegments`; existing segments backfill newest
+  first over a few passes): every compacted spans segment gets `spans_1m` - per minute, service,
+  operation, kind, status and root flag, the span count, duration sum, a duration histogram (one row
+  per log-scale bucket, 8 a doubling, so a percentile merged from any rows is within ~4.5%) and the
+  latest k8s namespace/deployment/node with when they were seen -, `spans_1m_edges` - per minute,
+  parent-service -> child-service calls and childless client spans naming an untraced peer (with a
+  histogram), found by a join within the segment (a call straddling two segments is missed; a
+  segment without calls gets a zero row so it isn't rebuilt) - and `spans_1m_traces` - per minute of
+  a root span's start, its duration bucket and whether its trace has an ERROR span, the number of
+  root spans, overall and per service in their trace, joined within the segment by trace id (spans
+  of the trace in another segment are missed, as for edges). The joins run in parts of whole traces
+  (hash of trace id, 2M spans a part), so a cold segment of 20M spans builds within the compactor's
+  memory. `spans_1h` and `spans_1h_traces` are derived from each `spans_1m` and
+  `spans_1m_traces` file, so a 30-day count reads whole hours. Stats queries (`spans_querier/stats.go`) are written once over spans_1m's columns
+  and run per input, as sources of one coordinator query: whole hours from `spans_1h` (when the
+  query's buckets are whole hours), other whole minutes from `spans_1m`, partial minutes, segments
+  without rollups and the tail raw (raw spans projected to the same columns, a row per span); every
+  fragment returns sums and histogram counts, so they merge, and also spread over executors. On
+  stats: the Traces summary tiles and its matching-traces count (root spans; with a service and/or
+  errors filter, from `spans_1m_traces`), dashboard and alert span panels (`ExecuteAggregation`), service
+  errors (up to 31 days, the Overview's 30 plus one; a longer range is clamped and says so), the
+  Service Map's service RED numbers, call edges, peers and k8s placement, and the
+  service and operation lists. Percentiles everywhere come from the histogram (raw spans too, so
+  answers don't depend on what is rolled up); span duration filters apply exactly to raw spans and
+  at bucket resolution to rollup rows. The summary step is whole minutes past a minute and whole
+  hours past half an hour, so a day is 24 hourly points read from `spans_1h`. Left on raw spans:
+  trace search and the matching-traces count with an operation filter (any span with that name),
+  which search newest first in widening windows (10 min, 25 min, 85 min... then the whole range) and
+  stop once they have enough (a trace is taken only if it started 5 min after its window's start,
+  so its spans are all in it); a trace's spans, LLM calls and the correlation span lookups.
 - **Grouped counts in the merge.** An unbucketed top N and the Logs insight tabs (Patterns, Volume &
   noise, Health map, Explain, Anomalies) count per group key in one or more time windows
   (`logs_querier/grouped_counts.go`, `ExecuteGroupWindows`): fragments sum each key per window (count
@@ -1697,7 +1807,10 @@ the audit columns with their consumers (items 6, 10c).
   hold a querier's share of the range people search, with room to spare.
 - **Deadlines.** A fragment has 170 s (`query.fragmentTimeout`, was 120 s), under the control
   plane's 180 s wait for a Site (`siteResponseHeaderTimeout`, was 60 s), so a slow search ends with
-  the Site's 408; load balancers in front of both need an idle timeout of at least 180 s. A page
+  the Site's 408; load balancers in front of both need an idle timeout of at least 180 s. Trace,
+  metric (PromQL, label values) and service-map views answer 408 for a deadline hit here or in a
+  fragment (`query.IsTimeout`; an executor's comes back as text); they answered 400, and PromQL
+  called the query invalid, when the lab's 24 h views ran out of time under a backfill. A page
   search's whole window walk also has 170 s (`searchDeadline`): past it the page comes back with
   the rows found, `partial: true` and `searchedThrough` (how far back it got) - a rare term no
   longer walks a week window by window for many minutes. A streamed search sends a `heartbeat`
@@ -1757,7 +1870,15 @@ catalog time is `last_seen` (so retention drops a series quiet for the retention
 has its own catalog partition. `metric_series_coverage` records each project's first series
 flush: a lookup window starting at or after it reads the series stream (plus the query-time tail's
 samples), an earlier one reads samples as in 5a, since samples ingested before the stream existed
-have no series rows. Label names/values and metric names use it.
+have no series rows. Label names/values and metric names use it. A project with no metrics segment
+older than 10 minutes at that first flush has no such samples, so `since` is that flush's earliest
+sample instead and the row is `backfillable`: a later flush bringing older samples (a backfill)
+moves `since` back to them (`metrics_ingester.recordCoverage`, one upsert per project and process,
+another only when a flush's earliest sample is older than `since`). Before, a backfilled history
+was "not covered" for good and every label lookup and series select over it scanned samples - in
+the lab a 48 h backfill's label values timed out that way. Rows from before carry
+`backfillable` only when no metrics segment of the project starts before `since` (migration
+20261126180000); a project with older segments never moves back, so no label value is lost.
 
 Series select (5b-3) in a covered window runs in two phases: the matchers on the series stream
 (and the tail's samples) give each series' id, name and labels; samples are then read by
@@ -1819,6 +1940,83 @@ window, or two samples of a series in the same millisecond (a series in both the
 segment). `obzly_promql_pushdown_total
 {result=pushed|fallback|unsupported}` counts each. Results equal the engine's to float rounding
 (sums in another order); the parity suite checks every query both ways.
+
+A one-step `sum/count/avg/min_over_time` over a window of at least 12 rollup buckets (the
+Synthetics 7-day uptime) reads rollups for the whole buckets inside its window
+(`querier/pushdown_rollup.go`): the hourly (or 5-minute) rollups' exact count, sum and min of the
+cold segments, as one more partial merged with the time chunks. Samples are read only for the
+partial bucket at the window's start and from the first segment without a rollup on (not cold
+yet, or the tail). Read raw, a week is every sample of every segment in it, which executors with
+cold caches after a deploy took about 30 s to fetch; rolled up it is a few hundred rows per
+series. `max_over_time` (a bucket's max is NaN when any sample is) and `rate`/`increase` (resets
+inside a bucket are lost) stay on samples, as do queries with more than one step.
+
+An instant selector inside one of those aggregations (`sum by (namespace) (pod_cpu_usage{...})`,
+most dashboard panels) is pushed down too, as function `instant`: each series' latest sample in
+(t - 5m, t], the engine's lookback, unless that sample is a stale marker. Stale markers (Prometheus
+remote write sends them; storage keeps the NaN payload, which SQL sees through the
+`obzly_is_stale` UDF registered with the normalization functions) are left out of every range
+function, as the engine leaves them out of range vectors - before, push-down counted them as
+NaN samples. Matchers that match everything (`=~".*"`, what dashboards put for an unset variable)
+are dropped from the SQL instead of running a regex on every row's labels.
+
+5-minute partials (5g): profiled on a Kubernetes-like project (300 pods every 30 s, about 28k
+stored series - most of them the request-duration histogram's buckets, ~83M samples a day), a 24 h
+`histogram_quantile(0.95, sum by (le) (rate(..._bucket[5m])))` read all ~48M bucket samples, copied
+each to every step and ran out of query memory or time (2 min); the rollups can't help - a 5 m
+`rate` window is under 5 rollup buckets and their buckets are closed on the left, so a PromQL window
+(t - range, t] is never a union of them. So every closed hour of a project (10 minutes after its
+end) gets a `metrics_partials_5m` segment (`segments.BuildMetricPartials`,
+`metrics_compactor.BuildPartials` after each compaction pass, 24 hours a project a pass, newest
+first, none started after a minute), folded from every metrics segment overlapping that hour at any
+level - the last 24 h are mostly L0/L1, which the cold-only rollups never cover. One hour from all
+its segments, not one partial file per segment: segments overlap in time (batches arrive out of
+order across flushes; in the lab almost every 5-minute bucket of a backfilled day had one series'
+samples in two segments), and per-segment buckets of interleaved samples can't be merged exactly (a
+counter reset between two segments' samples is invisible). `stats.source` lists the hour's segments;
+when that set changes - a merge, late samples in a new L0 - the pass folds it again and deletes the
+old one, and until then queries read that hour from samples. Partials expire with the raw samples
+and are never aged. The fold runs in chunks of ~2M samples, since one lag window over a whole
+42M-sample segment ran the compactor's 1 GB DuckDB out of memory. Per series and bucket (end - 5m,
+end] they hold exactly the push-down partial: count, first/last sample, the counter resets inside
+the bucket, sum, min, max, a duplicate-millisecond flag and the latest stale marker. When start,
+step (or a single step) and range are multiples of 5 m, every step's window is whole buckets, so
+`EvaluateRangeFunction` (`partialsPlan`) reads the partials of every current hour - folded from
+exactly the segments overlapping it now, with no tail file in it - and samples for the other hours:
+runs of steps whose windows lie in current hours are computed whole from partials (split over the
+executors), the other runs merge partials and samples in the coordinator with the chunk merge (they
+never overlap in time; a drop between buckets counts as a reset). Results are exact, not
+approximate (the parity test removes the folded segments' sample files and compares with the engine
+over every sample: stale markers, resets, one series interleaved across two segments). Cost: about
+as many rows as the 5 m rollup, ~1/10 of the samples at a 30 s scrape interval (lab: 8.3M rows, 128
+MB for the day). Measured on a laptop over that day, rollups hidden as for today's data: the
+Kubernetes dashboard's 24 h panels went from 0.9-2.6 s to 0.04-0.16 s, the 24 h p95 latency panels
+from out of memory after 2-3 minutes to 0.24-0.34 s, and the Prometheus API's 24 h p95 at a 5 m step
+from out of memory to ~1 s.
+
+1-minute partials (5g-2): Grafana's step over 24 h is typically 1 m, which no 5-minute bucket
+aligns with, so `metrics_partials_1m` is folded beside `metrics_partials_5m` from the same segments
+in the same pass: samples fold into 1-minute buckets, those into 5-minute ones (exactly: a drop
+between two 1-minute buckets is a reset unless it crosses into a 5-minute bucket), each chunk of ~2M
+samples on its own; an hour is current only when both tiers are (a missing tier refolds both).
+`partialsPlan` reads the coarsest tier aligned with start, step and range. A window longer than the
+step on the 1-minute tier (`rate(x[5m])` at 1 m) is 5 buckets per step: copying each bucket to its
+steps was 120M rows for the 24 h histogram p95, and DuckDB window frames over its 24M buckets took
+minutes, so up to 8 buckets per window use `pushdownPartialsLagSQL` - one sort per series, each
+bucket reading the ones before it with `lag()`, and a bucket followed by a gap also answering the
+gap's bucket ends whose windows still hold it; longer windows keep copying. The fragments read their
+source twice (buckets, then labels) instead of materializing every row's labels, which alone took
+the lag query from ~4 minutes to ~8 s (raw sample fragments got the same change). Lab, same 24 h at
+a 1 m step: the histogram p95 from out of memory or timed out after 81-118 s to 4.1-5.4 s,
+`sum by (ns) (rate(...[5m]))` from 2.5 s to 0.2 s. Cost: the fold of an hour (3.4M samples) takes
+~3.1 s on one thread instead of ~1.2 s, within the 1 GB compactor budget; the 1-minute tier holds
+about half the samples' rows (1.7M an hour, 416 MB for the day against 566 MB of raw samples).
+Unaligned queries (`rate(x[90s])`, a start off the minute) still read samples. The 1-minute tier
+is kept `METRICS_PARTIALS_1M_DAYS` (default 7; 0 builds none), far less than the 5-minute one: the
+retention pass deletes older hours' 1-minute partials (every project, unlimited retention too), the
+fold builds only the 5-minute tier for them (straight from samples) and counts them current without
+it, and the planner picks only tiers the window's newest hour still has - an older hour at a 1 m step
+is read from samples.
 
 ### Retention and lifecycle
 
@@ -2357,8 +2555,10 @@ for a normal, 1-hour-lived local access token carrying `auth_origin: "control-pl
 - from that point on every Site-side authz/audit/rate-limit path is byte-identical
 to a local login. `RequireMFAIfEnforced` skips its own check for such a session only
 when the assertion's `amr` (copied into the token) contains `mfa` - the user passed MFA
-on the control plane; an `amr=pwd` session is held to the Site's own rule, so a Site
-ADMIN grant doesn't give Site admin without MFA. `SiteTokenService` keys its cache and
+on the control plane; an `amr=pwd` session is held to the Site's own rule (MFA for every
+role), so no grant gives Site access without MFA. A control plane enforces MFA for every
+role too, so its assertions carry `amr: mfa`; an older control plane that still lets Members
+in without MFA gets those Members refused by an upgraded Site until it is upgraded too. `SiteTokenService` keys its cache and
 singleflight by `amr` too.
 
 `SiteTokenService` caches the exchanged token per (user, Site) in Valkey - AES-GCM
@@ -2382,7 +2582,14 @@ row, then (if `CONTROL_PLANE_LINK_BY_EMAIL`, default true) an existing local
 account by email - **never** the local root admin, nor an account with its own sign-in
 (a password, an SSO identity, a GitHub/Google id), mirroring the OAuth flow's refusal to
 auto-link such accounts (a central email is self-service and unverified) - otherwise a
-fresh, password-less `MEMBER` account is JIT-provisioned. One consequence worth stating outright:
+fresh, password-less `MEMBER` account is JIT-provisioned. A linked account still `INVITED`
+(password-less, e.g. first added from a project's Members page) is activated by that first central
+sign-in, as an SSO sign-in activates it; a deactivated (`INACTIVE`) one is refused ("deactivated on
+this site"). On a Site with `CONTROL_PLANE_ISSUER` set, adding an unknown email from a project's
+Members page is refused with a pointer to inviting the person centrally (Users, then Sites → Access):
+a local invite there produced an invite link to the control plane that couldn't be redeemed, and an
+`INVITED` account control-plane admins couldn't remove (the proxy denies `/users/`). People who
+already have an account on the Site are still added there. One consequence worth stating outright:
 a central account must **not** share an email with a Site's root admin - it could neither link
 (root is never linkable) nor be JIT-created (the email is taken). That is why a control plane's
 own bootstrap admin defaults to `superadmin` (`config.EffectiveRootAdminEmail`) while a Site's

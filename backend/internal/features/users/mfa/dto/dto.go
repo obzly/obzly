@@ -15,7 +15,7 @@ type DisableRequestDTO struct {
 	Code string `json:"code" binding:"required,len=6,numeric"`
 }
 
-// StatusResponseDTO reports whether MFA is on and whether the role requires it.
+// StatusResponseDTO reports whether MFA is on; Required is always true (every account needs it).
 type StatusResponseDTO struct {
 	Enabled  bool `json:"enabled"`
 	Required bool `json:"required"`

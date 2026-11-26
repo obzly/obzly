@@ -37,6 +37,8 @@ type stubWriteLimiter struct {
 	calls   int
 }
 
+func init() { access_tokens.SetWriteEnabled(true) }
+
 var writeToolNames = []string{"create_silence", "expire_silence", "create_dashboard", "add_dashboard_panel"}
 
 func Test_WriteTools_AreListedOnlyOnTheWriteServer_WithWriteAnnotations(t *testing.T) {

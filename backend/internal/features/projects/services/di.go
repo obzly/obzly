@@ -27,6 +27,7 @@ var projectService = &ProjectService{
 	[]projects_interfaces.ProjectDeletionListener{},
 	cache_utils.NewCacheUtil[projects_models.Project](cache.GetCache(), "lb_project:"),
 	singleflight.Group{},
+	cache_utils.NewLocalCache[projects_models.Project](localProjectTTL, localProjectMaxEntries),
 }
 
 var retentionPolicyService = &RetentionPolicyService{
@@ -34,6 +35,7 @@ var retentionPolicyService = &RetentionPolicyService{
 	&projects_repositories.RetentionPolicyRepository{},
 	audit_logs.GetAuditLogService(),
 	sync.Map{},
+	singleflight.Group{},
 }
 
 var promotedFieldService = &PromotedFieldService{

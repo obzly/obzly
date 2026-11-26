@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"obzly/internal/storage/segments"
@@ -64,6 +65,42 @@ func Test_TokenBloom_BuildAndSkip(t *testing.T) {
 	built, err = segments.BuildTokenBloom(context.Background(), db, "spans", path)
 	require.NoError(t, err)
 	require.False(t, built, "spans keep no token filters")
+}
+
+// A cold segment holds tens of millions of IDs: listing them DISTINCT ran
+// out of the builder's memory on a 1 GB file.
+func Test_TokenBloom_FileWithMoreIDsThanMemory_BuildsAFilterMissingNone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cold.parquet")
+	gen, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	_, err = gen.Exec(
+		fmt.Sprintf(`COPY (SELECT 'request ' || md5(i::VARCHAR) || ' order ord' || (i * 7919)::VARCHAR || 'x'
+		AS message FROM range(3000000) t(i)) TO '%s' (FORMAT PARQUET)`, path),
+	)
+	require.NoError(t, err)
+	var joined string
+	require.NoError(t, gen.QueryRow(`SELECT string_agg(md5(i::VARCHAR), ',') FROM range(0, 3000000, 300000) t(i)`).
+		Scan(&joined))
+	sample := strings.Split(joined, ",")
+	_ = gen.Close()
+	db, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	_, err = segments.ConfigureMemory(db, "96MB", dir)
+	require.NoError(t, err)
+	require.NoError(t, segments.SetHandleLimits(db, "", 2))
+
+	built, err := segments.BuildTokenBloom(context.Background(), db, "logs", path)
+
+	require.NoError(t, err)
+	require.True(t, built)
+	record := &segments.SegmentRecord{ID: uuid.New(), ProjectID: uuid.New(), Stream: "logs", Path: path,
+		Stats: &segments.SegmentStats{TokenBloom: true}}
+	for _, token := range sample {
+		require.Len(t, segments.SkipByTokens(context.Background(), nil, dir,
+			[]*segments.SegmentRecord{record}, []string{token}), 1, token)
+	}
 }
 
 func writeMessages(t *testing.T, dir, name string, messages ...string) string {

@@ -1,72 +1,42 @@
 package spans_querier
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	spans_core "obzly/internal/features/spans/core"
 	"obzly/internal/query"
-	"obzly/internal/storage/segments"
 
 	"github.com/google/uuid"
 )
 
-// k8sNamespacePath/k8sDeploymentPath/k8sNodePath address the resource
-// attributes the k8sattributes Collector processor sets (k8s.namespace.name,
-// k8s.deployment.name, k8s.node.name), as normalized at ingest.
-const (
-	k8sNamespacePath  = `$.k8s_namespace_name`
-	k8sDeploymentPath = `$.k8s_deployment_name`
-	k8sNodePath       = `$.k8s_node_name`
-)
-
 // ServiceK8sMetadata resolves each service's k8s namespace, deployment and
 // node from its most recent span in the window (arg_max, not any_value: a
-// service can move across a deploy). A service without a row is
-// network-only or not k8sattributes-enriched, not an error.
+// service can move across a deploy), from span stats: each rollup row keeps
+// its spans' latest values and when they were seen. A service without a row
+// is network-only or not k8sattributes-enriched, not an error.
 func (q *SpanQuerier) ServiceK8sMetadata(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (map[string]spans_core.K8sResourceInfo, error) {
 	from, to := resolveTimeRange(timeRange)
-	tail, records, err := q.inputs(projectID, from, to, segments.PruningHints{})
-	if err != nil {
-		return nil, err
-	}
 	result := make(map[string]spans_core.K8sResourceInfo)
 
-	// Each fragment returns its latest non-null value of each attribute and
-	// when it was seen; the merge keeps the latest of those.
-	paths := []any{k8sNamespacePath, k8sDeploymentPath, k8sNodePath}
-	var partialColumns []string
-	var partialValues []any
-	for i, name := range []string{"namespace", "deployment", "node"} {
-		extract := "json_extract_string(resource_attributes, ?)"
-		partialColumns = append(partialColumns,
-			"arg_max("+extract+", start_time) AS "+name,
-			"max(start_time) FILTER (WHERE "+extract+" IS NOT NULL) AS "+name+"_at")
-		partialValues = append(partialValues, paths[i], paths[i])
-	}
-	where := " WHERE project_id = ? AND start_time >= ? AND start_time <= ? GROUP BY service_name"
-	whereArgs := []any{projectID.String(), from, to}
-	single := "SELECT service_name, " +
-		"arg_max(json_extract_string(resource_attributes, ?), start_time) AS namespace, " +
-		"arg_max(json_extract_string(resource_attributes, ?), start_time) AS deployment, " +
-		"arg_max(json_extract_string(resource_attributes, ?), start_time) AS node " +
-		"FROM " + query.SourcePlaceholder + where
-	_, err = q.run(query.Request{
-		Segments:   records,
-		LocalFiles: tail,
-		FragmentSQL: "SELECT service_name, " + strings.Join(
-			partialColumns,
-			", ",
-		) + " FROM " + query.SourcePlaceholder + where,
-		FragmentArgs: append(partialValues, whereArgs...),
-		FinalSQL: "SELECT service_name, arg_max(namespace, namespace_at), arg_max(deployment, deployment_at), " +
+	_, err := q.runStats(ctx, projectID, statsQuery{
+		scanBudget: scanBudget,
+		schema:     spanStats,
+		ranges:     []interval{{start: from, end: to, includeEnd: true}},
+		k8s:        true,
+		selectSQL: "service_name, " +
+			"arg_max(k8s_namespace, k8s_namespace_at) AS namespace, max(k8s_namespace_at) AS namespace_at, " +
+			"arg_max(k8s_deployment, k8s_deployment_at) AS deployment, max(k8s_deployment_at) AS deployment_at, " +
+			"arg_max(k8s_node, k8s_node_at) AS node, max(k8s_node_at) AS node_at",
+		groupSQL: " GROUP BY service_name",
+		finalSQL: "SELECT service_name, arg_max(namespace, namespace_at), arg_max(deployment, deployment_at), " +
 			"arg_max(node, node_at) FROM " + query.ResultsPlaceholder + " GROUP BY service_name",
-		SingleSQL:  single,
-		SingleArgs: append(append([]any{}, paths...), whereArgs...),
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var serviceName string

@@ -167,6 +167,7 @@ func New(dataDir string, opts ...Option) (*LogParquetStore, error) {
 			}
 			uploader.SetTokenBlooms(blooms)
 		}
+		compactor.SetPublisher(uploader)
 	}
 
 	return &LogParquetStore{
@@ -361,18 +362,10 @@ func (s *LogParquetStore) DeleteOldLogs(projectID uuid.UUID, olderThan time.Time
 	return nil
 }
 
-// CompactSmallSegments merges, uploads the merges at once, then builds
-// per-minute counts. A merge lives only on this worker's disk and is invisible
-// to queries until uploaded, so no slow step (rollup backfill downloads) may
-// come between.
+// CompactSmallSegments merges (each merge is uploaded before it replaces its
+// sources), then builds per-minute counts.
 func (s *LogParquetStore) CompactSmallSegments(projectID uuid.UUID) error {
-	result, err := s.compactor.CompactSmallSegments(projectID)
-	if result != nil && result.SegmentsCreated > 0 {
-		if uploadErr := s.UploadPendingSegments(); uploadErr != nil {
-			logger.GetLogger().Warn("Failed to upload merged segments; the pass's upload retries them",
-				"projectId", projectID, "error", uploadErr)
-		}
-	}
+	_, err := s.compactor.CompactSmallSegments(projectID)
 	if err != nil {
 		err = fmt.Errorf("failed to compact segments: %w", err)
 	}
@@ -393,16 +386,19 @@ func (s *LogParquetStore) UploadPendingSegments() error {
 	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
 	defer cancel()
 
+	// Rollups upload even when a segment fails: returning first left them on
+	// this worker's disk behind a segment that kept timing out, and a
+	// restart lost them.
+	var uploadErr error
 	if _, err := s.uploader.UploadPending(ctx, uploadBatchLimit); err != nil {
-		return fmt.Errorf("failed to upload pending segments: %w", err)
+		uploadErr = fmt.Errorf("failed to upload pending segments: %w", err)
 	}
-	var rollupErr error
 	for _, rollupUploader := range s.rollupUploaders {
 		if _, err := rollupUploader.UploadPending(ctx, uploadBatchLimit); err != nil {
-			rollupErr = errors.Join(rollupErr, fmt.Errorf("failed to upload pending log rollups: %w", err))
+			uploadErr = errors.Join(uploadErr, fmt.Errorf("failed to upload pending log rollups: %w", err))
 		}
 	}
-	return rollupErr
+	return uploadErr
 }
 
 // ReconcileSegments retires orphaned catalog rows, checks uploaded segments
@@ -415,8 +411,16 @@ func (s *LogParquetStore) ReconcileSegments() error {
 
 	// Only with object storage (s.uploader): without it nothing is ever
 	// uploaded, so every row would look orphaned.
-	if _, err := (&segments.SegmentRepository{}).MarkOrphansLost(s.stream, time.Now().UTC()); err != nil {
-		return fmt.Errorf("failed to retire orphaned segments: %w", err)
+	streams := []string{s.stream}
+	if s.stream == logs_core.StreamLogs {
+		// A lost rollup's row marks its source rolled up, so it is never
+		// rebuilt and queries undercount; retired, the next pass rebuilds it.
+		streams = append(streams, logs_core.LogRollupStreams...)
+	}
+	for _, stream := range streams {
+		if _, err := (&segments.SegmentRepository{}).MarkOrphansLost(stream, time.Now().UTC()); err != nil {
+			return fmt.Errorf("failed to retire orphaned %s segments: %w", stream, err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)

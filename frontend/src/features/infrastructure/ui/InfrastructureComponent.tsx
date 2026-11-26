@@ -47,6 +47,9 @@ export const InfrastructureComponent = ({
   const openAsset = (asset: AssetTarget) =>
     setOpen({ siteId: asset.siteId, siteName: asset.siteName, id: asset.id });
   const failed = data.sites.filter((site) => site.error);
+  const terminated = summary.terminated;
+  // The Assets tab lists live assets unless asked for terminated ones; its count does too.
+  const live = summary.total - terminated;
 
   return (
     <div
@@ -101,9 +104,9 @@ export const InfrastructureComponent = ({
             label: (
               <span className="inline-flex items-center gap-1.5">
                 Assets
-                {summary.total > 0 && (
+                {live > 0 && (
                   <span className="rounded-full bg-gray-100 px-2 py-px text-xs text-gray-500 tabular-nums dark:bg-gray-700 dark:text-gray-300">
-                    {summary.total.toLocaleString()}
+                    {live.toLocaleString()}
                   </span>
                 )}
               </span>
@@ -142,6 +145,7 @@ export const InfrastructureComponent = ({
               sites={data.sites}
               clusters={summary.clusters}
               inventoryTotal={summary.total}
+              terminatedTotal={terminated}
               multiSite={multiSite}
               refresh={refresh}
               kinds={kinds}

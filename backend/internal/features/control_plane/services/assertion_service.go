@@ -84,6 +84,8 @@ func (s *AssertionService) Mint(
 		"site_role": siteRole,
 		"amr":       amr,
 		"projects":  projects,
+		// A Site matches a local account by email only when this is true.
+		"email_verified": user.EmailVerified,
 	}
 	if allProjectsRole != "" {
 		claims["all_projects_role"] = allProjectsRole

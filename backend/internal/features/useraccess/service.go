@@ -45,7 +45,7 @@ func (s *Service) GetUserDetail(userID uuid.UUID, requester *users_models.User) 
 		LastLoginAt:         user.LastLoginAt,
 		LastActiveAt:        user.LastActiveAt,
 		MFAEnabled:          user.MFAEnabled,
-		MFARequired:         user.IsMFARequired(),
+		MFARequired:         true,
 		SignInMethods:       []SignInMethod{},
 		Organizations:       []OrgMembership{},
 		SiteAccess:          []SiteAccess{},

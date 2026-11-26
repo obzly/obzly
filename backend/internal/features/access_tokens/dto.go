@@ -32,6 +32,8 @@ type CreateAccessTokenResponseDTO struct {
 
 type ListAccessTokensResponseDTO struct {
 	AccessTokens []AccessTokenDTO `json:"accessTokens"`
+	// WriteAvailable: new tokens can ask for write access (MCP_WRITE_ENABLED).
+	WriteAvailable bool `json:"writeAvailable"`
 }
 
 func toDTO(t *AccessToken) AccessTokenDTO {

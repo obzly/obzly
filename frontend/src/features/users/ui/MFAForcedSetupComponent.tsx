@@ -11,7 +11,7 @@ interface Props {
 }
 
 /**
- * Gate for a signed-in Admin whose MFA became required: other routes refuse
+ * Gate for a signed-in user without MFA (an older session or token): other routes refuse
  * their token, so this uses the authenticated setup endpoints, not the login ones.
  */
 export function MFAForcedSetupComponent({ onEnabled }: Props): JSX.Element {
@@ -53,7 +53,7 @@ export function MFAForcedSetupComponent({ onEnabled }: Props): JSX.Element {
         <div className="mb-5 text-center text-2xl font-bold">Set up two-factor authentication</div>
 
         <div className="mb-4 text-center text-sm text-gray-600 dark:text-gray-300">
-          Admin accounts require two-factor authentication. Scan this QR code with an authenticator
+          Every account requires two-factor authentication. Scan this QR code with an authenticator
           app (Google Authenticator, Authy, 1Password, etc.), then enter the code it shows to
           continue.
         </div>

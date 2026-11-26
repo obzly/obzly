@@ -19,19 +19,32 @@ type SpanRepository interface {
 	GetTraces(
 		ctx context.Context, projectID uuid.UUID, traceIDs []string, timeRange *TimeRangeDTO, scanBudget int64,
 	) (map[string][]SpanDTO, error)
-	ListServices(projectID uuid.UUID, timeRange *TimeRangeDTO) (*ListServicesResponseDTO, error)
-	ListOperations(projectID uuid.UUID, serviceName string, timeRange *TimeRangeDTO) (*ListOperationsResponseDTO, error)
+	// ListServices, ListOperations and the Service* stats below take the
+	// caller's context (a request gone away stops them) and a scan budget
+	// in bytes (0: none), as the trace searches do.
+	ListServices(
+		ctx context.Context, projectID uuid.UUID, timeRange *TimeRangeDTO, scanBudget int64,
+	) (*ListServicesResponseDTO, error)
+	ListOperations(
+		ctx context.Context, projectID uuid.UUID, serviceName string, timeRange *TimeRangeDTO, scanBudget int64,
+	) (*ListOperationsResponseDTO, error)
 	ExecuteAggregation(projectID uuid.UUID, request *AggregationRequestDTO) (*AggregationResponseDTO, error)
 	// ServiceCallEdges aggregates spans into parent-service -> child-service
 	// call pairs for the Service Map.
-	ServiceCallEdges(projectID uuid.UUID, timeRange *TimeRangeDTO) ([]ServiceCallEdge, error)
+	ServiceCallEdges(
+		ctx context.Context, projectID uuid.UUID, timeRange *TimeRangeDTO, scanBudget int64,
+	) ([]ServiceCallEdge, error)
 	// ServiceK8sMetadata resolves each service's k8s namespace, deployment
 	// and node from span resource attributes.
-	ServiceK8sMetadata(projectID uuid.UUID, timeRange *TimeRangeDTO) (map[string]K8sResourceInfo, error)
+	ServiceK8sMetadata(
+		ctx context.Context, projectID uuid.UUID, timeRange *TimeRangeDTO, scanBudget int64,
+	) (map[string]K8sResourceInfo, error)
 	// ServiceNodeStats is the Service Map's per-node RED numbers and the
 	// untraced peers (databases, caches, brokers, external APIs) seen from
 	// client spans.
-	ServiceNodeStats(projectID uuid.UUID, timeRange *TimeRangeDTO) (*ServiceNodeStats, error)
+	ServiceNodeStats(
+		ctx context.Context, projectID uuid.UUID, timeRange *TimeRangeDTO, scanBudget int64,
+	) (*ServiceNodeStats, error)
 	// TraceSummary is the Traces page's summary tiles (current and previous
 	// period, bucketed) and its capped count of matching traces.
 	TraceSummary(ctx context.Context, projectID uuid.UUID, request *TraceSummaryQuery) (*TraceSummaryResult, error)

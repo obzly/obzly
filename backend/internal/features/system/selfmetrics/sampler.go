@@ -24,7 +24,17 @@ const jetStreamSampleTimeout = 5 * time.Second
 // smallSegmentThresholdBytes matches the compactors' own threshold.
 const smallSegmentThresholdBytes = segments.DefaultMaxBytes / 4
 
-var catalogStreams = []string{"logs", "ai_logs", "spans", "metrics", "metrics_series", "metrics_5m", "metrics_1h"}
+var catalogStreams = []string{
+	"logs",
+	"ai_logs",
+	"spans",
+	"metrics",
+	"metrics_series",
+	"metrics_5m",
+	"metrics_1h",
+	segments.MetricPartialsStream,
+	segments.MetricPartials1mStream,
+}
 
 // Options selects what this replica samples.
 type Options struct {

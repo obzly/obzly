@@ -70,7 +70,8 @@ var rateLimiter rateChecker = rate_limit.NewRateLimiter()
 // tokens. engine is this server's own router; tools call its REST API.
 func NewHandler(engine http.Handler, controlPlane bool, version string) http.Handler {
 	server := newServer(engine, controlPlane, version)
-	// Only a token with mcp:write gets (and can even list) the write tools.
+	// Only a token with mcp:write gets (and can even list) the write tools,
+	// and none does while MCP_WRITE_ENABLED is off.
 	writeServer := newWriteServer(engine, controlPlane, version)
 
 	streamable := mcp.NewStreamableHTTPHandler(

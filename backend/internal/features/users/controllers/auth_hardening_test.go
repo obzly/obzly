@@ -165,9 +165,12 @@ func Test_SSOCallback_DeactivatedUser_GetsNoTokenAndNoSignInAudit(t *testing.T) 
 	subject := "deactivated-" + uuid.NewString()[:8]
 
 	first := ssoSignIn(t, router, fake, connector.ID, subject, email, nil)
-	require.NotEmpty(t, first.Token)
+	require.True(t, first.MFASetupRequired, "the first sign-in creates the account and asks for MFA setup")
+	created, err := (&users_repositories.UserRepository{}).GetUserByEmail(email)
+	require.NoError(t, err)
+	require.NotNil(t, created)
 	require.NoError(t, (&users_repositories.UserRepository{}).
-		UpdateUserStatus(first.UserID, users_enums.UserStatusInactive))
+		UpdateUserStatus(created.ID, users_enums.UserStatusInactive))
 
 	audit := &recordingAuditWriter{}
 	users_services.GetUserService().SetAuditLogWriter(audit)

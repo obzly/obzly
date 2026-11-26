@@ -122,6 +122,12 @@ func (s *OAuthService) ValidateAuthorize(
 		}
 	}
 
+	// Write turned off (MCP_WRITE_ENABLED): a client asking for it gets a
+	// read-only grant and the consent page offers no write toggle.
+	if !access_tokens.WriteEnabled() {
+		scope = readScope
+	}
+
 	redirect, _ := url.Parse(request.RedirectURI)
 	return &ConsentInfo{
 		ClientID: c.ID, ClientName: c.Name, ClientURI: c.URI, RedirectHost: redirect.Host,

@@ -64,11 +64,16 @@ func (f *fakeControlPlane) Env(siteID string) config.EnvVariables {
 // centralAssertionOptions overrides Mint's default: a valid 60-second assertion
 // for a MEMBER of one project. Zero values keep the default.
 type centralAssertionOptions struct {
-	Subject  string
-	Email    string
-	Name     string
-	SiteRole string
-	Projects []centralAssertionProject
+	Subject string
+	Email   string
+	// EmailUnverified mints email_verified=false (a self-typed central email);
+	// OmitEmailVerified leaves the claim out, as a control plane older than
+	// the claim does. The default is a vouched-for email.
+	EmailUnverified   bool
+	OmitEmailVerified bool
+	Name              string
+	SiteRole          string
+	Projects          []centralAssertionProject
 	// AllProjectsRole sets the all_projects_role claim (a Site-wide
 	// MEMBER/VIEWER grant) - omitted when empty, like the real minter.
 	AllProjectsRole string
@@ -143,6 +148,9 @@ func (f *fakeControlPlane) Mint(t *testing.T, siteID string, opts centralAsserti
 		"site_role": siteRole,
 		"amr":       opts.AMR,
 		"projects":  opts.Projects,
+	}
+	if !opts.OmitEmailVerified {
+		claims["email_verified"] = !opts.EmailUnverified
 	}
 	if opts.AllProjectsRole != "" {
 		claims["all_projects_role"] = opts.AllProjectsRole

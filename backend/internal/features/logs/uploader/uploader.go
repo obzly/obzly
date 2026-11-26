@@ -16,8 +16,9 @@ import (
 	"obzly/internal/util/logger"
 )
 
-// perSegmentTimeout bounds each Upload/Exists/Download within the batch
-// context, so one hung connection can't eat the whole batch's time.
+// perSegmentTimeout bounds each existence check and filter upload within
+// the batch context, so one hung connection can't eat the whole batch's time;
+// segments themselves get segments.TransferTimeout.
 const perSegmentTimeout = 30 * time.Second
 
 type LogUploader struct {
@@ -84,27 +85,8 @@ func (u *LogUploader) uploadOne(ctx context.Context, record *segments.SegmentRec
 	// The filter goes up first, so a segment marked uploaded with one never
 	// lacks it. A failed filter only means searches scan the segment.
 	withBloom := u.uploadTokenBloom(ctx, record, key)
-
-	uploadCtx, cancel := context.WithTimeout(ctx, perSegmentTimeout)
-	defer cancel()
-	if err := u.store.Upload(uploadCtx, key, record.Path); err != nil {
+	if err := segments.UploadVerified(ctx, u.store, key, record, perSegmentTimeout); err != nil {
 		return err
-	}
-
-	// Verify the object exists before MarkUploaded: a nil Upload doesn't prove it
-	// is retrievable (silent provider failures, eventual consistency), and
-	// reconciliation only checks segments whose local copy is gone.
-	existsCtx, cancel := context.WithTimeout(ctx, perSegmentTimeout)
-	defer cancel()
-	exists, err := u.store.Exists(existsCtx, key)
-	if err != nil {
-		return fmt.Errorf("uploaded but failed to verify it landed: %w", err)
-	}
-	if !exists {
-		return fmt.Errorf(
-			"uploaded %q but a follow-up existence check found nothing there - not marking durable, will retry next pass",
-			key,
-		)
 	}
 
 	if err := u.segmentRepo.MarkUploaded(record.ID, key); err != nil {
@@ -112,26 +94,39 @@ func (u *LogUploader) uploadOne(ctx context.Context, record *segments.SegmentRec
 	}
 	uploaded := *record
 	uploaded.ObjectKey = key
-	if withBloom {
-		if err := u.segmentRepo.MarkTokenBloom(record.ID); err == nil {
-			stats := segments.SegmentStats{}
-			if record.Stats != nil {
-				stats = *record.Stats
-			}
-			stats.TokenBloom = true
-			uploaded.Stats = &stats
-		}
+	if withBloom && u.segmentRepo.MarkTokenBloom(record.ID) == nil {
+		markTokenBloom(&uploaded)
 	}
-	segments.NotifyUploaded(&uploaded)
+	return u.Published(&uploaded)
+}
 
+// Publish uploads a segment before its catalog row exists (a merge, before
+// it replaces its sources).
+func (u *LogUploader) Publish(ctx context.Context, record *segments.SegmentRecord) error {
+	record.ObjectKey = segments.ObjectKeyFor(record)
+	withBloom := u.uploadTokenBloom(ctx, record, record.ObjectKey)
+	if withBloom {
+		// Set before the upload, so discarding a failed one deletes the filter too.
+		markTokenBloom(record)
+	}
+	if err := segments.UploadVerified(ctx, u.store, record.ObjectKey, record, perSegmentTimeout); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	record.UploadedAt = &now
+	return nil
+}
+
+// Published tells queriers about an uploaded, recorded segment and frees its
+// local disk if configured.
+func (u *LogUploader) Published(record *segments.SegmentRecord) error {
+	segments.NotifyUploaded(record)
 	if !u.DeleteLocalAfterUpload {
 		return nil
 	}
-
 	if err := os.Remove(record.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("uploaded and recorded, but failed to reclaim local disk space: %w", err)
 	}
-
 	return nil
 }
 
@@ -193,7 +188,7 @@ func (u *LogUploader) backfillOne(ctx context.Context, record *segments.SegmentR
 	if _, err := os.Stat(path); err != nil {
 		path = filepath.Join(workDir, record.ID.String()+".parquet")
 		defer func() { _ = os.Remove(path) }()
-		downloadCtx, cancel := context.WithTimeout(ctx, perSegmentTimeout*4)
+		downloadCtx, cancel := context.WithTimeout(ctx, segments.TransferTimeout(record.SizeBytes))
 		defer cancel()
 		if err := u.store.Download(downloadCtx, record.ObjectKey, path); err != nil {
 			return err
@@ -225,64 +220,25 @@ func (u *LogUploader) PendingCount(limit int) (int, error) {
 	return len(pending), nil
 }
 
-// ReconcileResult breaks down ReconcileSegments, so callers can report an
-// unrecoverable loss loudly.
-type ReconcileResult struct {
-	Verified      int // local copy gone, remote copy present - nothing to do
-	Failures      int // transient (network, etc.) - worth retrying next pass
-	Unrecoverable int // both local and remote copies gone - nothing to restore from
-}
+type ReconcileResult = segments.UploadedCheck
 
 // ReconcileSegments checks up to limit uploaded segments (newest upload
 // first) whose local copy is gone, for the loss nothing else catches: the
 // remote copy gone too (Unrecoverable). It doesn't restore local copies:
 // queries read through the cache and compaction downloads what it merges.
 func (u *LogUploader) ReconcileSegments(ctx context.Context, limit int) (ReconcileResult, error) {
-	var result ReconcileResult
-
 	uploaded, err := u.segmentRepo.ListUploaded(u.stream, limit)
 	if err != nil {
-		return result, fmt.Errorf("failed to list uploaded segments: %w", err)
+		return ReconcileResult{}, fmt.Errorf("failed to list uploaded segments: %w", err)
 	}
+	return segments.VerifyUploaded(ctx, u.store, u.segmentRepo, uploaded, perSegmentTimeout)
+}
 
-	var failureErrs []error
-	var unrecoverableIDs []string
-
-	for _, record := range uploaded {
-		if _, err := os.Stat(record.Path); err == nil {
-			continue // local copy present, nothing to reconcile
-		}
-
-		existsCtx, cancel := context.WithTimeout(ctx, perSegmentTimeout)
-		exists, err := u.store.Exists(existsCtx, record.ObjectKey)
-		cancel()
-		if err != nil {
-			result.Failures++
-			failureErrs = append(failureErrs, fmt.Errorf("segment %s: checking existence: %w", record.ID, err))
-			continue
-		}
-		if !exists {
-			result.Unrecoverable++
-			unrecoverableIDs = append(unrecoverableIDs, record.ID.String())
-			continue
-		}
-
-		result.Verified++
+func markTokenBloom(record *segments.SegmentRecord) {
+	stats := segments.SegmentStats{}
+	if record.Stats != nil {
+		stats = *record.Stats
 	}
-
-	if result.Unrecoverable > 0 {
-		return result, fmt.Errorf(
-			"%d segment(s) missing from BOTH local disk and object storage - unrecoverable data loss, ids: %v",
-			result.Unrecoverable, unrecoverableIDs,
-		)
-	}
-	if result.Failures > 0 {
-		return result, fmt.Errorf(
-			"failed to reconcile %d of %d segments: %w",
-			result.Failures,
-			len(uploaded),
-			errors.Join(failureErrs...),
-		)
-	}
-	return result, nil
+	stats.TokenBloom = true
+	record.Stats = &stats
 }

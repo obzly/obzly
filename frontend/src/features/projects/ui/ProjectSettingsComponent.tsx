@@ -862,7 +862,7 @@ export function ProjectSettingsComponent({
                   {renderQuotaField(
                     'logsPerSecondLimit',
                     'Logs per second limit',
-                    'Maximum logs that can be ingested per second',
+                    'Bursts up to 5x; senders past it are told to retry (HTTP 429)',
                     1,
                     100000,
                     1000,

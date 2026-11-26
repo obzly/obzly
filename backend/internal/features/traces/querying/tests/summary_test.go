@@ -37,7 +37,8 @@ func Test_GetTraceSummary_RootSpans_ReturnsCurrentPreviousTrendsAndCount(t *test
 	assert.Equal(t, int64(2), *response.Previous.Count)
 	assert.Equal(t, int64(0), *response.Previous.Errors)
 	require.NotNil(t, response.Previous.P95Ms)
-	assert.InDelta(t, 50, *response.Previous.P95Ms, 1)
+	// Percentiles come from the duration histogram: within ~4.5%.
+	assert.InEpsilon(t, 50, *response.Previous.P95Ms, 0.05)
 
 	// 10 minutes in 20 s steps: 30 steps, 31 slots over the aligned range.
 	assert.Equal(t, int64(20_000), response.StepMs)
@@ -124,6 +125,23 @@ func Test_GetTraceSummary_MoreMatchesThanCap_ReturnsCappedCount(t *testing.T) {
 	assert.Equal(t, int64(10_000), response.MatchingTraces)
 	assert.Equal(t, int64(10_000), response.MatchingTracesCap)
 	assert.Equal(t, int64(10_005), *response.Current.Count, "the tiles count every span")
+}
+
+// A day's trend is 24 hourly points: whole hours are what span rollups
+// (spans_1h) answer.
+func Test_GetTraceSummary_DayWindow_StepsInWholeHours(t *testing.T) {
+	router := CreateTraceQueryTestRouter()
+	now := time.Now().UTC().Truncate(time.Second)
+	owner, project := SetUpProjectWithSummarySpans(t, router, "Traces Summary Day", now)
+
+	request := summaryRequest(now)
+	from := now.Add(-24 * time.Hour)
+	request.TimeRange.From = &from
+	response := postSummary(t, router, owner.Token, project.ID.String(), request, http.StatusOK)
+
+	assert.Equal(t, int64(3_600_000), response.StepMs)
+	assert.Len(t, response.CountTrend, 25)
+	assert.Equal(t, 7.0, sum(response.CountTrend), "every root span of the day")
 }
 
 func Test_GetTraceSummary_MissingRange_ReturnsBadRequest(t *testing.T) {

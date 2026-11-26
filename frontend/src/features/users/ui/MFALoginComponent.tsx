@@ -83,7 +83,7 @@ export function MFALoginComponent({
 
       {isSetup && (
         <div className="mb-4 text-center text-sm text-gray-600 dark:text-gray-300">
-          Admin accounts require two-factor authentication. Scan this QR code with an authenticator
+          Every account requires two-factor authentication. Scan this QR code with an authenticator
           app (Google Authenticator, Authy, 1Password, etc.) to continue.
         </div>
       )}

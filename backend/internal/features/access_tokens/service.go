@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"obzly/internal/config"
 	audit_logs "obzly/internal/features/audit_logs"
 	users_enums "obzly/internal/features/users/enums"
 	mfa_services "obzly/internal/features/users/mfa/services"
@@ -41,6 +43,8 @@ const (
 	tokenRandomBytes = 32
 )
 
+var writeEnabledOverride atomic.Pointer[bool]
+
 var (
 	ErrInvalidToken    = errors.New("invalid or expired access token")
 	ErrMFACodeRequired = errors.New("MFA code required to create an access token")
@@ -48,6 +52,7 @@ var (
 	ErrTooManyTokens   = fmt.Errorf("at most %d active access tokens per user - revoke one first", maxActivePerUser)
 	ErrTokenNotFound   = errors.New("access token not found")
 	// ErrWriteRequiresMFA: write access needs a creating session that passed MFA.
+	ErrWriteDisabled    = errors.New("write access for MCP is turned off on this server")
 	ErrWriteRequiresMFA = errors.New(
 		"write access needs two-factor authentication: turn it on in your profile (or sign in through a " +
 			"provider that enforces it), then create the token again")
@@ -60,6 +65,9 @@ func (s *AccessTokenService) Create(
 	request *CreateAccessTokenRequestDTO,
 	sessionSatisfiesMFA bool,
 ) (*CreateAccessTokenResponseDTO, error) {
+	if request.Write && !WriteEnabled() {
+		return nil, ErrWriteDisabled
+	}
 	if err := s.requireMFAIfEnabled(user, request.MFACode); err != nil {
 		return nil, err
 	}
@@ -121,7 +129,10 @@ func (s *AccessTokenService) List(user *users_models.User) (*ListAccessTokensRes
 		return nil, fmt.Errorf("failed to list access tokens: %w", err)
 	}
 
-	response := &ListAccessTokensResponseDTO{AccessTokens: make([]AccessTokenDTO, 0, len(tokens))}
+	response := &ListAccessTokensResponseDTO{
+		AccessTokens:   make([]AccessTokenDTO, 0, len(tokens)),
+		WriteAvailable: WriteEnabled(),
+	}
 	for _, token := range tokens {
 		response.AccessTokens = append(response.AccessTokens, toDTO(token))
 	}
@@ -257,6 +268,20 @@ func HashToken(token string) string {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+// WriteEnabled is MCP_WRITE_ENABLED: off, nobody is given mcp:write and tokens
+// that already hold it are served read-only.
+func WriteEnabled() bool {
+	if override := writeEnabledOverride.Load(); override != nil {
+		return *override
+	}
+	return config.GetEnv().MCPWriteEnabled
+}
+
+// SetWriteEnabled overrides MCP_WRITE_ENABLED for tests.
+func SetWriteEnabled(enabled bool) {
+	writeEnabledOverride.Store(&enabled)
 }
 
 // HasScope reports whether a space-separated scope list holds scope.

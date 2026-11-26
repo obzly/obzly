@@ -55,6 +55,9 @@ definitions:
         items:
           $ref: '#/definitions/access_tokens.AccessTokenDTO'
         type: array
+      writeAvailable:
+        description: 'WriteAvailable: new tokens can ask for write access (MCP_WRITE_ENABLED).'
+        type: boolean
     type: object
   aiusage.BreakdownRowDTO:
     properties:
@@ -2592,6 +2595,14 @@ definitions:
       rateWindowMinutes:
         description: 'RateWindowMinutes: PerMinute averages over this window.'
         type: integer
+      refused:
+        description: 'Refused: records refused in the last RefusedWindowHours, most
+          first.'
+        items:
+          $ref: '#/definitions/ingestion.RefusedDTO'
+        type: array
+      refusedWindowHours:
+        type: integer
       sources:
         items:
           $ref: '#/definitions/ingestion.SourceStatusDTO'
@@ -2603,6 +2614,24 @@ definitions:
         description: 'Truncated: more sources than the response holds; the quietest
           are left out.'
         type: boolean
+    type: object
+  ingestion.RefusedDTO:
+    properties:
+      count:
+        type: integer
+      lastAt:
+        type: string
+      reason:
+        description: 'Reason: an error code such as RATE_LIMIT_EXCEEDED, LOG_TOO_LARGE
+          or OTHER.'
+        type: string
+      retried:
+        description: |-
+          Retried: the sender was told to retry (429/503), so the data is late
+          rather than lost. Otherwise the sender dropped it.
+        type: boolean
+      signal:
+        type: string
     type: object
   ingestion.SignalStatusDTO:
     properties:
@@ -8040,8 +8069,6 @@ definitions:
         type: boolean
       isMemberAllowedToCreateProjects:
         type: boolean
-      isMfaRequiredForEveryone:
-        type: boolean
       isUserThemeChoiceAllowed:
         type: boolean
     type: object
@@ -8210,7 +8237,10 @@ definitions:
         description: means that any user with role MEMBER can create their own projects
         type: boolean
       isMfaRequiredForEveryone:
-        description: every user, not only admins, must set up MFA at their next sign-in
+        description: |-
+          Always true: MFA is required for every account. Kept in responses for API
+          compatibility; the DB column is no longer read or written (a rollback to
+          v1.2.x still selects it).
         type: boolean
       isUserThemeChoiceAllowed:
         description: 'Off: everyone sees the default themes; users still pick light/dark/system
@@ -20496,7 +20526,7 @@ paths:
         name: service
         required: true
         type: string
-      - description: Range start, RFC3339
+      - description: Range start, RFC3339 (at most 31 days before to)
         in: query
         name: from
         type: string
@@ -20540,7 +20570,7 @@ paths:
       - application/json
       description: Each service's entry spans (SERVER/CONSUMER spans and trace roots)
         and failed ones in the range and the same-length range before it, most errors
-        first. Ranges over 7 days are clamped to the last 7 days.
+        first. Ranges over 31 days are clamped to the last 31 days (clamped says so).
       parameters:
       - description: Project ID
         in: path
@@ -20603,7 +20633,7 @@ paths:
         name: projectId
         required: true
         type: string
-      - description: Range start, RFC3339
+      - description: Range start, RFC3339 (at most 31 days before to)
         in: query
         name: from
         type: string
@@ -21447,7 +21477,8 @@ paths:
             type: object
       security:
       - BearerAuth: []
-      summary: Disable MFA (Member accounts only - refused for Admin)
+      summary: Disable MFA - always refused (MFA is required for every account), kept
+        for API compatibility
       tags:
       - mfa
   /users/mfa/enable:

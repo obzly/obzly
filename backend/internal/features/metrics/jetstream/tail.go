@@ -1,7 +1,6 @@
 package metrics_jetstream
 
 import (
-	"fmt"
 	"log/slog"
 	"math"
 
@@ -17,10 +16,17 @@ import (
 // NewTail serves the metrics rows still pending in JetStream (see
 // ingest.Tail), written under dir.
 func NewTail(dir string, log *slog.Logger) (*ingest.Tail, error) {
+	newWriter := func() (ingest.DeltaWriter, error) { return newDeltaWriter(dir) }
+	return ingest.NewTail(broker.SignalMetrics, dir, newWriter, log)
+}
+
+// newDeltaWriter is one of the tail's writers, with its own segment writer:
+// it buffers one project's rows at a time.
+func newDeltaWriter(dir string) (ingest.DeltaWriter, error) {
 	writer, err := metrics_ingester.NewSampleOnlyIngester(dir,
 		segments.WithMaxRows(math.MaxInt), segments.WithMaxBytes(math.MaxInt64))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create tail writer: %w", err)
+		return nil, err
 	}
 
 	write := func(projectID uuid.UUID, payloads [][]byte) (map[string]*segments.Segment, error) {
@@ -47,5 +53,5 @@ func NewTail(dir string, log *slog.Logger) (*ingest.Tail, error) {
 		}
 		return map[string]*segments.Segment{metrics_ingester.MetricSchema.Stream: file}, nil
 	}
-	return ingest.NewTail(broker.SignalMetrics, dir, write, log)
+	return write, nil
 }

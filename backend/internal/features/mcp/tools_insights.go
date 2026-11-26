@@ -25,8 +25,9 @@ import (
 const (
 	// maxInsightWindow is the Logs insight endpoints' own range limit.
 	maxInsightWindow = 31 * 24 * time.Hour
-	// maxTraceSummaryWindow: the summary scans spans twice (the window and the one before it).
-	maxTraceSummaryWindow = 7 * 24 * time.Hour
+	// maxTraceSummaryWindow: the summary reads twice the window (it and the
+	// one before) from span rollups; the longest trace view range plus a day.
+	maxTraceSummaryWindow = 31 * 24 * time.Hour
 	maxSampleChars        = 300
 	maxPanelBuckets       = 500
 )
@@ -105,11 +106,11 @@ func (t *toolSet) registerInsights(server *mcp.Server, add func(name, descriptio
 	mcp.AddTool(server, add("trace_summary",
 		"Request count, error rate, p50 and p95 for a window against the same-length window before it, with "+
 			"bucketed trends and a capped count of matching traces. Root spans unless a service is picked. "+
-			"Window default 1h, at most 7 days. Use it before list_traces to see whether latency or errors moved."),
+			"Window default 1h, at most 31 days. Use it before list_traces to see whether latency or errors moved."),
 		wrap("trace_summary", t.traceSummary))
 	mcp.AddTool(server, add("service_errors",
 		"Services with the most failed entry spans (SERVER/CONSUMER and trace roots) in a window, with the "+
-			"previous window's counts. Window default 1h; over 7 days is clamped to the last 7. Use it to find "+
+			"previous window's counts. Window default 1h; over 31 days is clamped to the last 31 (clamped: true). Use it to find "+
 			"which service is failing."+untrustedNote),
 		wrap("service_errors", untrusted(t.serviceErrors)))
 	mcp.AddTool(server, add("incident_impact",
@@ -192,7 +193,7 @@ func (t *toolSet) serviceErrors(ctx context.Context, user *users_models.User, ar
 	}
 	return listResult("services", response.Services, len(response.Services), limit, map[string]any{
 		"from": response.From, "to": response.To, "previousFrom": response.PreviousFrom,
-		"clampedTo7Days": response.Clamped,
+		"clamped": response.Clamped,
 	}), nil
 }
 

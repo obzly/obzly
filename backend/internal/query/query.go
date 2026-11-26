@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -59,6 +60,9 @@ const (
 	// maxRemoteAttempts: a fragment's segments try this many remote
 	// executors (rendezvous rank order) before running in-process.
 	maxRemoteAttempts = 2
+	// slowQueryLog: a query slower than this logs where its time went (the
+	// slowest fragment, the merge), as does an executor's slow fragment.
+	slowQueryLog = 5 * time.Second
 	// staleQueryDirAge: well past fragmentTimeout, so no live query's
 	// results are removed.
 	staleQueryDirAge = 10 * time.Minute
@@ -159,6 +163,8 @@ type Source struct {
 	FragmentSQL  string
 	FragmentArgs []any
 	Tokens       []string
+	// SingleFragment: see Request.SingleFragment.
+	SingleFragment bool
 }
 
 // Slice is one whole fragment of a sliced Request. It runs in-process when
@@ -199,6 +205,7 @@ func NewCoordinator(
 // Query runs request and passes the final rows to scan, or returns
 // ErrNoData. Fragment results are removed afterwards.
 func (c *Coordinator) Query(ctx context.Context, request Request, scan func(*sql.Rows) error) error {
+	started := time.Now()
 	var planned int64
 	for _, record := range request.Segments {
 		planned += record.SizeBytes
@@ -225,7 +232,10 @@ func (c *Coordinator) Query(ctx context.Context, request Request, scan func(*sql
 	parts := c.plan(request)
 	for i := range request.Sources {
 		source := &request.Sources[i]
-		for _, p := range c.plan(Request{Stream: source.Stream, Segments: source.Segments, LocalFiles: source.LocalFiles}) {
+		for _, p := range c.plan(Request{
+			Stream: source.Stream, Segments: source.Segments, LocalFiles: source.LocalFiles,
+			SingleFragment: source.SingleFragment,
+		}) {
 			p.source = source
 			parts = append(parts, p)
 		}
@@ -262,15 +272,44 @@ func (c *Coordinator) Query(ctx context.Context, request Request, scan func(*sql
 	}
 	fragmentCtx, cancel := context.WithTimeout(ctx, fragmentTimeout)
 	defer cancel()
+	fragmentsStarted := time.Now()
 	var wg sync.WaitGroup
+	var slowestMu sync.Mutex
+	var slowest time.Duration
+	var slowestPart part
 	for _, p := range parts {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			partStarted := time.Now()
 			run.execute(fragmentCtx, p, nil)
+			took := time.Since(partStarted)
+			slowestMu.Lock()
+			defer slowestMu.Unlock()
+			if took > slowest {
+				slowest, slowestPart = took, p
+			}
 		}()
 	}
 	wg.Wait()
+	fragmentsDone := time.Now()
+	defer func() {
+		if took := time.Since(started); took >= slowQueryLog {
+			stream, executor := request.Stream, "in-process"
+			if slowestPart.source != nil {
+				stream = slowestPart.source.Stream
+			}
+			if slowestPart.executor != nil {
+				executor = slowestPart.executor.ID()
+			}
+			c.log.Info("Slow query", "stream", request.Stream, "duration", took.Round(time.Millisecond),
+				"fragments", len(parts), "segments", len(request.Segments), "sources", len(request.Sources),
+				"planning", fragmentsStarted.Sub(started).Round(time.Millisecond),
+				"slowestFragment", slowest.Round(time.Millisecond), "slowestStream", stream,
+				"slowestSegments", len(slowestPart.segments), "slowestExecutor", executor,
+				"merge", time.Since(fragmentsDone).Round(time.Millisecond))
+		}
+	}()
 	if err := errors.Join(run.errs...); err != nil {
 		return fmt.Errorf("query fragment failed: %w", err)
 	}
@@ -606,11 +645,21 @@ func cloneWith(set map[string]bool, id string) map[string]bool {
 }
 
 // Owned is the records ranked first for the executor with affinity among
-// executors: what it will be sent to read while membership holds.
+// executors and itself, whether it has joined them yet or not: what it will
+// be sent to read while membership holds. An executor joining running ones
+// warms this share before it takes fragments.
 func Owned(records []*segments.SegmentRecord, executors []Executor, affinity string) []*segments.SegmentRecord {
+	others := make([]string, 0, len(executors))
+	for _, executor := range executors {
+		if other := affinityOf(executor); other != affinity {
+			others = append(others, other)
+		}
+	}
 	var owned []*segments.SegmentRecord
 	for _, record := range records {
-		if ranked := Ranked(record, executors); len(ranked) > 0 && affinityOf(ranked[0]) == affinity {
+		key := record.ID.String()
+		mine := rendezvousScore(key, affinity)
+		if !slices.ContainsFunc(others, func(other string) bool { return rendezvousScore(key, other) > mine }) {
 			owned = append(owned, record)
 		}
 	}
@@ -668,6 +717,14 @@ func formatBytes(n int64) string {
 		value, suffix = value/unit, next
 	}
 	return fmt.Sprintf("%.1f %s", value, suffix)
+}
+
+// IsTimeout: err is a query that ran past its deadline, here or on an
+// executor (whose errors come back as text). Callers answer 408, not the
+// 400 of a query that is wrong: the lab's 24 h trace and metric views timed
+// out under load and read as "invalid PromQL".
+func IsTimeout(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "context deadline exceeded")
 }
 
 // BudgetRefusal is the user-facing message of a scan-budget refusal

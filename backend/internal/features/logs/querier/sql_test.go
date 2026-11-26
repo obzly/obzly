@@ -251,3 +251,18 @@ func Test_ExecuteScopedSQL_WithAMemoryLimit_SizesTheHandle(t *testing.T) {
 	assert.Equal(t, "667.5 MiB", results[0].Rows[0][0])
 	assert.EqualValues(t, 1, results[0].Rows[0][1])
 }
+
+// A mistake in the user's SQL is an invalid query (400), not a server error.
+func Test_ExecuteSQLQuery_UnknownColumn_IsAnInvalidQuery(t *testing.T) {
+	projectID, querier := seedProject(t, []*logs_core.LogItem{
+		{Timestamp: time.Now().UTC(), Level: logs_core.LogLevelInfo, Message: "x"},
+	})
+
+	_, err := querier.ExecuteSQLQuery(projectID, &logs_core.ExecuteSQLQueryRequestDTO{
+		SQL:       "SELECT count(DISTINCT no_such_column) FROM logs",
+		TimeRange: timeRangeCoveringLast24h(),
+	})
+
+	require.ErrorContains(t, err, "invalid query")
+	require.ErrorContains(t, err, "no_such_column")
+}

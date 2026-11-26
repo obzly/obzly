@@ -2,6 +2,9 @@
 
 - [`configuration.md`](configuration.md) - every environment variable, with its default, grouped
   by purpose, and what each `SERVICE_MODE` runs.
+- [`MEMORY_AND_SIZING.md`](MEMORY_AND_SIZING.md) - how a replica uses memory, the SQL-mode memory
+  gate and Go's memory limit, caveats, recommended pod sizes, and what to do when users often run
+  large queries.
 - [`SYNTHETICS.md`](SYNTHETICS.md) - synthetic monitoring: monitors, probes and probe groups,
   destinations, folders, dependencies, alerts per monitor, YAML import/export
   ([`examples/synthetics-checks.yaml`](examples/synthetics-checks.yaml)).

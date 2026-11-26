@@ -61,6 +61,30 @@ func Test_SubmitLogs_WithJetStream_LogsAreStoredOnlyAfterAWorkerWritesThem(t *te
 	}, 20*time.Second, 100*time.Millisecond, "the worker writes the rows, then acks the batch")
 }
 
+func Test_SubmitLogs_SameBatchSentTwice_StreamHoldsItOnce(t *testing.T) {
+	client := ingesttest.StartBroker(t, 64<<20)
+	router := CreateLogsTestRouter()
+	user := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	uniqueID := uuid.NewString()
+	project := projects_testing.CreateTestProject("JetStream resend "+uniqueID[:8], user, router)
+	items := CreateValidLogItems(5, uniqueID)
+	for i := range items {
+		items[i].Timestamp = "2026-11-24T09:30:00.000Z"
+	}
+
+	// A sender resends a batch the broker stored when its answer was lost.
+	for range 2 {
+		var response logs_receiving.SubmitLogsResponseDTO
+		test_utils.MakePostRequestAndUnmarshal(t, router,
+			fmt.Sprintf("/api/v1/logs/receiving/%s", project.ID), "",
+			&logs_receiving.SubmitLogsRequestDTO{Logs: items}, http.StatusAccepted, &response)
+		require.Equal(t, 5, response.Accepted)
+	}
+
+	require.EqualValues(t, 1, ingesttest.StreamMessages(t, client, broker.SignalLogs),
+		"the resent batch has the same row ids and message id, so the stream drops it")
+}
+
 func Test_SubmitLogs_WhenIngestBufferFull_Returns429WithRetryAfter(t *testing.T) {
 	ingesttest.StartBroker(t, 2048)
 	router := CreateLogsTestRouter()

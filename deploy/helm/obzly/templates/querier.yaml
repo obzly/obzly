@@ -53,6 +53,8 @@ spec:
       {{- include "obzly.podSpec" (dict "root" . "tier" .Values.querier) | nindent 6 }}
       # Above the 30 s a stopping executor lets running fragments finish.
       terminationGracePeriodSeconds: 45
+      # Constraints set here replace the scheduler's default node spreading, so
+      # the node spread is explicit too.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
@@ -60,6 +62,14 @@ spec:
           labelSelector:
             matchLabels:
               {{- include "obzly.selectorLabels" $ctx | nindent 14 }}
+        {{- if .Values.querier.hostSpread }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "obzly.selectorLabels" $ctx | nindent 14 }}
+        {{- end }}
       containers:
         - name: obzly
           {{- include "obzly.containerBase" . | nindent 10 }}
@@ -77,6 +87,8 @@ spec:
               value: {{ .Values.querier.cacheSizeMB | quote }}
             - name: QUERIER_WARM_HOURS
               value: {{ .Values.querier.warmHours | quote }}
+            - name: QUERIER_WARM_WAIT_SECONDS
+              value: {{ .Values.querier.warmWaitSeconds | quote }}
             {{- if $resultsTLS }}
             - name: QUERY_RESULTS_TLS_CERT_FILE
               value: /etc/obzly/query-results-tls/tls.crt
@@ -87,6 +99,14 @@ spec:
             - name: results
               containerPort: 4319
             {{- include "obzly.metricsPort" . | nindent 12 }}
+          # Joining running queriers, one warms its cache before it opens the
+          # results port (up to warmWaitSeconds), so a rollout moves on only
+          # once it is warm; liveness waits for it.
+          startupProbe:
+            tcpSocket:
+              port: results
+            periodSeconds: 10
+            failureThreshold: {{ add (div .Values.querier.warmWaitSeconds 10) 12 }}
           readinessProbe:
             tcpSocket:
               port: results

@@ -21,6 +21,9 @@ const (
 	// the bucket.
 	bucketTTLSeconds = 20 * 60
 	doTimeout        = 5 * time.Second
+	// recordTimeout: RecordIngestion runs inside every ingest request, and a
+	// lost count only shows in the system page's rate.
+	recordTimeout = 300 * time.Millisecond
 )
 
 // RecordIngestion adds one accepted batch's counts to the current UTC minute's bucket.
@@ -30,8 +33,12 @@ func RecordIngestion(logCount int, rawBytes int64) {
 		return
 	}
 
+	breaker := cache.GetBreaker()
+	if !breaker.Available() {
+		return
+	}
 	client := cache.GetCache()
-	ctx, cancel := context.WithTimeout(context.Background(), doTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
 	defer cancel()
 
 	bucket := currentMinuteBucket()
@@ -44,7 +51,11 @@ func RecordIngestion(logCount int, rawBytes int64) {
 		client.B().Incrby().Key(bytesKey).Increment(rawBytes).Build(),
 		client.B().Expire().Key(bytesKey).Seconds(bucketTTLSeconds).Build(),
 	}
-	client.DoMulti(ctx, cmds...)
+	for _, result := range client.DoMulti(ctx, cmds...) {
+		if err := breaker.Observe(result.Error()); err != nil {
+			return
+		}
+	}
 }
 
 // IngestionRate summarizes accepted ingestion over the trailing window.

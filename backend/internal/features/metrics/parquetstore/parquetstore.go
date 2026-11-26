@@ -116,6 +116,7 @@ func New(dataDir string, opts ...Option) (*MetricParquetStore, error) {
 	var uploader *metrics_uploader.MetricUploader
 	if cfg.objectStore != nil {
 		uploader = metrics_uploader.NewMetricUploader(cfg.objectStore)
+		compactor.SetPublisher(uploader)
 	}
 
 	return &MetricParquetStore{

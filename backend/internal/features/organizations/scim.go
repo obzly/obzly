@@ -142,6 +142,8 @@ func (s *Service) scimCreateUser(token *SCIMToken, change scimUserChange) (*scim
 		Status:               status,
 		CreatedAt:            time.Now().UTC(),
 		SCIMOrgID:            &token.OrgID,
+		// The organization's identity provider set it.
+		EmailVerified: true,
 	}
 	if plan, err := s.plans.GetPlanByType(users_enums.UserPlanTypeDefault); err != nil {
 		return nil, err
@@ -211,7 +213,7 @@ func (s *Service) scimUpdateUser(token *SCIMToken, userID uuid.UUID, change scim
 			}
 		}
 		if name != nil || email != nil {
-			if err := s.users.UpdateUserInfo(userID, name, email); err != nil {
+			if err := s.users.UpdateUserInfo(userID, name, email, true); err != nil {
 				if isUniqueViolation(err) {
 					return nil, &scimError{409, "uniqueness", "Another account has that email"}
 				}

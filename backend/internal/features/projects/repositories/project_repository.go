@@ -1,6 +1,7 @@
 package projects_repositories
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -57,9 +58,17 @@ func (r *ProjectRepository) CreateProjectWithOwnerMembership(
 }
 
 func (r *ProjectRepository) GetProjectByID(projectID uuid.UUID) (*projects_models.Project, error) {
+	return r.GetProjectByIDContext(context.Background(), projectID)
+}
+
+func (r *ProjectRepository) GetProjectByIDContext(
+	ctx context.Context,
+	projectID uuid.UUID,
+) (*projects_models.Project, error) {
 	var project projects_models.Project
 
-	if err := storage.GetDb().Preload("Plan").Where("id = ?", projectID).First(&project).Error; err != nil {
+	err := storage.GetDb().WithContext(ctx).Preload("Plan").Where("id = ?", projectID).First(&project).Error
+	if err != nil {
 		return nil, err
 	}
 

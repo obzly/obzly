@@ -66,15 +66,35 @@ func ProjectFromSubject(subject string) (uuid.UUID, error) {
 	return uuid.Parse(tokens[3])
 }
 
-// PublishIngest stores payloads for one project and returns once JetStream
-// has acked every one, i.e. they are on a quorum (R3) or the local store
-// (R1). On error some payloads may be stored; a client retry then
-// duplicates them (at-least-once).
+// PublishIngest stores payloads for one project under random message ids;
+// see PublishIngestWithIDs.
 func (c *Client) PublishIngest(ctx context.Context, signal string, projectID uuid.UUID, payloads [][]byte) error {
-	subject := IngestSubject(signal, projectID)
+	msgIDs := make([]string, len(payloads))
+	for i := range payloads {
+		msgIDs[i] = uuid.NewString()
+	}
+	return c.PublishIngestWithIDs(ctx, signal, projectID, payloads, msgIDs)
+}
+
+// PublishIngestWithIDs stores payloads for one project and returns once
+// JetStream has acked every one, i.e. they are on a quorum (R3) or the local
+// store (R1). On error some payloads may be stored. msgIDs[i] is payloads[i]'s
+// Nats-Msg-Id: a payload whose id the stream saw inside duplicateWindow is
+// acked without being stored again, so a client resending a stored batch
+// (receivers derive ids from its rows, ingest.Publish) doesn't duplicate it.
+// The window is per stream, so a resend on another lane is caught too. A
+// project with lanes spreads its payloads over them (laneSubject).
+func (c *Client) PublishIngestWithIDs(
+	ctx context.Context,
+	signal string,
+	projectID uuid.UUID,
+	payloads [][]byte,
+	msgIDs []string,
+) error {
 	futures := make([]jetstream.PubAckFuture, 0, len(payloads))
-	for _, payload := range payloads {
-		future, err := c.JetStream.PublishAsync(subject, payload, jetstream.WithMsgID(uuid.NewString()))
+	for i, payload := range payloads {
+		future, err := c.JetStream.PublishAsync(laneSubject(signal, projectID), payload,
+			jetstream.WithMsgID(msgIDs[i]))
 		if err != nil {
 			return classifyPublishError(err)
 		}
@@ -96,12 +116,21 @@ func (c *Client) PublishIngest(ctx context.Context, signal string, projectID uui
 // SplitPayloads packs pre-encoded items into JSON arrays of at most
 // MaxIngestPayload bytes each; an item larger than that gets its own.
 func SplitPayloads(items [][]byte) [][]byte {
-	var payloads [][]byte
+	payloads, _ := SplitPayloadRanges(items)
+	return payloads
+}
+
+// SplitPayloadRanges is SplitPayloads that also returns each payload's
+// first item index; the last payload runs to the end.
+func SplitPayloadRanges(items [][]byte) (payloads [][]byte, starts []int) {
 	current := []byte{'['}
-	for _, item := range items {
+	start := 0
+	for i, item := range items {
 		if len(current) > 1 && len(current)+len(item)+2 > MaxIngestPayload {
 			payloads = append(payloads, append(current, ']'))
+			starts = append(starts, start)
 			current = []byte{'['}
+			start = i
 		}
 		if len(current) > 1 {
 			current = append(current, ',')
@@ -110,8 +139,9 @@ func SplitPayloads(items [][]byte) [][]byte {
 	}
 	if len(current) > 1 {
 		payloads = append(payloads, append(current, ']'))
+		starts = append(starts, start)
 	}
-	return payloads
+	return payloads, starts
 }
 
 func classifyPublishError(err error) error {

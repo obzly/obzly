@@ -373,8 +373,7 @@ func (b *whereBuilder) buildInCondition(column, fieldName string, value any, neg
 		converted[i] = coerced
 	}
 
-	placeholders := strings.TrimRight(strings.Repeat("?, ", len(converted)), ", ")
-	sqlExpr := column + " IN (" + placeholders + ")"
+	sqlExpr := inList(column, len(converted))
 	if negate {
 		if nullableSystemColumns[fieldName] {
 			sqlExpr = "(" + column + " IS NULL OR NOT (" + sqlExpr + "))"
@@ -393,12 +392,11 @@ func notSafe(valueExpr string, valueArgs []any, positiveSQL string, positiveArgs
 }
 
 func inClause(extractExpr string, values []string) (string, []any) {
-	placeholders := strings.TrimRight(strings.Repeat("?, ", len(values)), ", ")
 	args := make([]any, len(values))
 	for i, v := range values {
 		args[i] = v
 	}
-	return extractExpr + " IN (" + placeholders + ")", args
+	return inList(extractExpr, len(values)), args
 }
 
 func rangeOperatorSQL(op logs_core.ConditionOperator) string {

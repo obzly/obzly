@@ -1,18 +1,28 @@
 package servicemap_tests
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"obzly/internal/config"
 	"obzly/internal/features/servicemap"
+	spans_testsupport "obzly/internal/features/spans/testsupport"
 	users_enums "obzly/internal/features/users/enums"
 	users_testing "obzly/internal/features/users/testing"
+	"obzly/internal/query"
 	test_utils "obzly/internal/util/testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// requestMark marks a test request's context, to tell it from
+// context.Background().
+type requestMark struct{}
 
 func findNode(nodes []servicemap.ServiceMapNodeDTO, name string) *servicemap.ServiceMapNodeDTO {
 	for i := range nodes {
@@ -188,4 +198,45 @@ func Test_GetServiceMap_InvalidProjectID_ReturnsBadRequest(t *testing.T) {
 		"/api/v1/service-map/not-a-uuid",
 		"Bearer "+owner.Token, http.StatusBadRequest,
 	)
+}
+
+// The map's three span reads run under the request's context and the scan
+// budget: they ran under context.Background() with no budget, so a closed
+// tab kept them going and nothing refused a window too large to read.
+func Test_GetServiceMap_SpanReadsRunUnderTheRequestContextAndScanBudget(t *testing.T) {
+	router := CreateServiceMapTestRouter()
+	owner, project := SetUpProjectWithSpansAndNetworkMetrics(t, router, "Service Map Bounded")
+	recorder := spans_testsupport.RecordLookups(t)
+
+	request, err := http.NewRequestWithContext(context.WithValue(context.Background(), requestMark{}, true),
+		http.MethodGet, fmt.Sprintf("/api/v1/service-map/%s", project.ID.String()), nil)
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+owner.Token)
+	request.RemoteAddr = "10.20.30.40:50000"
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+
+	calls := recorder.Calls()
+	methods := make([]string, len(calls))
+	for i, call := range calls {
+		methods[i] = call.Method
+		assert.Equal(t, config.GetEnv().QueryMaxScanBytes, call.ScanBudget, call.Method)
+		assert.Equal(t, true, call.Ctx.Value(requestMark{}), "%s runs under the request's context", call.Method)
+		assert.LessOrEqual(t, call.TimeRange.To.Sub(*call.TimeRange.From), 24*time.Hour, call.Method)
+	}
+	assert.ElementsMatch(t, []string{"ServiceCallEdges", "ServiceK8sMetadata", "ServiceNodeStats"}, methods)
+}
+
+// A window planned past the scan budget is refused (422), not read.
+func Test_GetServiceMap_PastTheScanBudget_IsRefused(t *testing.T) {
+	router := CreateServiceMapTestRouter()
+	owner, project := SetUpProjectWithSpansAndNetworkMetrics(t, router, "Service Map Budget")
+	recorder := spans_testsupport.RecordLookups(t)
+	recorder.Err = &query.ScanBudgetError{Planned: 2 << 30, Budget: 1 << 30}
+
+	response := test_utils.MakeGetRequest(t, router, fmt.Sprintf("/api/v1/service-map/%s", project.ID.String()),
+		"Bearer "+owner.Token, http.StatusUnprocessableEntity)
+
+	assert.Contains(t, string(response.Body), "QUERY_TOO_LARGE")
 }

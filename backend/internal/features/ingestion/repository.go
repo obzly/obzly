@@ -124,8 +124,8 @@ func (r *repository) write(ctx context.Context, projectID uuid.UUID, entries map
 	return nil
 }
 
-// prune drops counts past minuteRetention and sources unseen for
-// sourceRetention.
+// prune drops counts past minuteRetention, sources unseen for
+// sourceRetention and refusals past refusalRetention.
 func (r *repository) prune(ctx context.Context, now time.Time) error {
 	db := storage.GetDb().WithContext(ctx)
 	if err := db.Exec(`DELETE FROM ingestion_source_minutes WHERE minute < ?`, now.Add(-minuteRetention)).
@@ -135,6 +135,10 @@ func (r *repository) prune(ctx context.Context, now time.Time) error {
 	if err := db.Exec(`DELETE FROM ingestion_sources WHERE last_seen < ?`, now.Add(-sourceRetention)).
 		Error; err != nil {
 		return fmt.Errorf("failed to prune ingestion sources: %w", err)
+	}
+	if err := db.Exec(`DELETE FROM ingestion_refusals WHERE hour < ?`, now.Add(-refusalRetention)).
+		Error; err != nil {
+		return fmt.Errorf("failed to prune ingestion refusals: %w", err)
 	}
 	return nil
 }

@@ -67,6 +67,21 @@ const (
 	IngestBufferJetStream = "jetstream"
 )
 
+// Ingest shard placement (INGEST_SHARD_BALANCE): by load across signals
+// (docs/INGEST_SHARD_BALANCING.md) or, as before, an even count per signal.
+const (
+	IngestShardBalanceLoad  = "load"
+	IngestShardBalanceCount = "count"
+)
+
+// Ingest lanes (INGEST_LANES): a busy project's batches spread over several
+// shards (docs/INGEST_LANES.md), or every project on one.
+const (
+	IngestLanesAuto       = "auto"
+	IngestLanesOff        = "off"
+	DefaultIngestMaxLanes = 8
+)
+
 // ServesHTTP reports whether this mode starts the Gin server. Whether it also owns
 // ingest and storage is RunsSignalStorage (false on a control plane).
 func (m ServiceMode) ServesHTTP() bool {
@@ -152,6 +167,13 @@ type EnvVariables struct {
 	// keeps its name for existing configs but now means no buffer: receivers write to
 	// their own segment writer.
 	IngestBuffer string `env:"INGEST_BUFFER"`
+	// IngestShardBalance: IngestShardBalanceLoad (default) or IngestShardBalanceCount.
+	IngestShardBalance string `env:"INGEST_SHARD_BALANCE"`
+	// IngestLanes: IngestLanesAuto (default) or IngestLanesOff. The lane
+	// controller runs in the load balancer, so lanes need INGEST_SHARD_BALANCE=load.
+	IngestLanes string `env:"INGEST_LANES"`
+	// IngestMaxLanes caps a project's lanes per signal (1 to 64, default 8).
+	IngestMaxLanes int `env:"INGEST_MAX_LANES"`
 	// NatsURL: the broker cluster's client URL(s), comma-separated, for api
 	// and worker replicas. Unset in SERVICE_MODE=all, which runs the server
 	// in-process instead.
@@ -221,6 +243,19 @@ type EnvVariables struct {
 	// DefaultQuerierWarmHours; "0" off. Read it through QuerierWarmHours.
 	QuerierWarmHoursRaw string `env:"QUERIER_WARM_HOURS"`
 	QuerierWarmHours    int
+	// MetricsPartials1mDaysRaw is METRICS_PARTIALS_1M_DAYS as given: how many
+	// days of 1-minute metric partials are built and kept (they hold about
+	// half the samples' rows; longer ranges step coarser and read the
+	// 5-minute ones). Unset means DefaultMetricsPartials1mDays; "0" builds
+	// none. Read it through MetricsPartials1mDays.
+	MetricsPartials1mDaysRaw string `env:"METRICS_PARTIALS_1M_DAYS"`
+	MetricsPartials1mDays    int
+	// QuerierWarmWaitSecondsRaw is QUERIER_WARM_WAIT_SECONDS: how long an executor
+	// joining running ones warms its share before it takes fragments (and its
+	// readiness probe passes, which holds a rolling update). Read it through
+	// QuerierWarmWait.
+	QuerierWarmWaitSecondsRaw string `env:"QUERIER_WARM_WAIT_SECONDS"`
+	QuerierWarmWait           time.Duration
 	// Partition result cache for aggregations (logs histogram, dashboard series):
 	// finished partitions are kept in Valkey for QUERY_CACHE_TTL_HOURS ("0" off);
 	// partitions ending within QUERY_CACHE_DELAY_SECONDS of now are always read fresh,
@@ -239,6 +274,12 @@ type EnvVariables struct {
 	// DefaultQueryMaxScanGB; "0" off. Read it through QueryMaxScanBytes.
 	QueryMaxScanGBRaw string `env:"QUERY_MAX_SCAN_GB"`
 	QueryMaxScanBytes int64
+	// QueryMemoryFractionRaw is QUERY_MEMORY_FRACTION as given: the share (0 to 1) of
+	// the container's memory limit that DuckDB query work may use at once. Unset
+	// means DefaultQueryMemoryFraction; "0" turns the memory gate off. Read it
+	// through QueryMemoryFraction.
+	QueryMemoryFractionRaw string `env:"QUERY_MEMORY_FRACTION"`
+	QueryMemoryFraction    float64
 	// Alerting. AlertEgressAllowlist: CIDRs alert webhooks may reach although not public
 	// (in-network receivers); AlertEgressDenylist: CIDRs they may never reach (e.g. the
 	// cluster's service range, which the binary can't discover). AlertEvalShards: rule
@@ -345,6 +386,10 @@ type EnvVariables struct {
 	// UpdateCheck (UPDATE_CHECK, default true): Settings > Updates asks GitHub for the latest
 	// Obzly release (a plain anonymous request, cached 6 h). False turns the check off.
 	UpdateCheck *bool `env:"UPDATE_CHECK"`
+	// MCPWriteEnabled (MCP_WRITE_ENABLED, default false): whether MCP clients can be given
+	// write access (silences, dashboards). Off, every token and app connection is read-only,
+	// including ones granted write access earlier.
+	MCPWriteEnabled bool `env:"MCP_WRITE_ENABLED"`
 }
 
 const (
@@ -537,12 +582,32 @@ func loadEnvVariables() {
 	env.QueryMaxScanBytes = scanBytes
 	log.Info("QUERY_MAX_SCAN_GB loaded", "bytes", scanBytes)
 
+	memoryFraction, err := ParseQueryMemoryFraction(env.QueryMemoryFractionRaw)
+	if err != nil {
+		log.Error("Invalid QUERY_MEMORY_FRACTION", "error", err)
+		os.Exit(1)
+	}
+	env.QueryMemoryFraction = memoryFraction
+	log.Info("QUERY_MEMORY_FRACTION loaded", "fraction", memoryFraction)
+
 	warmHours, err := ParseQuerierWarmHours(env.QuerierWarmHoursRaw)
 	if err != nil {
 		log.Error("Invalid QUERIER_WARM_HOURS", "error", err)
 		os.Exit(1)
 	}
 	env.QuerierWarmHours = warmHours
+	partials1mDays, err := ParseWholeNumber(env.MetricsPartials1mDaysRaw, DefaultMetricsPartials1mDays, 3650)
+	if err != nil {
+		log.Error("Invalid METRICS_PARTIALS_1M_DAYS", "error", err)
+		os.Exit(1)
+	}
+	env.MetricsPartials1mDays = partials1mDays
+	warmWait, err := ParseWholeNumber(env.QuerierWarmWaitSecondsRaw, DefaultQuerierWarmWaitSeconds, 3600)
+	if err != nil {
+		log.Error("Invalid QUERIER_WARM_WAIT_SECONDS", "error", err)
+		os.Exit(1)
+	}
+	env.QuerierWarmWait = time.Duration(warmWait) * time.Second
 
 	cacheHours, err := ParseWholeNumber(env.QueryCacheTTLHoursRaw, DefaultQueryCacheTTLHours, 24*30)
 	if err != nil {
@@ -797,6 +862,11 @@ const (
 	DefaultShutdownRequestGraceSeconds = 180
 	// DefaultSelfTracingSampleRate: 1% of requests.
 	DefaultSelfTracingSampleRate = 0.01
+	// DefaultQueryMemoryFraction: SQL-mode sandboxes and the long-lived
+	// handles' use may take 60% of the container. DuckDB overshoots its limits
+	// by about 10% and Go needs ~0.5 GB under ingest: at 0.75 three parallel
+	// queries left a 4 GiB api pod 180 MB short of its limit, at 0.6 900 MB.
+	DefaultQueryMemoryFraction = 0.6
 )
 
 // UsesJetStream reports whether this process runs or connects to the NATS
@@ -823,6 +893,20 @@ func ValidateBrokerSettings(env EnvVariables) error {
 	default:
 		return fmt.Errorf("INGEST_BUFFER must be %q or %q, got %q",
 			IngestBufferValkey, IngestBufferJetStream, env.IngestBuffer)
+	}
+	switch env.IngestShardBalance {
+	case "", IngestShardBalanceLoad, IngestShardBalanceCount:
+	default:
+		return fmt.Errorf("INGEST_SHARD_BALANCE must be %q or %q, got %q",
+			IngestShardBalanceLoad, IngestShardBalanceCount, env.IngestShardBalance)
+	}
+	switch env.IngestLanes {
+	case "", IngestLanesAuto, IngestLanesOff:
+	default:
+		return fmt.Errorf("INGEST_LANES must be %q or %q, got %q", IngestLanesAuto, IngestLanesOff, env.IngestLanes)
+	}
+	if env.IngestMaxLanes < 0 || env.IngestMaxLanes > 64 {
+		return fmt.Errorf("INGEST_MAX_LANES must be between 1 and 64, got %d", env.IngestMaxLanes)
 	}
 	if !env.UsesJetStream() {
 		return nil
@@ -946,6 +1030,20 @@ func ParseSelfTracingSampleRate(raw string) (float64, error) {
 	return rate, nil
 }
 
+// ParseQueryMemoryFraction reads QUERY_MEMORY_FRACTION: "" is
+// DefaultQueryMemoryFraction, "0" turns the gate off.
+func ParseQueryMemoryFraction(raw string) (float64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultQueryMemoryFraction, nil
+	}
+	fraction, err := strconv.ParseFloat(raw, 64)
+	if err != nil || fraction < 0 || fraction > 1 {
+		return 0, fmt.Errorf("QUERY_MEMORY_FRACTION must be a number from 0 to 1, got %q", raw)
+	}
+	return fraction, nil
+}
+
 // MetricsEnabled reports whether the /metrics listener should start.
 func (e EnvVariables) MetricsEnabled() bool {
 	return e.MetricsAddr != MetricsAddrOff
@@ -1012,6 +1110,8 @@ const (
 const (
 	DefaultQuerierGRPCAddr        = ":4319"
 	DefaultQuerierWarmHours       = 24
+	DefaultMetricsPartials1mDays  = 7
+	DefaultQuerierWarmWaitSeconds = 300
 	DefaultQueryCacheTTLHours     = 24
 	DefaultQueryCacheDelaySeconds = 300
 )
@@ -1031,6 +1131,15 @@ func applyQuerierDefaults(env *EnvVariables) {
 func applyBrokerDefaults(env *EnvVariables) {
 	if env.IngestBuffer == "" {
 		env.IngestBuffer = IngestBufferValkey
+	}
+	if env.IngestShardBalance == "" {
+		env.IngestShardBalance = IngestShardBalanceLoad
+	}
+	if env.IngestLanes == "" {
+		env.IngestLanes = IngestLanesAuto
+	}
+	if env.IngestMaxLanes == 0 {
+		env.IngestMaxLanes = DefaultIngestMaxLanes
 	}
 	if env.NatsServerName == "" {
 		env.NatsServerName, _ = os.Hostname()

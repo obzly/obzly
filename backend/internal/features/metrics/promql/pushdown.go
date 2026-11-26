@@ -89,7 +89,7 @@ func pushDown(
 	}
 	outcomes, err := evaluatePushdowns(ctx, projectID, requests)
 	if err != nil {
-		return nil, "", err
+		return nil, "", &StorageError{Err: err}
 	}
 
 	results := map[string]*metrics_core.RangeFunctionResponseDTO{}
@@ -132,7 +132,11 @@ func pushableRequest(node parser.Expr) *metrics_core.RangeFunctionRequestDTO {
 			slices.Contains(aggregate.Grouping, model.MetricNameLabel) {
 			return nil
 		}
-		request := pushableCall(unwrapParens(aggregate.Expr))
+		inner := unwrapParens(aggregate.Expr)
+		request := pushableCall(inner)
+		if request == nil {
+			request = pushableSelector(inner)
+		}
 		if request == nil {
 			return nil
 		}
@@ -158,17 +162,7 @@ func pushableCall(node parser.Expr) *metrics_core.RangeFunctionRequestDTO {
 		return nil
 	}
 	selector, ok := matrix.VectorSelector.(*parser.VectorSelector)
-	if !ok || selector.OriginalOffset != 0 || selector.Offset != 0 || selector.Timestamp != nil ||
-		selector.StartOrEnd != 0 || selector.Anchored || selector.Smoothed || matrix.Range <= 0 {
-		return nil
-	}
-	hasName := false
-	for _, matcher := range selector.LabelMatchers {
-		if matcher.Name == model.MetricNameLabel && matcher.Type == labels.MatchEqual {
-			hasName = true
-		}
-	}
-	if !hasName {
+	if !ok || !plainSelector(selector) || matrix.Range <= 0 {
 		return nil
 	}
 	return &metrics_core.RangeFunctionRequestDTO{
@@ -176,6 +170,37 @@ func pushableCall(node parser.Expr) *metrics_core.RangeFunctionRequestDTO {
 		Function: call.Func.Name,
 		RangeMs:  matrix.Range.Milliseconds(),
 	}
+}
+
+// pushableSelector is an instant selector inside an aggregation as a
+// storage request: each series' latest sample in the engine's lookback
+// window, as the engine selects it. A bare selector keeps its name, which a
+// pushed-down result can't, so only aggregated ones qualify.
+func pushableSelector(node parser.Expr) *metrics_core.RangeFunctionRequestDTO {
+	selector, ok := node.(*parser.VectorSelector)
+	if !ok || !plainSelector(selector) {
+		return nil
+	}
+	return &metrics_core.RangeFunctionRequestDTO{
+		Matchers: toMatcherDTOs(selector.LabelMatchers),
+		Function: metrics_core.FunctionInstant,
+		RangeMs:  lookbackDelta.Milliseconds(),
+	}
+}
+
+// plainSelector: one metric's selector, with no offset, @ or experimental
+// modifier.
+func plainSelector(selector *parser.VectorSelector) bool {
+	if selector.OriginalOffset != 0 || selector.OriginalOffsetExpr != nil || selector.Offset != 0 ||
+		selector.Timestamp != nil || selector.StartOrEnd != 0 || selector.Anchored || selector.Smoothed {
+		return false
+	}
+	for _, matcher := range selector.LabelMatchers {
+		if matcher.Name == model.MetricNameLabel && matcher.Type == labels.MatchEqual {
+			return true
+		}
+	}
+	return false
 }
 
 func unwrapParens(node parser.Expr) parser.Expr {

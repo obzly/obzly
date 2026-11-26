@@ -1,6 +1,7 @@
 package traces_jaeger
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -8,6 +9,7 @@ import (
 	spans_core "obzly/internal/features/spans/core"
 	"obzly/internal/query"
 	"obzly/internal/util/logger"
+	"obzly/internal/util/querylimit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -36,7 +38,7 @@ func (c *JaegerController) ListServices(ctx *gin.Context) {
 		return
 	}
 
-	services, err := c.service.ListServices(projectID, apiKeyFromRequest(ctx))
+	services, err := c.service.ListServices(ctx.Request.Context(), projectID, apiKeyFromRequest(ctx))
 	if err != nil {
 		writeError(ctx, err)
 		return
@@ -51,7 +53,8 @@ func (c *JaegerController) ListOperations(ctx *gin.Context) {
 		return
 	}
 
-	operations, err := c.service.ListOperations(projectID, apiKeyFromRequest(ctx), ctx.Param("service"))
+	operations, err := c.service.ListOperations(
+		ctx.Request.Context(), projectID, apiKeyFromRequest(ctx), ctx.Param("service"))
 	if err != nil {
 		writeError(ctx, err)
 		return
@@ -66,7 +69,8 @@ func (c *JaegerController) ListOperationsLegacy(ctx *gin.Context) {
 		return
 	}
 
-	operations, err := c.service.ListOperations(projectID, apiKeyFromRequest(ctx), ctx.Query("service"))
+	operations, err := c.service.ListOperations(
+		ctx.Request.Context(), projectID, apiKeyFromRequest(ctx), ctx.Query("service"))
 	if err != nil {
 		writeError(ctx, err)
 		return
@@ -148,6 +152,10 @@ func writeData(ctx *gin.Context, data any) {
 func writeError(ctx *gin.Context, err error) {
 	if message, refused := query.BudgetRefusal(err); refused {
 		ctx.JSON(http.StatusUnprocessableEntity, Response{Errors: []string{message}})
+		return
+	}
+	if errors.Is(err, querylimit.ErrTooManyQueries) {
+		ctx.JSON(http.StatusTooManyRequests, Response{Errors: []string{err.Error()}})
 		return
 	}
 	switch err {

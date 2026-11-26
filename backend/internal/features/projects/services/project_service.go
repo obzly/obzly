@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 )
 
 // SystemProjectName is the reserved system project's name (EnsureSystemProject).
@@ -29,10 +30,27 @@ const SystemProjectName = "Obzly (system)"
 // traces for troubleshooting Obzly itself, not long-term history.
 const systemProjectRetentionDays = 7
 
+// DefaultLogsPerSecondLimit for a new project. A throttled sender retries,
+// and after an outage it catches up only at the limit minus its normal
+// traffic: at 1,000/s a project sending 875/s was still minutes behind half
+// an hour after a node loss in the chaos lab.
+const DefaultLogsPerSecondLimit = 5000
+
+const (
+	localProjectTTL        = 30 * time.Second
+	localProjectMaxEntries = 100_000
+	// A hung database must answer a retryable 503 quickly instead of holding
+	// every ingest request (and a pool connection) until the sender gives up.
+	projectLookupTimeout = 3 * time.Second
+)
+
 // ErrSystemProjectNotDeletable: it is recreated at the next start anyway, and
 // deleting it underneath a running exporter would fail its writes.
 var (
 	ErrSystemProjectNotDeletable = errors.New("the system project cannot be deleted")
+	// ErrProjectNotFound: GetProjectWithCache found no such project. Any
+	// other error from it means the lookup failed and is worth a retry.
+	ErrProjectNotFound = errors.New("project not found")
 	// ErrPlanLimit: the organization's plan allows no more projects here.
 	ErrPlanLimit = errors.New("plan limit reached")
 )
@@ -48,6 +66,11 @@ type ProjectService struct {
 
 	projectCacheUtil *cache_utils.CacheUtil[projects_models.Project]
 	singleflight     singleflight.Group // Prevents thundering herd on DB calls
+	// localProjects: projects this replica looked up lately, read only while
+	// Valkey is unreachable, so an outage doesn't send every ingest request to
+	// the database. A change made meanwhile reaches other replicas within
+	// localProjectTTL.
+	localProjects *cache_utils.LocalCache[projects_models.Project]
 }
 
 func (s *ProjectService) AddProjectDeletionListener(listener projects_interfaces.ProjectDeletionListener) {
@@ -89,7 +112,7 @@ func (s *ProjectService) CreateProject(
 		AllowedDomainsRaw:     "",
 		AllowedIPsRaw:         "",
 		IsRateLimitingEnabled: true,
-		LogsPerSecondLimit:    1000,
+		LogsPerSecondLimit:    DefaultLogsPerSecondLimit,
 		MaxLogsAmount:         100_000_000,
 		MaxLogsSizeMB:         100_000, // 100 GB
 		MaxLogsLifeDays:       180,
@@ -209,6 +232,7 @@ func (s *ProjectService) UpdateProject(
 	}
 
 	s.projectCacheUtil.Invalidate(projectID.String())
+	s.localProjects.Delete(projectID.String())
 
 	s.auditLogService.WriteAuditLog(
 		fmt.Sprintf("Project updated: %s", updateDTO.Name),
@@ -254,6 +278,7 @@ func (s *ProjectService) DeleteProject(projectID uuid.UUID, user *users_models.U
 	}
 
 	s.projectCacheUtil.Invalidate(projectID.String())
+	s.localProjects.Delete(projectID.String())
 
 	s.auditLogService.WriteAuditLog(
 		fmt.Sprintf("Project deleted: %s", project.Name),
@@ -337,27 +362,40 @@ func (s *ProjectService) GetProjectWithCache(projectID uuid.UUID) (*projects_mod
 	projectIDStr := projectID.String()
 
 	// Tier 1: cache
-	if cachedProject := s.projectCacheUtil.Get(projectIDStr); cachedProject != nil {
-		if cachedProject.IsNotExists {
-			return nil, errors.New("project not found")
+	cachedProject, cacheErr := s.projectCacheUtil.Lookup(projectIDStr)
+	if cacheErr != nil {
+		if local, ok := s.localProjects.Get(projectIDStr); ok {
+			return &local, nil
 		}
-
+	}
+	if cachedProject != nil {
+		if cachedProject.IsNotExists {
+			return nil, ErrProjectNotFound
+		}
+		s.localProjects.Set(projectIDStr, *cachedProject)
 		return cachedProject, nil
 	}
 
 	// Tier 2: Database lookup with singleflight protection (prevents thundering herd)
 	result, err, _ := s.singleflight.Do(projectIDStr, func() (any, error) {
-		return s.projectRepository.GetProjectByID(projectID)
+		ctx, cancel := context.WithTimeout(context.Background(), projectLookupTimeout)
+		defer cancel()
+		return s.projectRepository.GetProjectByIDContext(ctx, projectID)
 	})
 
-	if err != nil {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		// Cache the invalid project to prevent future DB hits
 		invalidCachedProject := &projects_models.Project{
 			ID:          projectID,
 			IsNotExists: true,
 		}
 		s.projectCacheUtil.Set(projectIDStr, invalidCachedProject)
-		return nil, errors.New("project not found")
+		return nil, ErrProjectNotFound
+	}
+	if err != nil {
+		// Never cached: a database blip must not make a live project "not
+		// found" (which senders drop) for the cache's lifetime.
+		return nil, fmt.Errorf("failed to look up project: %w", err)
 	}
 
 	project, ok := result.(*projects_models.Project)
@@ -367,6 +405,7 @@ func (s *ProjectService) GetProjectWithCache(projectID uuid.UUID) (*projects_mod
 
 	// Cache the valid project
 	s.projectCacheUtil.Set(projectIDStr, project)
+	s.localProjects.Set(projectIDStr, *project)
 
 	return project, nil
 }

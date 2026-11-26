@@ -31,3 +31,6 @@ type SpanEvent struct {
 	Timestamp  time.Time      `json:"timestamp"`
 	Attributes map[string]any `json:"attributes,omitempty"`
 }
+
+// RowID is the row's id (ingest.Identified).
+func (r *Span) RowID() uuid.UUID { return r.ID }

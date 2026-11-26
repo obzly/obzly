@@ -7,52 +7,37 @@ import (
 
 	spans_core "obzly/internal/features/spans/core"
 	"obzly/internal/query"
-	"obzly/internal/storage/segments"
 
 	"github.com/google/uuid"
 )
 
 // ServiceErrorRates counts entry spans per service over [PreviousFrom, To]
-// in one scan, split at From. Counts add up across fragments, so each
-// fragment groups its own files and the final query sums them.
+// in one span stats query, split at From.
 func (q *SpanQuerier) ServiceErrorRates(
 	ctx context.Context,
 	projectID uuid.UUID,
 	request *spans_core.ServiceErrorRatesQuery,
 ) ([]spans_core.ServiceErrorRate, error) {
 	result := []spans_core.ServiceErrorRate{}
-	tail, records, err := q.inputs(projectID, request.PreviousFrom, request.To, segments.PruningHints{})
-	if err != nil {
-		return nil, err
-	}
-
-	fragmentSQL := "SELECT service_name, " +
-		"count(*) FILTER (WHERE start_time >= ?) AS requests, " +
-		"count(*) FILTER (WHERE start_time >= ? AND status_code = 'ERROR') AS errors, " +
-		"count(*) FILTER (WHERE start_time < ?) AS previous_requests, " +
-		"count(*) FILTER (WHERE start_time < ? AND status_code = 'ERROR') AS previous_errors " +
-		"FROM " + query.SourcePlaceholder +
-		" WHERE project_id = ? AND start_time >= ? AND start_time <= ? AND " + entrySpanPredicate +
-		" GROUP BY service_name"
-	fragmentArgs := []any{
-		request.From, request.From, request.From, request.From,
-		projectID.String(), request.PreviousFrom, request.To,
-	}
-	order := " ORDER BY errors DESC, requests DESC, service_name LIMIT ?"
-	finalSQL := "SELECT service_name, sum(requests)::BIGINT AS requests, sum(errors)::BIGINT AS errors, " +
-		"sum(previous_requests)::BIGINT, sum(previous_errors)::BIGINT FROM " + query.ResultsPlaceholder +
-		" GROUP BY service_name" + order
-
-	_, err = q.runContext(ctx, query.Request{
-		Segments:     records,
-		LocalFiles:   tail,
-		FragmentSQL:  fragmentSQL,
-		FragmentArgs: fragmentArgs,
-		FinalSQL:     finalSQL,
-		FinalArgs:    []any{request.Limit},
-		SingleSQL:    fragmentSQL + order,
-		SingleArgs:   append(append([]any{}, fragmentArgs...), request.Limit),
-		ScanBudget:   request.ScanBudget,
+	_, err := q.runStats(ctx, projectID, statsQuery{
+		schema: spanStats,
+		ranges: []interval{
+			{start: request.PreviousFrom, end: request.From},
+			{start: request.From, end: request.To, includeEnd: true},
+		},
+		selectSQL: "service_name, " +
+			"coalesce(sum(cnt) FILTER (WHERE timestamp >= ?), 0)::BIGINT AS requests, " +
+			"coalesce(sum(cnt) FILTER (WHERE timestamp >= ? AND status_code = 'ERROR'), 0)::BIGINT AS errors, " +
+			"coalesce(sum(cnt) FILTER (WHERE timestamp < ?), 0)::BIGINT AS previous_requests, " +
+			"coalesce(sum(cnt) FILTER (WHERE timestamp < ? AND status_code = 'ERROR'), 0)::BIGINT AS previous_errors",
+		selectArgs: []any{request.From, request.From, request.From, request.From},
+		whereSQL:   entryStatsPredicate,
+		groupSQL:   " GROUP BY service_name",
+		finalSQL: "SELECT service_name, sum(requests)::BIGINT AS requests, sum(errors)::BIGINT AS errors, " +
+			"sum(previous_requests)::BIGINT, sum(previous_errors)::BIGINT FROM " + query.ResultsPlaceholder +
+			" GROUP BY service_name ORDER BY errors DESC, requests DESC, service_name LIMIT ?",
+		finalArgs:  []any{request.Limit},
+		scanBudget: request.ScanBudget,
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var row spans_core.ServiceErrorRate

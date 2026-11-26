@@ -578,7 +578,8 @@ func (c *UserController) ExchangeCentralAssertion(ctx *gin.Context) {
 		case errors.Is(err, users_services.ErrLoginRateLimited):
 			ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
 		case errors.Is(err, users_services.ErrCentralExchangeForbidden),
-			errors.Is(err, users_services.ErrCentralExchangeAccountNotLinkable):
+			errors.Is(err, users_services.ErrCentralExchangeAccountNotLinkable),
+			errors.Is(err, users_services.ErrCentralExchangeEmailNotVerified):
 			ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		case errors.Is(err, users_services.ErrCentralExchangeReplayed):
 			ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})

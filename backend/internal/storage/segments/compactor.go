@@ -218,10 +218,16 @@ func (c *Compactor) MergeSegmentsWhere(
 	query := "SELECT * FROM " + fromExpr
 	_, deduplicates := DeduplicatingMerges[stream]
 	sorts := deduplicates || level < LevelCold
+	recount := false
 	if deduplicates {
 		query = fmt.Sprintf(DeduplicatingMerges[stream], fromExpr)
 	} else if level < LevelCold {
-		sorted, err := sortedSelect(c.db, stream, fromExpr, args, !records[0].IsLegacy())
+		source, err := c.withoutRepeatedIDs(stream, fromExpr, args)
+		if err != nil {
+			return nil, err
+		}
+		recount = source != fromExpr
+		sorted, err := sortedSelect(c.db, stream, source, args, !records[0].IsLegacy())
 		if err != nil {
 			return nil, err
 		}
@@ -240,7 +246,7 @@ func (c *Compactor) MergeSegmentsWhere(
 		_ = os.Remove(outputPath)
 		return nil, fmt.Errorf("failed to stat merged segment: %w", err)
 	}
-	if deduplicates || where != "" {
+	if deduplicates || recount || where != "" {
 		if err := c.db.QueryRow("SELECT count(*) FROM read_parquet(?)", outputPath).Scan(&totalRows); err != nil {
 			_ = os.Remove(outputPath)
 			return nil, fmt.Errorf("failed to count merged segment rows: %w", err)
@@ -335,6 +341,39 @@ func (c *Compactor) copyToSegment(query string, args []any, outputPath string, s
 
 // execGated runs a statement that reads or writes whole segments once the
 // gate admits it (see sortingWeight).
+// withoutRepeatedIDs is fromExpr keeping one row per CompactionUniqueColumn
+// value, or fromExpr itself when no id repeats. The check reads only the id
+// column, so a merge without repeats (nearly all) costs little more.
+func (c *Compactor) withoutRepeatedIDs(stream, fromExpr string, args []any) (string, error) {
+	column := CompactionUniqueColumn[stream]
+	if column == "" {
+		return fromExpr, nil
+	}
+	present, err := columnsOf(c.db, fromExpr, args)
+	if err != nil {
+		return "", err
+	}
+	if !present[column] {
+		return fromExpr, nil
+	}
+	if err := c.gate.Acquire(context.Background(), streamingWeight); err != nil {
+		return "", err
+	}
+	var repeated int64
+	query := `SELECT count("` + column + `") - count(DISTINCT "` + column + `") FROM ` + fromExpr
+	err = c.db.QueryRow(query, args...).Scan(&repeated)
+	c.gate.Release(streamingWeight)
+	if err != nil {
+		return "", fmt.Errorf("failed to check merge for repeated ids: %w", err)
+	}
+	if repeated == 0 {
+		return fromExpr, nil
+	}
+	telemetry.CompactionRepeatedRows.WithLabelValues(stream).Add(float64(repeated))
+	return `(SELECT * FROM ` + fromExpr + ` QUALIFY "` + column + `" IS NULL OR row_number() OVER (PARTITION BY "` +
+		column + `") = 1)`, nil
+}
+
 func (c *Compactor) execGated(sorts bool, statement string, args ...any) error {
 	weight := int64(streamingWeight)
 	if sorts {

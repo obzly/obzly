@@ -105,6 +105,23 @@ func DuckDBHandles() []DuckDBHandleKind {
 	return kinds
 }
 
+// DuckDBMemoryInUse is the memory the registered handles report in use now
+// (a busy handle's last reading), leaving out the kinds skip names.
+func DuckDBMemoryInUse(skip func(handle string) bool) int64 {
+	duckDB.mu.Lock()
+	handles := maps.Clone(duckDB.handles)
+	duckDB.mu.Unlock()
+	var total float64
+	for db, handle := range handles {
+		if skip != nil && skip(handle.name) {
+			continue
+		}
+		used, _, _ := handle.reading(db)
+		total += used
+	}
+	return int64(total)
+}
+
 func (c *duckDBCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.memory
 	ch <- c.temporary

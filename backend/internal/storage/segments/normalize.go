@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -73,8 +74,8 @@ func SourceExpr(stream string, files []ResolvedFile) (string, []any) {
 }
 
 // RegisterNormalizationFunctions adds obzly_norm_fields, obzly_norm_events,
-// obzly_norm_name and obzly_series_id to a DuckDB database (visible to all
-// its connections).
+// obzly_norm_name, obzly_series_id and obzly_is_stale to a DuckDB database
+// (visible to all its connections).
 func RegisterNormalizationFunctions(db *sql.DB) error {
 	conn, err := db.Conn(context.Background())
 	if err != nil {
@@ -95,7 +96,30 @@ func RegisterNormalizationFunctions(db *sql.DB) error {
 	if err := duckdb.RegisterScalarUDF(conn, "obzly_series_id", seriesIDFunction{}); err != nil {
 		return fmt.Errorf("failed to register obzly_series_id: %w", err)
 	}
+	if err := duckdb.RegisterScalarUDF(conn, "obzly_is_stale", staleFunction{}); err != nil {
+		return fmt.Errorf("failed to register obzly_is_stale: %w", err)
+	}
 	return nil
+}
+
+// staleNaNBits is Prometheus's value.StaleNaN.
+const staleNaNBits = 0x7ff0000000000002
+
+// staleFunction is obzly_is_stale(DOUBLE): the value is Prometheus's stale
+// marker, a NaN whose payload storage keeps but SQL can't see.
+type staleFunction struct{}
+
+func (staleFunction) Config() duckdb.ScalarFuncConfig {
+	double, _ := duckdb.NewTypeInfo(duckdb.TYPE_DOUBLE)
+	boolean, _ := duckdb.NewTypeInfo(duckdb.TYPE_BOOLEAN)
+	return duckdb.ScalarFuncConfig{InputTypeInfos: []duckdb.TypeInfo{double}, ResultTypeInfo: boolean}
+}
+
+func (staleFunction) Executor() duckdb.ScalarFuncExecutor {
+	return duckdb.ScalarFuncExecutor{RowExecutor: func(values []driver.Value) (any, error) {
+		f, ok := values[0].(float64)
+		return ok && math.Float64bits(f) == staleNaNBits, nil
+	}}
 }
 
 type stringFunction struct {

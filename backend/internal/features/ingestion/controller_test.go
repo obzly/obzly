@@ -34,7 +34,11 @@ func Test_GetIngestionStatus_WithSeededLogsSpansAndMetrics_IdentifiesEachSource(
 	now := time.Now().UTC()
 	router, project, ownerToken := newStatusRouter(t, func() time.Time { return now })
 	// Two receiving replicas: their counts for the same source add up.
-	replicaA, replicaB := newTestTracker(func() time.Time { return now }), newTestTracker(func() time.Time { return now })
+	replicaA, replicaB := newTestTracker(
+		func() time.Time { return now },
+	), newTestTracker(
+		func() time.Time { return now },
+	)
 
 	replicaA.ObserveLogs(project.ID, []*logs_core.LogItem{
 		logItem(map[string]any{"obzly_source": "edge-proxy", "service_name": "nginx", "host_name": "web-1",
@@ -55,7 +59,9 @@ func Test_GetIngestionStatus_WithSeededLogsSpansAndMetrics_IdentifiesEachSource(
 		{
 			Resource: resource(map[string]string{"service.name": "billing", "service.namespace": "payments",
 				"host.name": "vm-7", "telemetry.sdk.language": "python"}),
-			ScopeMetrics: []*metricsv1.ScopeMetrics{{Metrics: []*metricsv1.Metric{gauge("http.server.active_requests", 3)}}},
+			ScopeMetrics: []*metricsv1.ScopeMetrics{
+				{Metrics: []*metricsv1.Metric{gauge("http.server.active_requests", 3)}},
+			},
 		},
 		{
 			Resource: resource(map[string]string{"host.name": "vm-7", "os.type": "linux"}),
@@ -170,6 +176,41 @@ func Test_GetIngestionStatus_WhenNothingWasSent_ReturnsNoSources(t *testing.T) {
 		http.StatusOK, &status)
 	assert.NotNil(t, status.Sources)
 	assert.Empty(t, status.Sources)
+}
+
+func Test_GetIngestionStatus_WithRefusedData_ReportsCountsByReasonAndWhetherRetried(t *testing.T) {
+	now := time.Now().UTC()
+	router, project, ownerToken := newStatusRouter(t, func() time.Time { return now })
+	replicaA, replicaB := newTestTracker(
+		func() time.Time { return now },
+	), newTestTracker(
+		func() time.Time { return now },
+	)
+
+	replicaA.Refused(project.ID, SignalLogs, logs_core.ErrorRateLimitExceeded, 1000)
+	replicaB.Refused(project.ID, SignalLogs, logs_core.ErrorRateLimitExceeded, 500)
+	replicaA.Refused(project.ID, SignalLogs, logs_core.ErrorLogTooLarge, 3)
+	replicaA.Refused(project.ID, SignalLogs, "invalid timestamp: 2026-13-45", 2)
+	replicaB.Refused(project.ID, SignalTraces, logs_core.ErrorIngestBufferFull, 40)
+	require.NoError(t, replicaA.Flush(context.Background()))
+	require.NoError(t, replicaB.Flush(context.Background()))
+
+	var status IngestionStatusDTO
+	test_utils.MakeGetRequestAndUnmarshal(t, router, statusURL(project.ID), "Bearer "+ownerToken,
+		http.StatusOK, &status)
+
+	assert.Equal(t, 24, status.RefusedWindowHours)
+	byReason := map[string]RefusedDTO{}
+	for _, refused := range status.Refused {
+		byReason[refused.Signal+"/"+refused.Reason] = refused
+	}
+	require.Len(t, byReason, 4)
+	assert.Equal(t, status.Refused[0].Reason, logs_core.ErrorRateLimitExceeded, "most refused first")
+	assert.EqualValues(t, 1500, byReason["logs/"+logs_core.ErrorRateLimitExceeded].Count, "replicas add up")
+	assert.True(t, byReason["logs/"+logs_core.ErrorRateLimitExceeded].Retried)
+	assert.False(t, byReason["logs/"+logs_core.ErrorLogTooLarge].Retried, "the sender drops invalid logs")
+	assert.EqualValues(t, 2, byReason["logs/"+RefusedOther].Count, "free text becomes OTHER")
+	assert.True(t, byReason["traces/"+logs_core.ErrorIngestBufferFull].Retried)
 }
 
 func Test_GetIngestionStatus_ByRole_OnlyProjectMembersMayRead(t *testing.T) {

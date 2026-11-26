@@ -9,6 +9,7 @@ import (
 	dashboards_dto "obzly/internal/features/dashboards/dto"
 	dashboards_models "obzly/internal/features/dashboards/models"
 	logs_core "obzly/internal/features/logs/core"
+	metrics_testsupport "obzly/internal/features/metrics/testsupport"
 	users_enums "obzly/internal/features/users/enums"
 	users_testing "obzly/internal/features/users/testing"
 	test_utils "obzly/internal/util/testing"
@@ -302,5 +303,37 @@ func Test_ExecutePanelQuery_LogsPanelWithoutTimeRange_ReturnsBadRequest(t *testi
 			fmt.Sprintf("/api/v1/projects/dashboards/%s/query", project.ID.String()),
 			"Bearer "+owner.Token, request, http.StatusBadRequest,
 		)
+	}
+}
+
+// A metrics panel whose query fails in storage answers 500 with a fixed
+// message: it was a 400 "invalid PromQL query: query fragment failed: ...",
+// naming the fragment, the executor and the segment file. A mistake in the
+// expression still comes back with its text.
+func Test_ExecutePanelQuery_MetricsSource_WhenStorageFails_Returns500WithoutTheCause(t *testing.T) {
+	router := CreateDashboardTestRouter()
+	owner, project, _ := SetUpProjectWithLogs(t, router, "Panel Metrics Storage Failure")
+	url := fmt.Sprintf("/api/v1/projects/dashboards/%s/query", project.ID.String())
+	panel := func(promQuery string) dashboards_dto.PanelQueryRequestDTO {
+		return dashboards_dto.PanelQueryRequestDTO{
+			Panel: dashboards_models.Panel{
+				Type: dashboards_models.PanelTypeLine, Source: dashboards_models.PanelSourceMetrics,
+				PromQuery: promQuery, BucketMs: 60_000,
+			},
+			TimeRange: timeRangeCoveringNow(),
+		}
+	}
+
+	invalid := test_utils.MakePostRequest(t, router, url, "Bearer "+owner.Token,
+		panel("sum(rate(http_requests_total[5m"), http.StatusBadRequest)
+	assert.Contains(t, string(invalid.Body), "invalid PromQL query")
+	assert.Contains(t, string(invalid.Body), "parse error")
+
+	metrics_testsupport.FailSampleReads(t, nil)
+	for _, promQuery := range []string{"sum by (service) (rate(http_requests_total[5m]))", "http_requests_total"} {
+		failed := test_utils.MakePostRequest(t, router, url, "Bearer "+owner.Token,
+			panel(promQuery), http.StatusInternalServerError)
+
+		assert.JSONEq(t, `{"error":"failed to execute panel query"}`, string(failed.Body), promQuery)
 	}
 }

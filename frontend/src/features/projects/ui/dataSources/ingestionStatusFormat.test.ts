@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { IngestionSource } from '../../../../entity/projects';
 import { dataSourceCatalog } from './catalog';
-import { formatAgo, formatRate, locationText, signalChip } from './ingestionStatusFormat';
+import {
+  droppedCount,
+  formatAgo,
+  formatRate,
+  locationText,
+  refusalLabel,
+  signalChip,
+} from './ingestionStatusFormat';
 
 // Every data source id the backend can report (internal/features/ingestion/identity.go).
 const BACKEND_DATA_SOURCE_IDS = [
@@ -69,5 +76,23 @@ describe('ingestion status formatting', () => {
     expect(formatAgo('2026-11-18T11:59:56Z', now)).toBe('4 s ago');
     expect(formatAgo('2026-11-18T11:00:00Z', now)).toBe('1 h ago');
     expect(formatAgo('2026-11-16T12:00:00Z', now)).toBe('2 days ago');
+  });
+});
+
+describe('refusals', () => {
+  it('labels known reasons and falls back to the code', () => {
+    expect(refusalLabel('RATE_LIMIT_EXCEEDED')).toBe("Over the project's logs per second limit");
+    expect(refusalLabel('SOMETHING_NEW')).toBe('SOMETHING_NEW');
+  });
+
+  it('counts only what senders dropped', () => {
+    const at = '2026-11-24T09:30:00Z';
+    expect(
+      droppedCount([
+        { signal: 'logs', reason: 'RATE_LIMIT_EXCEEDED', count: 1500, lastAt: at, retried: true },
+        { signal: 'logs', reason: 'LOG_TOO_LARGE', count: 3, lastAt: at, retried: false },
+        { signal: 'traces', reason: 'BATCH_TOO_LARGE', count: 40, lastAt: at, retried: false },
+      ]),
+    ).toBe(43);
   });
 });

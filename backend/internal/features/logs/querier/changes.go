@@ -5,14 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	logs_core "obzly/internal/features/logs/core"
 	"obzly/internal/query"
+	"obzly/internal/storage/segments"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 )
 
 // Log anomalies: each message pattern's count in the current range against a
@@ -147,7 +149,7 @@ func (q *LogQuerier) ExecutePatternChanges(
 		return nil, err
 	}
 	if regrouped {
-		grown, falling = withoutRegrouped(grown, falling)
+		grown, falling = withoutRegrouped(grown, falling, baseFrom)
 		response.NewCount, response.DropCount = 0, len(falling)
 		for _, change := range grown {
 			if change.Change == logs_core.PatternChangeNew {
@@ -183,8 +185,11 @@ type patternSample struct {
 }
 
 // patternSamples is the newest log of each wanted pattern among the logs
-// matching filter in [from, to]: windows are read newest first until every
-// pattern has one.
+// matching filter in [from, to]. Where the rollups can tell each pattern's
+// newest minute (its hour from logs_1h_patterns, then the minute from
+// logs_1m), raw logs are read only there; else, and for any pattern not
+// found there, windows are read newest first until every pattern has one,
+// which reads the whole range when one of them is rare.
 func (q *LogQuerier) patternSamples(
 	ctx context.Context, projectID uuid.UUID, filter *logs_core.QueryNode, wanted []string, from, to time.Time,
 ) (map[string]patternSample, error) {
@@ -207,25 +212,30 @@ func (q *LogQuerier) patternSamples(
 	for _, hash := range wanted {
 		remaining[hash] = true
 	}
-	for _, window := range searchWindows(from, to, ordered, time.Now().UTC(), true) {
-		if len(remaining) == 0 {
-			break
+	// read looks for hashes in windows: the segments any window reaches, the
+	// rows in any window. A pattern's newest line in the union is its newest
+	// line overall as long as one window holds it.
+	read := func(windows []searchWindow, hashes []string) error {
+		var inWindows []*segments.SegmentRecord
+		seen := map[*segments.SegmentRecord]bool{}
+		for _, window := range windows {
+			for _, record := range overlapping(ordered, window) {
+				if !seen[record] {
+					seen[record] = true
+					inWindows = append(inWindows, record)
+				}
+			}
 		}
-		inWindow := overlapping(ordered, window)
-		if len(inWindow) == 0 && len(tail) == 0 {
-			continue
+		if len(hashes) == 0 || (len(inWindows) == 0 && len(tail) == 0) {
+			return nil
 		}
-		hashes := make([]any, 0, len(remaining))
-		for hash := range remaining {
-			hashes = append(hashes, hash)
+		ranges := make([]timeRange, len(windows))
+		for i, window := range windows {
+			ranges[i] = timeRange{start: window.From, end: window.To, includeEnd: window.IncludeTo}
 		}
-		upper := " < ?"
-		if window.IncludeTo {
-			upper = " <= ?"
-		}
-		where := "project_id = ? AND timestamp >= ? AND timestamp" + upper + " AND " + storedPatternHashSQL +
-			" IN (" + strings.TrimSuffix(strings.Repeat("?, ", len(hashes)), ", ") + ")"
-		args := append([]any{projectID.String(), window.From, window.To}, hashes...)
+		inRanges, rangeArgs := rangesPredicate(ranges)
+		where := "project_id = ? AND " + inRanges + " AND " + inList(storedPatternHashSQL, len(hashes))
+		args := append(append([]any{projectID.String()}, rangeArgs...), toAny(hashes)...)
 		if querySQL != "" {
 			where += " AND " + querySQL
 			args = append(args, queryArgs...)
@@ -234,7 +244,7 @@ func (q *LogQuerier) patternSamples(
 			"arg_max(level, timestamp) AS level, max(timestamp) AS newest FROM " + query.SourcePlaceholder +
 			" WHERE " + where + " GROUP BY 1"
 		err := q.coordinator.Query(ctx, query.Request{
-			Stream: q.stream, Segments: inWindow, LocalFiles: tail,
+			Stream: q.stream, Segments: inWindows, LocalFiles: tail,
 			FragmentSQL: grouped, FragmentArgs: args,
 			FinalSQL: "SELECT hash, arg_max(message, newest), arg_max(level, newest), max(newest) FROM " +
 				query.ResultsPlaceholder + " GROUP BY 1",
@@ -253,22 +263,198 @@ func (q *LogQuerier) patternSamples(
 			return nil
 		})
 		if err != nil && !errors.Is(err, query.ErrNoData) {
-			return nil, fmt.Errorf("failed to read pattern samples: %w", err)
+			return fmt.Errorf("failed to read pattern samples: %w", err)
+		}
+		return nil
+	}
+	stillWanted := func(hashes []string) []string {
+		var left []string
+		for _, hash := range hashes {
+			if remaining[hash] {
+				left = append(left, hash)
+			}
+		}
+		return left
+	}
+
+	now := time.Now().UTC()
+	if hours, ok := q.newestPatternBuckets(ctx, projectID, filter, wanted, from, to, time.Hour); ok {
+		hours = newestFirst(hours)
+		// Within each hour logs_1m tells the minute, so one read of a segment
+		// or two per located minute answers every pattern at once.
+		minutes := q.newestPatternMinutes(ctx, projectID, filter, hours, from, to)
+		var windows []searchWindow
+		var inMinutes []string
+		for i, hour := range hours {
+			hourFrom, hourTo := maxTime(hour.at, from), minTime(hour.at.Add(time.Hour), to)
+			for _, minute := range minutes[i] {
+				windows = append(windows, searchWindow{
+					From:      maxTime(minute.at, hourFrom),
+					To:        minTime(minute.at.Add(time.Minute), hourTo),
+					IncludeTo: true,
+				})
+				inMinutes = append(inMinutes, minute.hashes...)
+			}
+		}
+		if err := read(windows, inMinutes); err != nil {
+			return nil, err
+		}
+		// What the minutes didn't answer: its hour, newest first.
+		for _, hour := range hours {
+			hourFrom, hourTo := maxTime(hour.at, from), minTime(hour.at.Add(time.Hour), to)
+			inHour := overlapping(ordered, searchWindow{From: hourFrom, To: hourTo, IncludeTo: true})
+			for _, window := range searchWindows(hourFrom, hourTo, inHour, now, true) {
+				hashes := stillWanted(hour.hashes)
+				if len(hashes) == 0 {
+					break
+				}
+				if err := read([]searchWindow{window}, hashes); err != nil {
+					return nil, err
+				}
+			}
+		}
+		// A pattern without a line in the range has no sample to look for.
+		located := map[string]bool{}
+		for _, hour := range hours {
+			for _, hash := range hour.hashes {
+				located[hash] = true
+			}
+		}
+		for hash := range remaining {
+			if !located[hash] {
+				delete(remaining, hash)
+			}
+		}
+	}
+	for _, window := range searchWindows(from, to, ordered, now, true) {
+		if len(remaining) == 0 {
+			break
+		}
+		if err := read([]searchWindow{window}, slices.Collect(maps.Keys(remaining))); err != nil {
+			return nil, err
 		}
 	}
 	return samples, nil
 }
 
-// withoutRegrouped drops, from changes against a baseline older than the
-// current pattern version, the new patterns that version regrouped (they
-// had another hash in the baseline) and the dropped ones it retired (their
-// logs now have another hash). Changes without a sample stay.
-func withoutRegrouped(grown, falling []logs_core.PatternChangeDTO) (
+// patternLocateConcurrency caps the hours whose newest minutes are counted
+// at once.
+const patternLocateConcurrency = 8
+
+// patternBucket is a bucket start and the patterns whose newest line is in
+// that bucket.
+type patternBucket struct {
+	at     time.Time
+	hashes []string
+}
+
+// newestPatternBuckets groups wanted by the bucket (an hour or a minute)
+// holding each one's newest line matching filter in [from, to], counted from
+// the rollups; patterns without one are left out. ok is false when the
+// rollups can't answer (the count would read raw logs) or it was cut short.
+func (q *LogQuerier) newestPatternBuckets(
+	ctx context.Context, projectID uuid.UUID, filter *logs_core.QueryNode, wanted []string, from, to time.Time,
+	bucket time.Duration,
+) ([]patternBucket, bool) {
+	if len(wanted) == 0 {
+		return nil, true
+	}
+	hashes := logs_core.QueryNode{
+		Type: logs_core.QueryNodeTypeCondition,
+		Condition: &logs_core.ConditionNode{
+			Field: logs_core.PatternHashField, Operator: logs_core.ConditionOperatorIn, Value: toAny(wanted),
+		},
+	}
+	located := &hashes
+	if filter != nil {
+		located = &logs_core.QueryNode{
+			Type: logs_core.QueryNodeTypeLogical,
+			Logic: &logs_core.LogicalNode{
+				Operator: logs_core.LogicalOperatorAnd, Children: []logs_core.QueryNode{*filter, hashes},
+			},
+		}
+	}
+	request := &logs_core.AggregationRequestDTO{
+		Query: located, TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to},
+		GroupField: logs_core.PatternHashField, BucketMs: bucket.Milliseconds(), Limit: maxAggregationLimit,
+	}
+	if !q.rollupsApply(request) {
+		return nil, false
+	}
+	response, err := q.ExecuteAggregation(ctx, projectID, request)
+	if err != nil || len(response.Buckets) >= maxAggregationLimit {
+		return nil, false
+	}
+	newest := map[string]time.Time{}
+	for _, b := range response.Buckets {
+		if b.Count <= 0 || b.Timestamp == nil {
+			continue
+		}
+		if at := b.Timestamp.UTC(); at.After(newest[b.GroupKey]) {
+			newest[b.GroupKey] = at
+		}
+	}
+	byStart := map[time.Time][]string{}
+	for hash, at := range newest {
+		byStart[at] = append(byStart[at], hash)
+	}
+	buckets := make([]patternBucket, 0, len(byStart))
+	for at, hashes := range byStart {
+		slices.Sort(hashes)
+		buckets = append(buckets, patternBucket{at, hashes})
+	}
+	return buckets, true
+}
+
+// newestPatternMinutes is, per hour of hours, its patterns grouped by the
+// minute holding each one's newest line (nil where logs_1m can't tell).
+// The hours are counted concurrently.
+func (q *LogQuerier) newestPatternMinutes(
+	ctx context.Context, projectID uuid.UUID, filter *logs_core.QueryNode, hours []patternBucket, from, to time.Time,
+) [][]patternBucket {
+	minutes := make([][]patternBucket, len(hours))
+	var group errgroup.Group
+	group.SetLimit(patternLocateConcurrency)
+	for i, hour := range hours {
+		group.Go(func() error {
+			hourFrom, hourTo := maxTime(hour.at, from), minTime(hour.at.Add(time.Hour), to)
+			if found, ok := q.newestPatternBuckets(ctx, projectID, filter, hour.hashes, hourFrom,
+				wholeBucketEnd(hour.at, hourTo, time.Hour), time.Minute); ok {
+				minutes[i] = found
+			}
+			return nil
+		})
+	}
+	_ = group.Wait()
+	return minutes
+}
+
+// newestFirst sorts buckets by start, newest first.
+func newestFirst(buckets []patternBucket) []patternBucket {
+	slices.SortFunc(buckets, func(a, b patternBucket) int { return b.at.Compare(a.at) })
+	return buckets
+}
+
+// wholeBucketEnd is end as an inclusive range end: just before it when it
+// closes start's whole bucket, so counts read no raw edge at that instant.
+func wholeBucketEnd(start, end time.Time, bucket time.Duration) time.Time {
+	if end.Equal(start.Add(bucket)) {
+		return end.Add(-time.Nanosecond)
+	}
+	return end
+}
+
+// withoutRegrouped drops, from changes against a baseline starting at
+// baseFrom, before the current pattern version, the new patterns a version
+// since then regrouped (they had another hash in the baseline) and the
+// dropped ones retired (their logs now have another hash). Changes without
+// a sample stay.
+func withoutRegrouped(grown, falling []logs_core.PatternChangeDTO, baseFrom time.Time) (
 	[]logs_core.PatternChangeDTO, []logs_core.PatternChangeDTO,
 ) {
 	grown = slices.DeleteFunc(grown, func(change logs_core.PatternChangeDTO) bool {
 		return change.Change == logs_core.PatternChangeNew && change.Sample != "" &&
-			logs_core.PatternRegrouped(change.Sample)
+			logs_core.PatternRegrouped(change.Sample, baseFrom)
 	})
 	falling = slices.DeleteFunc(falling, func(change logs_core.PatternChangeDTO) bool {
 		return change.Sample != "" && logs_core.PatternHash(change.Sample) != change.Hash

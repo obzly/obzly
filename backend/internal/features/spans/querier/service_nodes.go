@@ -1,6 +1,7 @@
 package spans_querier
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -16,52 +17,38 @@ import (
 // app calls is a row, and the Service Map keeps only its top nodes anyway.
 const maxPeerStatRows = 5000
 
-// entrySpanPredicate is a request in the RED sense: a span that receives
-// work from outside the service, or starts a trace.
-const entrySpanPredicate = "(kind IN ('SERVER', 'CONSUMER') OR parent_span_id = '')"
+// entryStatsPredicate is a request in the RED sense, over span stats: a
+// span that receives work from outside the service, or starts a trace.
+const entryStatsPredicate = "(kind IN ('SERVER', 'CONSUMER') OR root)"
 
-const spanDurationMsExpr = "(epoch_ns(end_time) - epoch_ns(start_time)) / 1000000.0"
-
-// peerNameExpr names the peer a client span calls, by the attributes OTel
-// instrumentations set (normalized at ingest), most specific first.
-const peerNameExpr = "COALESCE(" +
-	"NULLIF(json_extract_string(attributes, '$.peer_service'), ''), " +
-	"NULLIF(json_extract_string(attributes, '$.server_address'), ''), " +
-	"NULLIF(json_extract_string(attributes, '$.net_peer_name'), ''), " +
-	"NULLIF(json_extract_string(attributes, '$.db_system'), ''), " +
-	"NULLIF(json_extract_string(attributes, '$.messaging_system'), ''))"
-
-// ServiceNodeStats returns each service's RED numbers and the untraced peers
-// its client spans call. Both queries run as one fragment each: a
-// quantile has no mergeable partial, and the peer query's anti-join must
-// see every span of a trace.
+// ServiceNodeStats returns each service's RED numbers (span stats) and the
+// untraced peers its client spans call (edge stats).
 func (q *SpanQuerier) ServiceNodeStats(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
+	scanBudget int64,
 ) (*spans_core.ServiceNodeStats, error) {
 	from, to := resolveTimeRange(timeRange)
-	tail, records, err := q.inputs(projectID, from, to, segments.PruningHints{})
-	if err != nil {
-		return nil, err
-	}
+	ranges := []interval{{start: from, end: to, includeEnd: true}}
 	result := &spans_core.ServiceNodeStats{
 		Services:  []spans_core.ServiceNodeStat{},
 		PeerEdges: []spans_core.PeerCallStat{},
 		Peers:     []spans_core.PeerNodeStat{},
 	}
 
-	servicesSQL := "SELECT service_name, " +
-		"count(*) FILTER (WHERE " + entrySpanPredicate + ") AS requests, " +
-		"count(*) FILTER (WHERE " + entrySpanPredicate + " AND status_code = 'ERROR') AS errors, " +
-		"approx_quantile(" + spanDurationMsExpr + ", 0.95) FILTER (WHERE " + entrySpanPredicate + ") AS p95 " +
-		"FROM " + query.SourcePlaceholder +
-		" WHERE project_id = ? AND start_time >= ? AND start_time <= ? GROUP BY service_name"
-	_, err = q.run(query.Request{
-		Segments:       records,
-		LocalFiles:     tail,
-		SingleSQL:      servicesSQL,
-		SingleArgs:     []any{projectID.String(), from, to},
-		SingleFragment: true,
+	_, err := q.runStats(ctx, projectID, statsQuery{
+		scanBudget: scanBudget,
+		schema:     spanStats,
+		ranges:     ranges,
+		selectSQL: "service_name, duration_bucket, " +
+			"coalesce(sum(cnt) FILTER (WHERE " + entryStatsPredicate + "), 0)::BIGINT AS requests, " +
+			"coalesce(sum(cnt) FILTER (WHERE " + entryStatsPredicate + " AND status_code = 'ERROR'), 0)::BIGINT " +
+			"AS errors",
+		groupSQL: " GROUP BY service_name, duration_bucket",
+		finalSQL: "WITH r AS (SELECT * FROM " + query.ResultsPlaceholder + ") " +
+			histogramSQL("r", "requests", []string{"service_name"}, []string{"sum(errors)::BIGINT AS errors"},
+				[]float64{0.95}),
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var stat spans_core.ServiceNodeStat
@@ -80,32 +67,29 @@ func (q *SpanQuerier) ServiceNodeStats(
 		return nil, fmt.Errorf("failed to execute service-node-stats query: %w", err)
 	}
 
-	// A client span with a child span was answered by a traced service (the
-	// call is already a ServiceCallEdges edge); only childless ones name a
-	// peer with no spans of its own.
-	peersSQL := "WITH segs AS (SELECT * FROM " + query.SourcePlaceholder + "), " +
-		"client AS (SELECT trace_id, span_id, service_name, status_code, " +
-		spanDurationMsExpr + " AS duration_ms, " +
-		"NULLIF(json_extract_string(attributes, '$.db_system'), '') AS db_system, " +
-		"NULLIF(json_extract_string(attributes, '$.messaging_system'), '') AS messaging_system, " +
-		peerNameExpr + " AS peer " +
-		"FROM segs WHERE project_id = ? AND start_time >= ? AND start_time <= ? " +
-		"AND kind IN ('CLIENT', 'PRODUCER')) " +
-		"SELECT c.service_name, c.peer, GROUPING(c.service_name) AS peer_total, " +
-		"COALESCE(max(c.db_system), ''), COALESCE(max(c.messaging_system), ''), " +
-		"count(*) AS calls, count(*) FILTER (WHERE c.status_code = 'ERROR') AS errors, " +
-		"avg(c.duration_ms), approx_quantile(c.duration_ms, 0.95) " +
-		"FROM client c WHERE c.peer IS NOT NULL AND c.peer <> c.service_name " +
-		"AND NOT EXISTS (SELECT 1 FROM segs child WHERE child.project_id = ? AND child.start_time >= ? " +
-		"AND child.trace_id = c.trace_id AND child.parent_span_id = c.span_id) " +
-		"GROUP BY GROUPING SETS ((c.service_name, c.peer), (c.peer)) " +
-		"ORDER BY calls DESC LIMIT ?"
-	_, err = q.run(query.Request{
-		Segments:       records,
-		LocalFiles:     tail,
-		SingleSQL:      peersSQL,
-		SingleArgs:     []any{projectID.String(), from, to, projectID.String(), from, maxPeerStatRows},
-		SingleFragment: true,
+	// Per caller and peer, and per peer (src NULL, peer_total 1).
+	peersSQL := "WITH r AS (SELECT * FROM " + query.ResultsPlaceholder + "), " +
+		"m AS (SELECT src, dst, max(db_system) AS db_system, max(messaging_system) AS messaging_system, " +
+		"duration_bucket, sum(cnt) AS cnt, sum(errs) AS errs, sum(duration_sum) AS duration_sum " +
+		"FROM r GROUP BY src, dst, duration_bucket), " +
+		"g AS (SELECT src, dst, 0 AS peer_total, db_system, messaging_system, duration_bucket, cnt, errs, " +
+		"duration_sum FROM m UNION ALL SELECT NULL, dst, 1, max(db_system), max(messaging_system), duration_bucket, " +
+		"sum(cnt), sum(errs), sum(duration_sum) FROM m GROUP BY dst, duration_bucket) " +
+		"SELECT src, dst, peer_total, db_system, messaging_system, cnt, errs, avg_ms, p95 FROM (" +
+		histogramSQL("g", "cnt", []string{"src", "dst", "peer_total"}, []string{
+			"COALESCE(max(db_system), '') AS db_system", "COALESCE(max(messaging_system), '') AS messaging_system",
+			"sum(errs)::BIGINT AS errs", "sum(duration_sum) / sum(cnt) AS avg_ms",
+		}, []float64{0.95}) + ") ORDER BY cnt DESC LIMIT ?"
+	_, err = q.runStats(ctx, projectID, statsQuery{
+		scanBudget: scanBudget,
+		schema:     edgeStats,
+		ranges:     ranges,
+		selectSQL: "src, dst, max(db_system) AS db_system, max(messaging_system) AS messaging_system, " +
+			"duration_bucket, sum(cnt)::BIGINT AS cnt, sum(err_cnt)::BIGINT AS errs, sum(duration_sum) AS duration_sum",
+		whereSQL:  "peer",
+		groupSQL:  " GROUP BY src, dst, duration_bucket",
+		finalSQL:  peersSQL,
+		finalArgs: []any{maxPeerStatRows},
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var src sql.NullString
