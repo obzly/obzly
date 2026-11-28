@@ -6,6 +6,7 @@ import (
 
 	metrics_core "obzly/internal/features/metrics/core"
 	users_middleware "obzly/internal/features/users/middleware"
+	"obzly/internal/query"
 	"obzly/internal/util/logger"
 	"obzly/internal/util/querylimit"
 
@@ -170,8 +171,8 @@ func (c *MetricQueryController) PromQLQuery(ctx *gin.Context) {
 
 	response, err := c.metricQueryService.PromQLQuery(ctx.Request.Context(), projectID, &request, user)
 	if err != nil {
-		if errors.Is(err, ErrInvalidPromQL) {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if status := promQLErrorStatus(err); status != 0 {
+			ctx.JSON(status, gin.H{"error": err.Error()})
 			return
 		}
 		c.handleError(ctx, err)
@@ -184,6 +185,10 @@ func (c *MetricQueryController) PromQLQuery(ctx *gin.Context) {
 func (c *MetricQueryController) handleError(ctx *gin.Context, err error) {
 	if errors.Is(err, querylimit.ErrTooManyQueries) {
 		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		return
+	}
+	if query.IsTimeout(err) {
+		ctx.JSON(http.StatusRequestTimeout, gin.H{"error": "the query timed out: narrow the time range"})
 		return
 	}
 	switch err.Error() {

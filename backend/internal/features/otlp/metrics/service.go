@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	collectormetricsv1 "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricsv1 "go.opentelemetry.io/proto/otlp/metrics/v1"
 )
 
@@ -68,7 +69,7 @@ func (s *OtlpMetricsService) Export(
 
 	resolved, err := s.apiKeyService.ResolveProjectFromApiKey(apiKey)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to resolve API key: %w", err)
+		return 0, 0, &ExportError{Code: ExportErrorUnavailable, Message: api_keys.LookupUnavailableMessage}
 	}
 	if !resolved.IsValid {
 		return 0, 0, &ExportError{Code: ExportErrorUnauthenticated, Message: "invalid API key"}
@@ -76,11 +77,20 @@ func (s *OtlpMetricsService) Export(
 
 	conversion := ConvertResourceMetrics(resolved.ProjectID, resourceMetrics)
 	converted, rejected := conversion.Samples, conversion.Rejected
+	ids := otlp.RowIDs(
+		resolved.ProjectID,
+		&collectormetricsv1.ExportMetricsServiceRequest{ResourceMetrics: resourceMetrics},
+	)
+	for _, sample := range converted {
+		sample.ID = ids.Next()
+	}
 	if len(converted) == 0 {
 		telemetry.IngestRejectedRows.WithLabelValues(telemetry.SignalMetrics).Add(float64(rejected))
 		return 0, rejected, nil
 	}
 	if len(converted) > maxSamplesPerExport {
+		ingestion.GetTracker().
+			Refused(resolved.ProjectID, ingestion.SignalMetrics, ingestion.TooLargeReason, len(converted))
 		return 0, 0, &ExportError{
 			Code: ExportErrorInvalidArgument,
 			Message: fmt.Sprintf(
@@ -99,6 +109,8 @@ func (s *OtlpMetricsService) Export(
 	if client := broker.Default(); client != nil {
 		if err := ingest.Publish(client, broker.SignalMetrics, resolved.ProjectID, converted); err != nil {
 			s.undoCumulative(undo)
+			ingestion.GetTracker().Refused(resolved.ProjectID, ingestion.SignalMetrics,
+				ingestion.PublishRefusalReason(err), len(converted))
 			return 0, 0, publishError(err)
 		}
 	} else if err := metrics_core.GetMetricCoreRepository().StoreSamplesBatch(entries); err != nil {

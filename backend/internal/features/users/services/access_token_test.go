@@ -83,7 +83,13 @@ func Test_GenerateAccessTokenWithOptions_ExtraClaimsCannotShadowReserved(t *test
 
 	exp := time.Unix(int64(claims["exp"].(float64)), 0)
 	iat := time.Unix(int64(claims["iat"].(float64)), 0)
-	assert.InDelta(t, time.Hour.Seconds(), exp.Sub(iat).Seconds(), 2, "custom TTL must be honored, not the injected exp")
+	assert.InDelta(
+		t,
+		time.Hour.Seconds(),
+		exp.Sub(iat).Seconds(),
+		2,
+		"custom TTL must be honored, not the injected exp",
+	)
 }
 
 // Session tokens: HS256 only; expired and future-issued tokens are refused.
@@ -118,4 +124,25 @@ func Test_GetUserAndClaimsFromToken_RefusesOtherAlgorithmsAndBadTimes(t *testing
 	_, _, err = service.GetUserAndClaimsFromToken(sign(jwt.SigningMethodHS256, claims(now, now.Add(time.Hour))))
 	require.Error(t, err, "an unknown user")
 	assert.NotContains(t, err.Error(), "invalid token", "a well-formed HS256 token passes parsing")
+}
+
+// Another replica's clock may run slightly ahead: a token it just signed is
+// still accepted here.
+func Test_GetUserAndClaimsFromToken_WhenIssuedSecondsAheadOnAnotherReplica_Accepts(t *testing.T) {
+	service := GetUserService()
+	secret, err := service.secretKeyRepository.GetSecretKey()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": uuid.NewString(),
+		"iat": now.Add(2 * time.Second).Unix(),
+		"exp": now.Add(time.Hour).Unix(),
+		"jti": uuid.NewString(),
+	}).SignedString([]byte(secret))
+	require.NoError(t, err)
+
+	_, _, err = service.GetUserAndClaimsFromToken(token)
+
+	require.Error(t, err, "an unknown user")
+	assert.NotContains(t, err.Error(), "invalid token")
 }

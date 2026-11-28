@@ -17,13 +17,14 @@ import (
 func Test_RemoteWrite_WhenIngestBufferFull_Returns503WithRetryAfter(t *testing.T) {
 	ingesttest.StartBroker(t, 2048)
 	router, apiKey, _ := setUpFixture("Remote Write JetStream full")
-	request := &prompb.WriteRequest{Timeseries: []prompb.TimeSeries{{
-		Labels:  []prompb.Label{{Name: "__name__", Value: "fill_total"}},
-		Samples: []prompb.Sample{{Value: 1, Timestamp: time.Now().UTC().UnixMilli()}},
-	}}}
-
 	code, retryAfter := http.StatusNoContent, ""
 	for i := 0; i < 20 && code == http.StatusNoContent; i++ {
+		// A different sample each time: an identical request is a duplicate
+		// the stream drops, which never fills it.
+		request := &prompb.WriteRequest{Timeseries: []prompb.TimeSeries{{
+			Labels:  []prompb.Label{{Name: "__name__", Value: "fill_total"}},
+			Samples: []prompb.Sample{{Value: float64(i), Timestamp: time.Now().UTC().UnixMilli()}},
+		}}}
 		recorder := postRemoteWrite(t, router, apiKey.Token, request)
 		code, retryAfter = recorder.Code, recorder.Header().Get("Retry-After")
 	}

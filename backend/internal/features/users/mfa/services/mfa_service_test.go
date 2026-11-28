@@ -82,46 +82,36 @@ func Test_Enable_WithoutSetup_Rejected(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotSetUp)
 }
 
-func Test_Disable_ForMember_WithValidCode_Succeeds(t *testing.T) {
-	user := createTestUser(t, users_enums.UserRoleMember)
+// MFA is required for every role: even with a valid code nobody can turn it off.
+func Test_Disable_WithValidCode_RejectedForEveryRole(t *testing.T) {
+	for _, role := range []users_enums.UserRole{users_enums.UserRoleMember, users_enums.UserRoleAdmin} {
+		user := createTestUser(t, role)
 
-	setup, err := mfaService.Setup(user)
-	require.NoError(t, err)
-	reloadedForEnable, err := userRepository.GetUserByID(user.ID)
-	require.NoError(t, err)
-	require.NoError(t, mfaService.Enable(reloadedForEnable, codeFor(t, setup.Secret)))
+		setup, err := mfaService.Setup(user)
+		require.NoError(t, err)
+		reloadedForEnable, err := userRepository.GetUserByID(user.ID)
+		require.NoError(t, err)
+		require.NoError(t, mfaService.Enable(reloadedForEnable, codeFor(t, setup.Secret)))
 
-	reloaded, err := userRepository.GetUserByID(user.ID)
-	require.NoError(t, err)
+		reloaded, err := userRepository.GetUserByID(user.ID)
+		require.NoError(t, err)
 
-	err = mfaService.Disable(reloaded, nextCodeFor(t, setup.Secret))
-	require.NoError(t, err)
+		err = mfaService.Disable(reloaded, nextCodeFor(t, setup.Secret))
+		assert.ErrorIs(t, err, ErrRequired, role)
 
-	final, err := userRepository.GetUserByID(user.ID)
-	require.NoError(t, err)
-	assert.False(t, final.MFAEnabled)
-	assert.Nil(t, final.MFASecretEncrypted)
+		stillEnabled, err := userRepository.GetUserByID(user.ID)
+		require.NoError(t, err)
+		assert.True(t, stillEnabled.MFAEnabled, role)
+	}
 }
 
-// Even with a valid code, an Admin can't disable their own MFA.
-func Test_Disable_ForAdmin_Rejected(t *testing.T) {
-	user := createTestUser(t, users_enums.UserRoleAdmin)
+func Test_GetStatus_ForMember_ReportsRequired(t *testing.T) {
+	user := createTestUser(t, users_enums.UserRoleMember)
 
-	setup, err := mfaService.Setup(user)
-	require.NoError(t, err)
-	reloadedForEnable, err := userRepository.GetUserByID(user.ID)
-	require.NoError(t, err)
-	require.NoError(t, mfaService.Enable(reloadedForEnable, codeFor(t, setup.Secret)))
+	status := mfaService.GetStatus(user)
 
-	reloaded, err := userRepository.GetUserByID(user.ID)
-	require.NoError(t, err)
-
-	err = mfaService.Disable(reloaded, codeFor(t, setup.Secret))
-	assert.ErrorIs(t, err, ErrRequiredForAdmin)
-
-	stillEnabled, err := userRepository.GetUserByID(user.ID)
-	require.NoError(t, err)
-	assert.True(t, stillEnabled.MFAEnabled)
+	assert.True(t, status.Required)
+	assert.False(t, status.Enabled)
 }
 
 // AdminReset is how a locked-out admin's MFA is cleared, including by another admin.

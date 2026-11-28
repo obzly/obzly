@@ -74,13 +74,21 @@ func Test_MCP_ReadToken_NeitherListsNorCallsWriteTools(t *testing.T) {
 	assert.Empty(t, listSilences(t, env))
 }
 
+// MFA is required for every account: a session without it can't reach the
+// route, and the service still refuses write to a session that didn't pass MFA.
 func Test_CreateAccessToken_WithWrite_NeedsASessionThatPassedMFA(t *testing.T) {
 	env := newWriteEnv(t)
 
-	resp := test_utils.MakePostRequest(t, env.router, "/api/v1/access-tokens", "Bearer "+env.owner.Token,
+	withoutMFA := users_testing.CreateTestUserWithoutMFA(users_enums.UserRoleMember)
+	resp := test_utils.MakePostRequest(t, env.router, "/api/v1/access-tokens", "Bearer "+withoutMFA.Token,
 		access_tokens.CreateAccessTokenRequestDTO{Name: "writer", ExpiresInDays: 30, Write: true},
-		http.StatusBadRequest)
-	assert.Contains(t, string(resp.Body), "two-factor")
+		http.StatusForbidden)
+	assert.Contains(t, string(resp.Body), "mfaSetupRequired")
+	user, err := (&users_repositories.UserRepository{}).GetUserByID(withoutMFA.UserID)
+	require.NoError(t, err)
+	_, err = access_tokens.GetAccessTokenService().Create(user,
+		&access_tokens.CreateAccessTokenRequestDTO{Name: "writer", ExpiresInDays: 30, Write: true}, false)
+	assert.ErrorIs(t, err, access_tokens.ErrWriteRequiresMFA)
 
 	var list access_tokens.ListAccessTokensResponseDTO
 	test_utils.MakeGetRequestAndUnmarshal(t, env.router, "/api/v1/access-tokens", "Bearer "+env.owner.Token,
@@ -317,14 +325,17 @@ func createWriteRouter() *gin.Engine {
 	return router
 }
 
-// writeToken is a write token created by a session that passed MFA elsewhere
-// (a control plane or trusted SSO), the way a Member without local MFA gets one.
+// writeToken is a write token created with an authenticator code, as every
+// account with local MFA creates one.
 func writeToken(t *testing.T, signIn *users_dto.SignInResponseDTO) string {
 	t.Helper()
+	code := users_testing.EnableRealMFAForTestUser(signIn.UserID, signIn.Email)
 	user, err := (&users_repositories.UserRepository{}).GetUserByID(signIn.UserID)
 	require.NoError(t, err)
 	created, err := access_tokens.GetAccessTokenService().Create(user,
-		&access_tokens.CreateAccessTokenRequestDTO{Name: "writer (mfa)", ExpiresInDays: 30, Write: true}, true)
+		&access_tokens.CreateAccessTokenRequestDTO{
+			Name: "writer (mfa)", ExpiresInDays: 30, Write: true, MFACode: &code,
+		}, false)
 	require.NoError(t, err)
 	return created.Token
 }

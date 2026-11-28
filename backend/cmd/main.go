@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -90,6 +92,7 @@ import (
 	users_services "obzly/internal/features/users/services"
 	sso_controllers "obzly/internal/features/users/sso/controllers"
 	"obzly/internal/features/webanalytics"
+	"obzly/internal/ingest"
 	"obzly/internal/query"
 	"obzly/internal/query/partcache"
 	"obzly/internal/storage"
@@ -156,6 +159,7 @@ func main() {
 	startMetricsServer(log)
 	// Before any DuckDB handle opens.
 	segments.SetMaxSpillSize(config.GetEnv().QuerierSpillMaxSize)
+	segments.SetMetricPartials1mDays(config.GetEnv().MetricsPartials1mDays)
 
 	if mode.IsBroker() {
 		runBroker(log)
@@ -261,6 +265,7 @@ func main() {
 
 	if mode.RunsSignalStorage() {
 		logDuckDBBudget(log)
+		startQueryMemoryGate(log)
 	}
 
 	if !mode.ServesHTTP() {
@@ -368,6 +373,10 @@ func startMetricsServer(log *slog.Logger) {
 // Kubernetes probes use the server's own /healthz on NATS_MONITOR_PORT.
 func runBroker(log *slog.Logger) {
 	env := config.GetEnv()
+	if limit := brokerGoMemoryLimit(segments.ContainerMemoryLimit(), os.Getenv("GOMEMLIMIT") != ""); limit > 0 {
+		debug.SetMemoryLimit(limit)
+		log.Info("Go memory limit set", "limit", segments.FormatBytes(limit))
+	}
 	srv, err := broker.StartServer(broker.ServerConfig{
 		Name:        env.NatsServerName,
 		StoreDir:    env.JetStreamDir,
@@ -424,6 +433,7 @@ func runQuerier(log *slog.Logger) {
 		os.Exit(1)
 	}
 	telemetry.RegisterDuckDB("query_executor", db, segments.MemoryLimitBytes(executorLimit))
+	followDuckDBWithGoMemoryLimit(log)
 	go runPeriodicColdCacheEviction(log)
 	// The id file follows the disk: with a persistent cache volume this
 	// executor keeps its share of segments, and its cache, across restarts.
@@ -439,7 +449,16 @@ func runQuerier(log *slog.Logger) {
 		// Lists executors only, never fetches results: no client TLS needed.
 		registry := query.NewRegistry(client.Conn, env.QuerierToken, nil, log)
 		cacheDir := filepath.Join(env.LogsDataDir, "cache")
-		go warmQuerierCache(ctx, log, registry, store, affinity)
+		// The first call discovers synchronously; this executor isn't one yet.
+		joining := slices.ContainsFunc(registry.Executors(), func(executor query.Executor) bool {
+			withAffinity, ok := executor.(interface{ Affinity() string })
+			return !ok || withAffinity.Affinity() != affinity
+		})
+		warmed := make(chan struct{})
+		go func() {
+			defer close(warmed)
+			warmQuerierCache(ctx, log, registry, store, affinity, joining)
+		}()
 		go func() {
 			err := query.ServePrefetch(ctx, client.Conn, registry, affinity, func(record *segments.SegmentRecord) {
 				segments.WarmCache(ctx, store, cacheDir, []*segments.SegmentRecord{record}, record.SizeBytes)
@@ -448,6 +467,9 @@ func runQuerier(log *slog.Logger) {
 				log.Warn("Pre-fetching uploaded segments is off", "error", err)
 			}
 		}()
+		if joining && env.QuerierWarmWait > 0 {
+			waitForWarmCache(ctx, log, warmed, env.QuerierWarmWait)
+		}
 	}
 	err = query.Serve(ctx, query.ServeConfig{
 		Conn:          client.Conn,
@@ -511,36 +533,36 @@ func openQueryExecutorDB(limit, spillDir, maxSpill string) (*sql.DB, error) {
 // waits for the others restarting with it before deciding its share.
 const querierWarmPeerWait = 15 * time.Second
 
+// waitForWarmCache holds an executor joining running ones until its cache is
+// warm, at most wait: it takes no fragments meanwhile, and its readiness
+// probe (the results port) holds a rolling update. The update used to move
+// on at once, so the next executor restarted while this one, alone, warmed
+// the other's share too and read the rest of every query from object storage.
+func waitForWarmCache(ctx context.Context, log *slog.Logger, warmed <-chan struct{}, wait time.Duration) {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-warmed:
+	case <-ctx.Done():
+	case <-timer.C:
+		log.Info("Taking query fragments before the cache is warm; it keeps warming", "waited", wait)
+	}
+}
+
 // warmQuerierCache downloads this executor's share of the last
 // QUERIER_WARM_HOURS of segments into its cache, up to half of it (the rest
 // stays for what queries bring in), so the first wide search after a
-// restart doesn't read everything from object storage.
+// restart doesn't read everything from object storage. Joining running
+// executors, its share is clear at once; else it waits until it is
+// discoverable and for the others starting with it.
 func warmQuerierCache(
 	ctx context.Context, log *slog.Logger, registry *query.Registry, store *segments.ObjectStore, affinity string,
+	joining bool,
 ) {
-	env := config.GetEnv()
-	discoverable := func() bool {
-		for _, executor := range registry.Executors() {
-			if withAffinity, ok := executor.(interface{ Affinity() string }); ok &&
-				withAffinity.Affinity() == affinity {
-				return true
-			}
-		}
-		return false
-	}
-	for !discoverable() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(time.Second):
-		}
-	}
-	select {
-	case <-ctx.Done():
+	if !joining && !waitForQuerierPeers(ctx, registry, affinity) {
 		return
-	case <-time.After(querierWarmPeerWait):
 	}
-
+	env := config.GetEnv()
 	started := time.Now()
 	records, err := (&segments.SegmentRepository{}).ListUploadedSince(
 		time.Now().UTC().Add(-time.Duration(env.QuerierWarmHours) * time.Hour))
@@ -554,6 +576,33 @@ func warmQuerierCache(
 	log.Info("Query cache warmed", "hours", env.QuerierWarmHours, "segments", len(owned),
 		"downloaded", result.Downloaded, "alreadyCached", result.Cached, "failed", result.Failed,
 		"bytes", result.Bytes, "duration", time.Since(started).Round(time.Second))
+}
+
+// waitForQuerierPeers waits until this executor is discoverable, then for
+// the others starting with it; false when ctx ends first.
+func waitForQuerierPeers(ctx context.Context, registry *query.Registry, affinity string) bool {
+	discoverable := func() bool {
+		for _, executor := range registry.Executors() {
+			if withAffinity, ok := executor.(interface{ Affinity() string }); ok &&
+				withAffinity.Affinity() == affinity {
+				return true
+			}
+		}
+		return false
+	}
+	for !discoverable() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Second):
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(querierWarmPeerWait):
+		return true
+	}
 }
 
 // setUpBroker connects to the JetStream ingest buffer (in-process in
@@ -581,6 +630,13 @@ func setUpBroker(log *slog.Logger) {
 	}
 	broker.SetDefault(client)
 	segments.SetUploadNotifier(func(record *segments.SegmentRecord) { query.PublishUploaded(client.Conn, record) })
+	// Receivers spread a busy project's batches over its lanes; workers place
+	// lane shards by the same counts.
+	if env.IngestLanes == config.IngestLanesAuto {
+		lanes := broker.NewLaneCache(broker.NewPostgresLaneStore(storage.GetDb()), cache.GetCache(), log)
+		broker.SetLaneCache(lanes)
+		go lanes.Run(context.Background())
+	}
 	log.Info("JetStream ingest buffer connected",
 		"embedded", env.EmbedsBroker(), "replicas", env.JetStreamReplicas)
 }
@@ -611,10 +667,6 @@ const workerQuerierThreads = 2
 // release their shards (flush, upload, ack). Nil unless they run.
 var ingestConsumers func()
 
-// ingestAckMargin: AckWait is the L0 max-age plus this, time to flush and
-// upload before JetStream redelivers.
-const ingestAckMargin = 10 * time.Minute
-
 // startIngestConsumers makes this all/worker replica a segment writer for its
 // share of each signal's ingest shards.
 func startIngestConsumers(log *slog.Logger) {
@@ -641,15 +693,34 @@ func startIngestConsumers(log *slog.Logger) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
+	var runners []*broker.ShardRunner
 	for signal, sink := range sinks {
 		runner, err := broker.NewShardRunner(broker.Default(), cache.GetCache(), signal,
-			maxAge+ingestAckMargin, sink, log)
+			ingest.AckWait, sink, log)
 		if err != nil {
 			log.Error("Failed to set up an ingest consumer", "signal", signal, "error", err)
 			os.Exit(1)
 		}
 		// Compaction follows the same shard leases.
 		broker.RegisterRunner(runner)
+		runners = append(runners, runner)
+	}
+	// By load across signals unless INGEST_SHARD_BALANCE=count; set before
+	// the runners start, so they never claim by count first.
+	if env.IngestShardBalance == config.IngestShardBalanceLoad {
+		maxLanes := 0
+		if env.IngestLanes == config.IngestLanesAuto {
+			maxLanes = env.IngestMaxLanes
+		}
+		balancer := broker.NewBalancer(cache.GetCache(), runners, log,
+			broker.WithLanes(maxLanes, broker.DefaultLaneCache()))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			balancer.Run(ctx)
+		}()
+	}
+	for _, runner := range runners {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -660,7 +731,8 @@ func startIngestConsumers(log *slog.Logger) {
 		cancel()
 		wg.Wait()
 	}
-	log.Info("JetStream ingest consumers started", "l0TargetBytes", target, "l0MaxAge", maxAge)
+	log.Info("JetStream ingest consumers started", "l0TargetBytes", target, "l0MaxAge", maxAge,
+		"shardBalance", env.IngestShardBalance)
 }
 
 // mustDurableWriter exits when a store's durable writer can't be created.
@@ -1430,6 +1502,106 @@ func setUpLogsStorage(log *slog.Logger) {
 	cleanupStaleTempSegments(log, logs_core.StreamAILogs, aiRepository.CleanupStaleTempFiles)
 
 	logs_core.SetAIRepository(aiRepository)
+}
+
+// Memory gate for SQL mode's per-query DuckDB handles (segments.MemoryGate).
+const (
+	// sandboxMemoryFloor: a sandbox admitted with less would spill too much
+	// to be useful; it waits for room instead.
+	sandboxMemoryFloor = 256 << 20
+	// sandboxMemoryWait: how long a sandbox waits for room before a 429.
+	sandboxMemoryWait = 10 * time.Second
+	// queryMemoryRefresh: how often the long-lived handles' use is re-read
+	// and Go's memory limit follows.
+	queryMemoryRefresh = 2 * time.Second
+)
+
+// startQueryMemoryGate admits SQL-mode sandboxes within QUERY_MEMORY_FRACTION
+// of the container and, unless GOMEMLIMIT is set, keeps Go's soft memory limit
+// at what DuckDB leaves (goMemoryLimit), so Go collects harder while DuckDB is
+// busy. A no-op without a container memory limit or with the fraction at 0.
+func startQueryMemoryGate(log *slog.Logger) {
+	container := segments.ContainerMemoryLimit()
+	fraction := config.GetEnv().QueryMemoryFraction
+	if container <= 0 || fraction <= 0 {
+		log.Info("Query memory gate off", "containerLimit", container, "fraction", fraction)
+		return
+	}
+	gate := segments.NewMemoryGate(int64(float64(container)*fraction), sandboxMemoryFloor, sandboxMemoryWait)
+	segments.SetQueryMemoryGate(gate)
+	goManaged := os.Getenv("GOMEMLIMIT") == ""
+	refresh := func() {
+		gate.SetInUse(telemetry.DuckDBMemoryInUse(segments.IsSandboxHandle))
+		if goManaged {
+			debug.SetMemoryLimit(goMemoryLimit(container, gate.InUse()+gate.Admitted()))
+		}
+	}
+	refresh()
+	go func() {
+		ticker := time.NewTicker(queryMemoryRefresh)
+		defer ticker.Stop()
+		for range ticker.C {
+			refresh()
+		}
+	}()
+	log.Info("Query memory gate on", "capacity", segments.FormatBytes(int64(float64(container)*fraction)),
+		"goMemoryLimit", map[bool]string{true: "follows DuckDB", false: "GOMEMLIMIT"}[goManaged])
+}
+
+// brokerGoMemoryLimit is a broker's Go soft memory limit: 90% of its
+// container, unless GOMEMLIMIT is set or there is no container limit (0:
+// leave Go's default). Recovering a full stream after a restart (5.6 GB of
+// pending batches in the lab) reads block after block; Go let the heap grow
+// to twice what was live, past a 2 GiB limit, and each restart, rebuilding
+// the stream's index again, was OOM-killed: all three brokers crash-looped.
+func brokerGoMemoryLimit(containerBytes int64, gomemlimitSet bool) int64 {
+	if gomemlimitSet || containerBytes <= 0 {
+		return 0
+	}
+	return containerBytes * 9 / 10
+}
+
+// followDuckDBWithGoMemoryLimit keeps a querier's Go soft memory limit at
+// what its DuckDB executor leaves, refreshed like the api's (which the
+// memory gate does), unless GOMEMLIMIT is set. Queriers had none: Go's heap
+// (results, fetched column chunks, gRPC buffers) could grow to twice what
+// was live beside an executor allowed 60% of the pod.
+func followDuckDBWithGoMemoryLimit(log *slog.Logger) {
+	container := segments.ContainerMemoryLimit()
+	refresh := func() int64 {
+		limit := replicaGoMemoryLimit(container, telemetry.DuckDBMemoryInUse(nil), os.Getenv("GOMEMLIMIT") != "")
+		if limit > 0 {
+			debug.SetMemoryLimit(limit)
+		}
+		return limit
+	}
+	if refresh() <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(queryMemoryRefresh)
+		defer ticker.Stop()
+		for range ticker.C {
+			refresh()
+		}
+	}()
+	log.Info("Go memory limit follows DuckDB", "containerLimit", segments.FormatBytes(container))
+}
+
+// replicaGoMemoryLimit is goMemoryLimit, or 0 (leave Go's default) when
+// GOMEMLIMIT is set or the container has no limit.
+func replicaGoMemoryLimit(containerBytes, duckDBBytes int64, gomemlimitSet bool) int64 {
+	if gomemlimitSet || containerBytes <= 0 {
+		return 0
+	}
+	return goMemoryLimit(containerBytes, duckDBBytes)
+}
+
+// goMemoryLimit is Go's soft memory limit while DuckDB uses duckDBBytes of a
+// container of containerBytes: 90% of the container minus DuckDB's share, and
+// never under a quarter of it, where garbage collection would spin.
+func goMemoryLimit(containerBytes, duckDBBytes int64) int64 {
+	return max(containerBytes/4, containerBytes*9/10-duckDBBytes)
 }
 
 // logDuckDBBudget logs once what this replica's DuckDB handles may use if

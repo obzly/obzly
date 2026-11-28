@@ -11,7 +11,7 @@ description: How to write and run Obzly Go tests (real Postgres/Valkey, HTTP-lev
 - Prefer testing through HTTP: build a gin router with the real controllers and call it with `test_utils.MakeGetRequest` / `MakePostRequestAndUnmarshal` (`internal/util/testing`).
 - Unit tests are fine for pure logic with no endpoint (parsers, pattern hashing, DTO conversion).
 - Test files are `controller_test.go` / `service_test.go` / `<topic>_test.go`, never `integration_test.go`.
-- Reuse helpers: `users_testing.CreateTestUser(role)` (admins get MFA enabled), `projects_testing.*`, fake OIDC server in `users/controllers/sso_testhelpers_test.go`. Put new shared helpers in the feature's `testing/` package.
+- Reuse helpers: `users_testing.CreateTestUser(role)` (MFA enabled for every role, as it is required; `CreateTestUserWithoutMFA` for the setup gate), `projects_testing.*`, fake OIDC server in `users/controllers/sso_testhelpers_test.go`. Put new shared helpers in the feature's `testing/` package.
 - Always add a regression test with a bug fix.
 
 ## Environment

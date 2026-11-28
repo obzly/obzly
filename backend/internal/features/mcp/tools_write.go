@@ -254,7 +254,8 @@ func (t *toolSet) registerWrite(server *mcp.Server) {
 
 // tokenCanWrite reports whether a verified token carries mcp:write.
 func tokenCanWrite(info *auth.TokenInfo) bool {
-	return info != nil && access_tokens.HasScope(info.Scopes, access_tokens.ScopeMCPWrite)
+	return info != nil && access_tokens.WriteEnabled() &&
+		access_tokens.HasScope(info.Scopes, access_tokens.ScopeMCPWrite)
 }
 
 // checkSiteCall allows a Site call on the read allowlist, or on the write one

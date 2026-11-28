@@ -220,10 +220,7 @@ func (q *MetricQuerier) SelectSeries(
 				}
 				seen++
 				if seen > maxSeriesRows {
-					return fmt.Errorf(
-						"query matches more than %d raw samples; narrow the time range or matchers",
-						maxSeriesRows,
-					)
+					return tooManySamples()
 				}
 				key := metricName + "\x00" + labelsJSON
 				acc, ok := bySeries[key]
@@ -346,10 +343,7 @@ func (q *MetricQuerier) selectByID(
 				}
 				seen++
 				if seen > maxSeriesRows {
-					return fmt.Errorf(
-						"query matches more than %d raw samples; narrow the time range or matchers",
-						maxSeriesRows,
-					)
+					return tooManySamples()
 				}
 				if series, ok := bySeries[seriesID]; ok {
 					series.Samples = append(series.Samples, metrics_core.SampleDTO{Timestamp: ts, Value: value})
@@ -388,13 +382,16 @@ func (q *MetricQuerier) ListMetricNames(
 	projectID uuid.UUID,
 	timeRange *metrics_core.TimeRangeDTO,
 ) (*metrics_core.ListMetricNamesResponseDTO, error) {
-	from, to := resolveTimeRange(timeRange)
+	// Without a start (the metric picker, list_metrics) the name index alone
+	// answers, as labelLookupRange does for labels: the fallback read every
+	// metrics segment since 1970 and timed out on a busy project.
+	from, to, indexOnly := labelLookupRange(timeRange)
 	latest := map[string]nameType{}
 	covered, err := q.seriesCovered(projectID, from)
 	if err != nil {
 		return nil, err
 	}
-	if covered {
+	if covered || indexOnly {
 		// The label index (no segment read), then the tail's samples.
 		if err := namesFromIndex(latest, projectID, from, to); err != nil {
 			return nil, err
@@ -1031,6 +1028,12 @@ func matcherSQL(matchers []metrics_core.MatcherDTO) (string, []any, error) {
 	var parts []string
 	var args []any
 	for _, m := range matchers {
+		// Dashboards fill unset variables with =~".*": it matches every
+		// series, absent label included, so it costs nothing to skip, where
+		// the regex ran on every row's labels.
+		if m.Type == metrics_core.MatchRegexp && m.Value == ".*" {
+			continue
+		}
 		value := "metric_name"
 		if m.Name != "__name__" {
 			value = "coalesce(json_extract_string(labels, ?), '')"
@@ -1118,4 +1121,9 @@ func clampToRepresentableRange(t time.Time) time.Time {
 		return maxRepresentableTime
 	}
 	return t
+}
+
+func tooManySamples() error {
+	return &metrics_core.LimitError{Message: fmt.Sprintf(
+		"query matches more than %d raw samples; narrow the time range or matchers", maxSeriesRows)}
 }

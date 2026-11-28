@@ -94,7 +94,7 @@ func (s *DashboardService) GenerateOverview(
 // projectHasSpans treats an error as "no spans": a span storage failure
 // shouldn't block the log panels.
 func (s *DashboardService) projectHasSpans(projectID uuid.UUID) bool {
-	response, err := spans_core.GetSpanCoreRepository().ListServices(projectID, nil)
+	response, err := spans_core.GetSpanCoreRepository().ListServices(context.Background(), projectID, nil, 0)
 	if err != nil {
 		return false
 	}

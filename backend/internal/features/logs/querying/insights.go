@@ -1,6 +1,7 @@
 package logs_querying
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -69,6 +70,10 @@ const (
 	healthMaxGroups = 5_000
 
 	day = 24 * time.Hour
+
+	// An insight slower than this logs each step's time, which tells a slow
+	// view's per-minute counts, raw tail and sample reads apart.
+	insightSlowLog = 10 * time.Second
 )
 
 var (
@@ -94,6 +99,8 @@ type counter struct {
 	projectID uuid.UUID
 	budget    int64
 	partial   bool
+	started   time.Time
+	steps     []string
 }
 
 // ExecutePatternTrends is the Patterns tab: pattern counts per bucket, with
@@ -144,6 +151,7 @@ func (s *LogQueryService) ExecuteExplain(
 		minCount = explainDefaultMinCount
 	}
 	c := s.newCounter(ctx, projectID)
+	defer s.logSlowInsight("explain", c)
 	// A value's gain: its share of the current lines less its baseline share.
 	gain := "(w0::DOUBLE / NULLIF(t0, 0) - COALESCE(w1::DOUBLE / NULLIF(t1, 0), 0))"
 	counted, err := c.count(&logs_core.GroupWindowsRequestDTO{
@@ -297,6 +305,7 @@ func (s *LogQueryService) patternTrends(
 	end := to.Add(-time.Nanosecond)
 	bucket := time.Duration(request.BucketMs) * time.Millisecond
 	c := s.newCounter(ctx, projectID)
+	defer s.logSlowInsight("patterns", c)
 	hashField := logs_core.PatternHashField
 
 	// Each pattern's lines now (w0) and 24 h earlier (w1), compared in the
@@ -463,10 +472,9 @@ func (s *LogQueryService) patternTrends(
 				entry.services[parts[2]] += count
 			}
 		}
-		found, err := logs_core.GetLogCoreRepository().ExecutePatternSamples(ctx, projectID,
-			&logs_core.PatternSamplesRequestDTO{
-				Query: request.Query, TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to}, Hashes: hashes,
-			})
+		found, err := c.samples(&logs_core.PatternSamplesRequestDTO{
+			Query: request.Query, TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to}, Hashes: hashes,
+		})
 		if err != nil {
 			return err
 		}
@@ -541,7 +549,7 @@ func (s *LogQueryService) withoutRegroupedPatterns(
 	}
 	added = slices.DeleteFunc(slices.Clone(added), func(hash string) bool {
 		sample, ok := current[hash]
-		return ok && logs_core.PatternRegrouped(sample.Sample)
+		return ok && logs_core.PatternRegrouped(sample.Sample, from.Add(-7*day))
 	})
 	falling = slices.DeleteFunc(slices.Clone(falling), func(hash string) bool {
 		sample, ok := before[hash]
@@ -558,6 +566,7 @@ func (s *LogQueryService) volume(
 		days = volumeDefaultDays
 	}
 	c := s.newCounter(ctx, projectID)
+	defer s.logSlowInsight("volume", c)
 	today := now.Truncate(day)
 	start := today.Add(-time.Duration(days-1) * day)
 	weekAgo := now.Add(-volumeNoisyDays * day)
@@ -665,10 +674,9 @@ func (s *LogQueryService) volume(
 		}
 	}
 	if len(hashes) > 0 {
-		samples, err := logs_core.GetLogCoreRepository().ExecutePatternSamples(ctx, projectID,
-			&logs_core.PatternSamplesRequestDTO{
-				TimeRange: &logs_core.TimeRangeDTO{From: &weekAgo, To: &now}, Hashes: hashes,
-			})
+		samples, err := c.samples(&logs_core.PatternSamplesRequestDTO{
+			TimeRange: &logs_core.TimeRangeDTO{From: &weekAgo, To: &now}, Hashes: hashes,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -721,6 +729,7 @@ func (s *LogQueryService) healthMap(
 	// Lines, error lines and warning lines in the range, and lines 24 h
 	// earlier, per key - the most lines first, at most healthMaxGroups.
 	c := s.newCounter(ctx, projectID)
+	defer s.logSlowInsight("health map", c)
 	counted, err := c.count(&logs_core.GroupWindowsRequestDTO{
 		Query: request.Query, GroupField: logs_core.JoinGroupFields(fields...),
 		Windows: []logs_core.CountWindowDTO{
@@ -840,13 +849,25 @@ func (s *LogQueryService) beginInsight(
 }
 
 func (s *LogQueryService) newCounter(ctx context.Context, projectID uuid.UUID) *counter {
-	return &counter{ctx: ctx, projectID: projectID, budget: config.GetEnv().QueryMaxScanBytes}
+	return &counter{
+		ctx: ctx, projectID: projectID, budget: config.GetEnv().QueryMaxScanBytes, started: time.Now().UTC(),
+	}
 }
 
 // count runs a grouped count under the insight's scan budget.
 func (c *counter) count(request *logs_core.GroupWindowsRequestDTO) (*logs_core.GroupWindowsResponseDTO, error) {
 	request.ScanBudget = c.budget
+	defer c.timed("count "+cmp.Or(request.GroupField, "total"), windowsSpan(request.Windows), time.Now().UTC())
 	return logs_core.GetLogCoreRepository().ExecuteGroupWindows(c.ctx, c.projectID, request)
+}
+
+// samples is each of request's patterns' newest line.
+func (c *counter) samples(
+	request *logs_core.PatternSamplesRequestDTO,
+) (map[string]logs_core.PatternSampleDTO, error) {
+	span := request.TimeRange.To.Sub(*request.TimeRange.From)
+	defer c.timed(fmt.Sprintf("samples of %d", len(request.Hashes)), span, time.Now().UTC())
+	return logs_core.GetLogCoreRepository().ExecutePatternSamples(c.ctx, c.projectID, request)
 }
 
 // top is the at most limit keys of groupField with the most lines matching
@@ -873,6 +894,7 @@ func (c *counter) top(
 func (c *counter) series(
 	filter *logs_core.QueryNode, groupField string, from, to time.Time, bucket time.Duration,
 ) (map[string]map[int64]int64, error) {
+	defer c.timed("series "+cmp.Or(groupField, "total"), to.Sub(from), time.Now().UTC())
 	response, err := logs_core.GetLogCoreRepository().ExecuteAggregation(c.ctx, c.projectID,
 		&logs_core.AggregationRequestDTO{
 			Query: filter, TimeRange: &logs_core.TimeRangeDTO{From: &from, To: &to},
@@ -1061,4 +1083,32 @@ func clampInt(value, fallback, maximum int) int {
 // allocation; volume has already bounded days to 1..volumeMaxDays.
 func newDayCounts(days int) []int64 {
 	return make([]int64, volumeMaxDays)[:days]
+}
+
+func (c *counter) timed(name string, span time.Duration, started time.Time) {
+	c.steps = append(c.steps, fmt.Sprintf("%s over %s: %s",
+		name, span.Round(time.Minute), time.Since(started).Round(10*time.Millisecond)))
+}
+
+func (s *LogQueryService) logSlowInsight(kind string, c *counter) {
+	if took := time.Since(c.started); took >= insightSlowLog {
+		s.logger.Info("Slow log insight", slog.String("insight", kind),
+			slog.String("projectId", c.projectID.String()), slog.Duration("duration", took.Round(time.Millisecond)),
+			slog.String("steps", strings.Join(c.steps, "; ")))
+	}
+}
+
+// windowsSpan is the time from the earliest window's start to the latest's end.
+func windowsSpan(windows []logs_core.CountWindowDTO) time.Duration {
+	if len(windows) == 0 {
+		return 0
+	}
+	from, to := windows[0].From, windows[0].To
+	for _, window := range windows[1:] {
+		from = minTime(from, window.From)
+		if window.To.After(to) {
+			to = window.To
+		}
+	}
+	return to.Sub(from)
 }

@@ -59,14 +59,18 @@ func (unavailableRepository) GetTrace(uuid.UUID, string, *TimeRangeDTO) (*GetTra
 	return nil, errRepositoryUnavailable
 }
 
-func (unavailableRepository) ListServices(uuid.UUID, *TimeRangeDTO) (*ListServicesResponseDTO, error) {
+func (unavailableRepository) ListServices(
+	context.Context, uuid.UUID, *TimeRangeDTO, int64,
+) (*ListServicesResponseDTO, error) {
 	return nil, errRepositoryUnavailable
 }
 
 func (unavailableRepository) ListOperations(
+	context.Context,
 	uuid.UUID,
 	string,
 	*TimeRangeDTO,
+	int64,
 ) (*ListOperationsResponseDTO, error) {
 	return nil, errRepositoryUnavailable
 }
@@ -78,18 +82,24 @@ func (unavailableRepository) ExecuteAggregation(
 	return nil, errRepositoryUnavailable
 }
 
-func (unavailableRepository) ServiceCallEdges(uuid.UUID, *TimeRangeDTO) ([]ServiceCallEdge, error) {
+func (unavailableRepository) ServiceCallEdges(
+	context.Context, uuid.UUID, *TimeRangeDTO, int64,
+) ([]ServiceCallEdge, error) {
 	return nil, errRepositoryUnavailable
 }
 
 func (unavailableRepository) ServiceK8sMetadata(
+	context.Context,
 	uuid.UUID,
 	*TimeRangeDTO,
+	int64,
 ) (map[string]K8sResourceInfo, error) {
 	return nil, errRepositoryUnavailable
 }
 
-func (unavailableRepository) ServiceNodeStats(uuid.UUID, *TimeRangeDTO) (*ServiceNodeStats, error) {
+func (unavailableRepository) ServiceNodeStats(
+	context.Context, uuid.UUID, *TimeRangeDTO, int64,
+) (*ServiceNodeStats, error) {
 	return nil, errRepositoryUnavailable
 }
 

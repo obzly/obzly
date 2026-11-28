@@ -24,6 +24,8 @@ var apiKeyService = &ApiKeyService{
 	// Same prefix (same entries), much shorter TTL: see ApiKeyService.negativeCacheUtil.
 	cache_utils.NewCacheUtil[CachedApiKey](cache.GetCache(), "lb_apikey:").WithExpiry(30 * time.Second),
 	singleflight.Group{},
+	cache_utils.NewLocalCache[CachedApiKey](localKeyTTL, localMaxEntries),
+	cache_utils.NewLocalCache[bool](lastUsedInterval, localMaxEntries),
 }
 
 var apiKeyController = &ApiKeyController{

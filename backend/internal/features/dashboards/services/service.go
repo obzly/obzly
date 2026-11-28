@@ -306,7 +306,7 @@ func (s *DashboardService) ExecutePanelQuery(
 	case dashboards_models.PanelSourceSpans:
 		return s.executeSpanPanelQuery(projectID, request)
 	case dashboards_models.PanelSourceMetrics:
-		return s.executeMetricPanelQuery(projectID, request)
+		return s.executeMetricPanelQuery(ctx, projectID, request)
 	default:
 		return s.executeLogPanelQuery(ctx, projectID, request)
 	}
@@ -359,7 +359,7 @@ func (s *DashboardService) StreamPanelQuery(
 			return emit(&dashboards_dto.PanelQueryResponseDTO{Buckets: panelBuckets(buckets)})
 		})
 	if err != nil {
-		return fmt.Errorf("failed to execute panel query: %w", err)
+		return panelQueryError(err)
 	}
 	return nil
 }
@@ -430,7 +430,7 @@ func (s *DashboardService) executeLogPanelQuery(
 	response, err := logs_core.GetLogCoreRepository().ExecuteAggregation(ctx, projectID,
 		logAggregationRequest(request))
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute panel query: %w", err)
+		return nil, panelQueryError(err)
 	}
 	return &dashboards_dto.PanelQueryResponseDTO{Buckets: panelBuckets(response.Buckets)}, nil
 }
@@ -471,7 +471,7 @@ func (s *DashboardService) executeSpanPanelQuery(
 
 	response, err := spans_core.GetSpanCoreRepository().ExecuteAggregation(projectID, aggregationRequest)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute panel query: %w", err)
+		return nil, panelQueryError(err)
 	}
 
 	buckets := make([]dashboards_dto.PanelBucketDTO, len(response.Buckets))
@@ -488,6 +488,7 @@ func (s *DashboardService) executeSpanPanelQuery(
 // executeMetricPanelQuery runs the panel's PromQL as a range query; each
 // series becomes one GroupKey with a bucket per point.
 func (s *DashboardService) executeMetricPanelQuery(
+	ctx context.Context,
 	projectID uuid.UUID,
 	request *dashboards_dto.PanelQueryRequestDTO,
 ) (*dashboards_dto.PanelQueryResponseDTO, error) {
@@ -498,20 +499,24 @@ func (s *DashboardService) executeMetricPanelQuery(
 
 	start, end := resolveMetricPanelTimeRange(request.TimeRange)
 	step := metricPanelStep(request.Panel.BucketMs, start, end)
+	start, end = alignToStep(start, end, step)
 
 	if err := metrics_promql.ValidateRangeQueryResolution(start, end, step); err != nil {
 		return nil, err
 	}
 
-	rangeQuery, err := metrics_promql.NewRangeQuery(context.Background(), projectID, query, start, end, step)
+	// The request's context, so a closed dashboard stops its panels' queries
+	// instead of holding limiter slots until the engine's own timeout.
+	rangeQuery, err := metrics_promql.NewRangeQuery(ctx, projectID, query, start, end, step)
 	if err != nil {
-		return nil, fmt.Errorf("invalid PromQL query: %w", err)
+		// Creating the query already runs its pushed-down fragments in storage.
+		return nil, metricPanelError("invalid PromQL query", err)
 	}
 	defer rangeQuery.Close()
 
-	result := rangeQuery.Exec(context.Background())
+	result := rangeQuery.Exec(ctx)
 	if result.Err != nil {
-		return nil, fmt.Errorf("failed to execute panel query: %w", result.Err)
+		return nil, metricPanelError(ErrPanelQueryFailed.Error(), result.Err)
 	}
 
 	matrix, ok := result.Value.(promql.Matrix)
@@ -550,7 +555,30 @@ func resolveMetricPanelTimeRange(timeRange *logs_core.TimeRangeDTO) (time.Time, 
 	return start, end
 }
 
-// metricPanelStep is bucketMs, or for 0 about 120 points across the range.
+// metricPanelSteps are the steps an automatic one rounds up to: a step of
+// 5 m or more is a multiple of 5 m, so storage answers it from 5-minute
+// partials (metrics_querier.partialsAligned).
+var metricPanelSteps = []time.Duration{
+	time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second, 30 * time.Second,
+	time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 15 * time.Minute, 30 * time.Minute,
+	time.Hour, 2 * time.Hour, 3 * time.Hour, 6 * time.Hour, 12 * time.Hour, 24 * time.Hour,
+}
+
+// alignToStep moves start back and end on to multiples of step (as
+// Grafana does), so every evaluation time is a round one whatever the
+// moment the panel loads.
+func alignToStep(start, end time.Time, step time.Duration) (time.Time, time.Time) {
+	stepMs := step.Milliseconds()
+	if stepMs <= 0 {
+		return start, end
+	}
+	startMs := start.UnixMilli() / stepMs * stepMs
+	endMs := (end.UnixMilli() + stepMs - 1) / stepMs * stepMs
+	return time.UnixMilli(startMs).UTC(), time.UnixMilli(endMs).UTC()
+}
+
+// metricPanelStep is bucketMs, or for 0 about 120 points across the range,
+// rounded up to one of metricPanelSteps.
 func metricPanelStep(bucketMs int64, start, end time.Time) time.Duration {
 	// Floor a supplied bucketMs too: a 1 ms step over days is millions of
 	// evaluation points per render.
@@ -562,11 +590,13 @@ func metricPanelStep(bucketMs int64, start, end time.Time) time.Duration {
 		return step
 	}
 
-	step := end.Sub(start) / 120
-	if step < time.Second {
-		step = time.Second
+	target := end.Sub(start) / 120
+	for _, step := range metricPanelSteps {
+		if step >= target {
+			return step
+		}
 	}
-	return step
+	return (target + 24*time.Hour - 1).Truncate(24 * time.Hour)
 }
 
 // metricSeriesLabel is a compact legend ("service=api, code=200") without

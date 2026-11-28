@@ -122,21 +122,9 @@ func Test_SignInUser_WithValidCredentials_ReturnsToken(t *testing.T) {
 	}
 	test_utils.MakePostRequest(t, router, "/api/v1/users/signup", "", signupRequest, http.StatusOK)
 
-	signinRequest := users_dto.SignInRequestDTO{
-		Email:    email,
-		Password: password,
-	}
-
-	var response users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t,
-		router,
-		"/api/v1/users/signin",
-		"",
-		signinRequest,
-		http.StatusOK,
-		&response,
-	)
+	// The first sign-in sets MFA up (required for every role), the next asks for a code.
+	_, secret := signInAndSetUpMFA(t, router, email, password)
+	response := signInWithMFACode(t, router, email, password, nextTOTPCode(t, secret))
 
 	assert.NotEmpty(t, response.Token)
 	assert.NotEqual(t, uuid.Nil, response.UserID)
@@ -240,7 +228,8 @@ func Test_SignInUser_SuccessAfterFewWrongPasswords_ResetsAttemptCounter(t *testi
 	})
 	var response users_dto.SignInResponseDTO
 	require.NoError(t, json.Unmarshal(resp.Body, &response))
-	assert.NotEmpty(t, response.Token)
+	assert.True(t, response.MFASetupRequired, "the password was accepted; MFA setup comes next")
+	assert.NotEmpty(t, response.MFAToken)
 }
 
 // One source failing across many accounts is throttled by IP too.
@@ -368,13 +357,8 @@ func signUpAndSignIn(t *testing.T, router *gin.Engine) string {
 	test_utils.MakePostRequest(t, router, "/api/v1/users/signup", "",
 		users_dto.SignUpRequestDTO{Email: email, Password: password, Name: "Test User"}, http.StatusOK)
 
-	var response users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t, router, "/api/v1/users/signin", "",
-		users_dto.SignInRequestDTO{Email: email, Password: password},
-		http.StatusOK, &response,
-	)
-	return response.Token
+	session, _ := signInAndSetUpMFA(t, router, email, password)
+	return session.Token
 }
 
 // After SignOut the same token must stop working.
@@ -404,18 +388,9 @@ func Test_SignOut_DoesNotRevokeOtherSessions(t *testing.T) {
 	test_utils.MakePostRequest(t, router, "/api/v1/users/signup", "",
 		users_dto.SignUpRequestDTO{Email: email, Password: password, Name: "Test User"}, http.StatusOK)
 
-	signIn := func() string {
-		var response users_dto.SignInResponseDTO
-		test_utils.MakePostRequestAndUnmarshal(
-			t, router, "/api/v1/users/signin", "",
-			users_dto.SignInRequestDTO{Email: email, Password: password},
-			http.StatusOK, &response,
-		)
-		return response.Token
-	}
-
-	tokenA := signIn()
-	tokenB := signIn()
+	first, secret := signInAndSetUpMFA(t, router, email, password)
+	tokenA := first.Token
+	tokenB := signInWithMFACode(t, router, email, password, nextTOTPCode(t, secret)).Token
 	require.NotEqual(t, tokenA, tokenB, "each sign-in should mint a distinct token (jti)")
 
 	test_utils.MakeRequest(t, router, test_utils.RequestOptions{
@@ -572,24 +547,14 @@ func Test_ChangeUserPassword_WithValidData_PasswordChanged(t *testing.T) {
 	}
 	test_utils.MakePostRequest(t, router, "/api/v1/users/signup", "", signupRequest, http.StatusOK)
 
-	signinRequest := users_dto.SignInRequestDTO{
-		Email:    email,
-		Password: oldPassword,
-	}
-	var signinResponse users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t,
-		router,
-		"/api/v1/users/signin",
-		"",
-		signinRequest,
-		http.StatusOK,
-		&signinResponse,
-	)
+	signinResponse, secret := signInAndSetUpMFA(t, router, email, oldPassword)
 
+	// Every account has MFA, so changing the password asks for a code.
+	code := nextTOTPCode(t, secret)
 	changePasswordRequest := users_dto.ChangePasswordRequestDTO{
 		CurrentPassword: oldPassword,
 		NewPassword:     newPassword,
+		MFACode:         &code,
 	}
 
 	test_utils.MakePutRequest(
@@ -912,23 +877,20 @@ func signUpAndSignInWithPassword(t *testing.T, router *gin.Engine) (token, passw
 	test_utils.MakePostRequest(t, router, "/api/v1/users/signup", "",
 		users_dto.SignUpRequestDTO{Email: email, Password: password, Name: "Test User"}, http.StatusOK)
 
-	var response users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t, router, "/api/v1/users/signin", "",
-		users_dto.SignInRequestDTO{Email: email, Password: password},
-		http.StatusOK, &response,
-	)
-	return response.Token, password, response.UserID
+	session, _ := signInAndSetUpMFA(t, router, email, password)
+	return session.Token, password, session.UserID
 }
 
 func Test_UpdateUserInfo_WithValidEmailAndCorrectPassword_EmailUpdated(t *testing.T) {
 	router := createUserTestRouter()
-	token, password, _ := signUpAndSignInWithPassword(t, router)
+	token, password, userID := signUpAndSignInWithPassword(t, router)
+	code := users_testing.EnableRealMFAForTestUser(userID, "irrelevant@example.com")
 
 	newEmail := "newemail" + uuid.New().String() + "@example.com"
 	request := users_dto.UpdateUserInfoRequestDTO{
 		Email:           &newEmail,
 		CurrentPassword: password,
+		MFACode:         &code,
 	}
 
 	test_utils.MakePutRequest(
@@ -981,7 +943,8 @@ func Test_UpdateUserInfo_EmailChangeWithWrongCurrentPassword_ReturnsUnauthorized
 
 func Test_UpdateUserInfo_WithTakenEmail_ReturnsBadRequest(t *testing.T) {
 	router := createUserTestRouter()
-	token1, password1, _ := signUpAndSignInWithPassword(t, router)
+	token1, password1, userID1 := signUpAndSignInWithPassword(t, router)
+	code := users_testing.EnableRealMFAForTestUser(userID1, "irrelevant@example.com")
 
 	user2Email := "updateinfo" + uuid.New().String() + "@example.com"
 	test_utils.MakePostRequest(t, router, "/api/v1/users/signup", "",
@@ -990,6 +953,7 @@ func Test_UpdateUserInfo_WithTakenEmail_ReturnsBadRequest(t *testing.T) {
 	request := users_dto.UpdateUserInfoRequestDTO{
 		Email:           &user2Email,
 		CurrentPassword: password1,
+		MFACode:         &code,
 	}
 
 	resp := test_utils.MakePutRequest(
@@ -1171,9 +1135,7 @@ func Test_GitHubOAuth_WithValidCode_ReturnsToken(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.NotEmpty(t, response.Token)
-	assert.Equal(t, testEmail, response.Email)
-	assert.True(t, response.IsNewUser)
+	assertOAuthSentToMFASetup(t, response, testEmail)
 }
 
 // An email match to a password account must not be auto-linked, or whoever
@@ -1301,9 +1263,7 @@ func Test_GitHubOAuth_WithInvitedUser_ActivatesUser(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.NotEmpty(t, response.Token)
-	assert.Equal(t, email, response.Email)
-	assert.False(t, response.IsNewUser)
+	assertOAuthSentToMFASetup(t, response, email)
 }
 
 func Test_GitHubOAuth_WithNoPublicEmail_FetchesFromEmailsEndpoint(t *testing.T) {
@@ -1359,9 +1319,7 @@ func Test_GitHubOAuth_WithNoPublicEmail_FetchesFromEmailsEndpoint(t *testing.T) 
 	)
 
 	require.NoError(t, err)
-	assert.NotEmpty(t, response.Token)
-	assert.Equal(t, testEmail, response.Email)
-	assert.True(t, response.IsNewUser)
+	assertOAuthSentToMFASetup(t, response, testEmail)
 }
 
 func Test_GitHubOAuth_WhenRegistrationDisabled_ReturnsBadRequest(t *testing.T) {
@@ -1459,9 +1417,7 @@ func Test_GoogleOAuth_WithValidCode_ReturnsToken(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.NotEmpty(t, response.Token)
-	assert.Equal(t, testEmail, response.Email)
-	assert.True(t, response.IsNewUser)
+	assertOAuthSentToMFASetup(t, response, testEmail)
 }
 
 func Test_GoogleOAuth_WithExistingPasswordAccount_RefusesAutoLink(t *testing.T) {
@@ -1573,7 +1529,21 @@ func Test_GoogleOAuth_WithInvitedUser_ActivatesUser(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.NotEmpty(t, response.Token)
-	assert.Equal(t, email, response.Email)
-	assert.False(t, response.IsNewUser)
+	assertOAuthSentToMFASetup(t, response, email)
+}
+
+// assertOAuthSentToMFASetup: a GitHub/Google sign-in to an account without MFA
+// (new, or a just-activated invite) is sent to MFA setup, as for every role,
+// and the account exists and is active.
+func assertOAuthSentToMFASetup(t *testing.T, response *users_dto.OAuthCallbackResponseDTO, email string) {
+	t.Helper()
+
+	assert.True(t, response.MFASetupRequired)
+	assert.NotEmpty(t, response.MFAToken)
+	assert.Empty(t, response.Token)
+
+	user, err := (&users_repositories.UserRepository{}).GetUserByEmail(email)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.True(t, user.IsActiveUser())
 }

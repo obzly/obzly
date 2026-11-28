@@ -34,8 +34,9 @@ const EXPIRY_OPTIONS = [
 const formatDate = (value?: string | null): string =>
   value ? new Date(value).toLocaleDateString() : 'Never';
 
-const accessLabel = (scopes?: string[]): string =>
-  scopes?.includes(MCP_WRITE_SCOPE) ? 'Read & write' : 'Read-only';
+// Write turned off on the server: tokens that hold the scope are served read-only.
+const accessLabel = (writeAvailable: boolean, scopes?: string[]): string =>
+  writeAvailable && scopes?.includes(MCP_WRITE_SCOPE) ? 'Read & write' : 'Read-only';
 
 const mcpUrl = (): string => `${getApplicationServer()}/mcp`;
 
@@ -61,6 +62,7 @@ export const AccessTokensComponent = (): JSX.Element => {
   const [expiresInDays, setExpiresInDays] = useState(90);
   const [mfaCode, setMfaCode] = useState('');
   const [allowWrite, setAllowWrite] = useState(false);
+  const [writeAvailable, setWriteAvailable] = useState(false);
   const [isCreating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
   const [createdToken, setCreatedToken] = useState<string | null>(null);
@@ -68,7 +70,9 @@ export const AccessTokensComponent = (): JSX.Element => {
 
   const loadTokens = async () => {
     try {
-      setTokens(await accessTokenApi.list());
+      const response = await accessTokenApi.list();
+      setTokens(response.accessTokens);
+      setWriteAvailable(response.writeAvailable);
     } catch (e) {
       message.error(StringUtils.capitalizeFirstLetter((e as Error).message));
     } finally {
@@ -181,7 +185,11 @@ export const AccessTokensComponent = (): JSX.Element => {
             pagination={false}
             columns={[
               { title: 'App', dataIndex: 'clientName' },
-              { title: 'Access', dataIndex: 'scopes', render: accessLabel },
+              {
+                title: 'Access',
+                dataIndex: 'scopes',
+                render: (scopes?: string[]) => accessLabel(writeAvailable, scopes),
+              },
               { title: 'Last refreshed', dataIndex: 'lastUsedAt', render: formatDate },
               { title: 'Access ends', dataIndex: 'expiresAt', render: formatDate },
               {
@@ -232,7 +240,11 @@ export const AccessTokensComponent = (): JSX.Element => {
                   <code className="text-xs text-gray-600 dark:text-gray-300">{v}</code>
                 ),
               },
-              { title: 'Access', dataIndex: 'scopes', render: accessLabel },
+              {
+                title: 'Access',
+                dataIndex: 'scopes',
+                render: (scopes?: string[]) => accessLabel(writeAvailable, scopes),
+              },
               { title: 'Last used', dataIndex: 'lastUsedAt', render: formatDate },
               { title: 'Expires', dataIndex: 'expiresAt', render: formatDate },
               {
@@ -285,20 +297,22 @@ export const AccessTokensComponent = (): JSX.Element => {
           onChange={setExpiresInDays}
         />
 
-        <div className="mt-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-          <Checkbox checked={allowWrite} onChange={(e) => setAllowWrite(e.target.checked)}>
-            <span className="text-sm text-gray-800 dark:text-gray-100">
-              Also allow changes (write access)
-            </span>
-          </Checkbox>
-          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Lets the assistant create and end alert silences (up to 4 hours), create dashboards and
-            add panels. It can&apos;t delete anything; each change is confirmed and recorded in the
-            audit log.
-            {!mfaEnabled &&
-              ' Needs two-factor authentication: turn it on under Profile first, unless you signed in through a provider that enforces it.'}
+        {writeAvailable && (
+          <div className="mt-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+            <Checkbox checked={allowWrite} onChange={(e) => setAllowWrite(e.target.checked)}>
+              <span className="text-sm text-gray-800 dark:text-gray-100">
+                Also allow changes (write access)
+              </span>
+            </Checkbox>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Lets the assistant create and end alert silences (up to 4 hours), create dashboards
+              and add panels. It can&apos;t delete anything; each change is confirmed and recorded
+              in the audit log.
+              {!mfaEnabled &&
+                ' Needs two-factor authentication: turn it on under Profile first, unless you signed in through a provider that enforces it.'}
+            </div>
           </div>
-        </div>
+        )}
 
         {mfaEnabled && (
           <>

@@ -149,11 +149,12 @@ func (c *storageCollector) collect(ctx context.Context, projectID uuid.UUID, now
 	}
 
 	window := &spans_core.TimeRangeDTO{From: ptr(now.Add(-15 * time.Minute)), To: &now}
-	if services, err := spans_core.GetSpanCoreRepository().ListServices(projectID, window); err == nil {
+	spans := spans_core.GetSpanCoreRepository()
+	if services, err := spans.ListServices(context.Background(), projectID, window, 0); err == nil {
 		snap.services = services.Services
 		if len(services.Services) > 0 {
 			hour := &spans_core.TimeRangeDTO{From: ptr(now.Add(-time.Hour)), To: &now}
-			if meta, err := spans_core.GetSpanCoreRepository().ServiceK8sMetadata(projectID, hour); err == nil {
+			if meta, err := spans.ServiceK8sMetadata(context.Background(), projectID, hour, 0); err == nil {
 				snap.serviceMeta = meta
 			}
 		}

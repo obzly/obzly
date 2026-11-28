@@ -1,5 +1,5 @@
 import { LoadingOutlined } from '@ant-design/icons';
-import { Alert, Input, Segmented, Select, Table, Tag, Tooltip } from 'antd';
+import { Alert, Button, Input, Segmented, Select, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType, SorterResult } from 'antd/es/table/interface';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -36,6 +36,8 @@ interface Props {
   clusters: string[];
   /** Every asset across the Sites (empty inventory vs no match). */
   inventoryTotal: number;
+  /** Terminated assets across the Sites, for the Show terminated button. */
+  terminatedTotal: number;
   /** Several Sites: show and filter by Site. */
   multiSite: boolean;
   kinds: Set<AssetKind>;
@@ -53,6 +55,9 @@ interface Capped {
 
 const SORT_STORAGE_KEY = 'infrastructure_sort';
 const LAYOUT_STORAGE_KEY = 'infrastructure_layout';
+const SHOW_TERMINATED_STORAGE_KEY = 'infrastructure_show_terminated';
+// Terminated assets are mostly replaced pods: hidden unless asked for.
+const LIVE_STATES: AssetQuery['state'] = ['new', 'active', 'not_reporting'];
 const SORT_KEYS: SortKey[] = [
   'health',
   'kind',
@@ -122,6 +127,7 @@ export const AssetsTableComponent = ({
   sites,
   clusters,
   inventoryTotal,
+  terminatedTotal,
   multiSite,
   kinds,
   onKindsChange,
@@ -139,6 +145,9 @@ export const AssetsTableComponent = ({
     readStored<Layout>(LAYOUT_STORAGE_KEY, (value) => value === 'flat' || value === 'tree', 'flat'),
   );
   const [health, setHealth] = useState<HealthFilter>('all');
+  const [showTerminated, setShowTerminated] = useState(() =>
+    readStored<boolean>(SHOW_TERMINATED_STORAGE_KEY, (value) => typeof value === 'boolean', false),
+  );
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [site, setSite] = useState<string>('');
@@ -170,14 +179,17 @@ export const AssetsTableComponent = ({
         .map((s) => ({ siteId: s.siteId, siteName: s.siteName })),
     [sites, site],
   );
+  // Inactive means terminated, so picking it shows them whatever the button says.
+  const states = showTerminated || health === 'inactive' ? undefined : LIVE_STATES;
   const filters = useMemo<AssetQuery>(
     () => ({
       kind: [...kinds],
       health: health === 'all' ? undefined : [health],
+      state: states,
       cluster: cluster || undefined,
       q: search || undefined,
     }),
-    [kinds, health, cluster, search],
+    [kinds, health, states, cluster, search],
   );
   const filtered = kinds.size > 0 || health !== 'all' || search !== '';
   const queryKey = JSON.stringify([filters, targets.map((t) => t.siteId)]);
@@ -243,7 +255,13 @@ export const AssetsTableComponent = ({
     treeQuery.current = queryKey;
     const query: AssetQuery = filtered
       ? { ...filters, ancestors: true, limit: TREE_LIMIT }
-      : { cluster: cluster || undefined, roots: true, childCounts: true, limit: TREE_LIMIT };
+      : {
+          cluster: cluster || undefined,
+          state: states,
+          roots: true,
+          childCounts: true,
+          limit: TREE_LIMIT,
+        };
     void Promise.all(
       targets.map((target) =>
         inventoryApi
@@ -308,6 +326,7 @@ export const AssetsTableComponent = ({
           projectId: node.projectId,
           parent: node.key,
           cluster: cluster || undefined,
+          state: states,
           childCounts: true,
           limit: TREE_LIMIT,
         })
@@ -551,6 +570,20 @@ export const AssetsTableComponent = ({
           }))}
         />
         <div className="flex-1" />
+        <Button
+          type={showTerminated ? 'primary' : 'default'}
+          ghost={showTerminated}
+          aria-pressed={showTerminated}
+          onClick={() => {
+            setShowTerminated(!showTerminated);
+            setChildren(new Map());
+            store(SHOW_TERMINATED_STORAGE_KEY, !showTerminated);
+          }}
+        >
+          {showTerminated
+            ? 'Hide terminated'
+            : `Show terminated${terminatedTotal > 0 ? ` (${terminatedTotal.toLocaleString()})` : ''}`}
+        </Button>
         <Segmented<Layout>
           value={layout}
           onChange={(value) => {
@@ -683,7 +716,9 @@ export const AssetsTableComponent = ({
             ? ' '
             : inventoryTotal === 0
               ? 'Nothing in the inventory yet'
-              : 'No assets match',
+              : !showTerminated && inventoryTotal === terminatedTotal
+                ? 'Every asset is terminated; Show terminated lists them'
+                : 'No assets match',
         }}
       />
     </Card>

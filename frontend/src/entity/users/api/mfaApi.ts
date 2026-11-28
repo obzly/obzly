@@ -32,15 +32,6 @@ export const mfaApi = {
     );
   },
 
-  async disable(code: string): Promise<{ message: string }> {
-    const requestOptions: RequestOptions = new RequestOptions();
-    requestOptions.setBody(JSON.stringify({ code }));
-    return apiHelper.fetchPostJson(
-      `${getApplicationServer()}/api/v1/users/mfa/disable`,
-      requestOptions,
-    );
-  },
-
   // Sign-in time: authorized by the short-lived mfaToken, not a session.
 
   async loginSetup(mfaToken: string): Promise<MFASetupResponse> {

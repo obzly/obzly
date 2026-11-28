@@ -1,7 +1,6 @@
 package logs_jetstream
 
 import (
-	"fmt"
 	"log/slog"
 	"math"
 
@@ -17,12 +16,19 @@ import (
 // NewTail serves the logs and AI logs rows still pending in JetStream (see
 // ingest.Tail), written under dir.
 func NewTail(dir string, log *slog.Logger) (*ingest.Tail, error) {
+	newWriter := func() (ingest.DeltaWriter, error) { return newDeltaWriter(dir) }
+	return ingest.NewTail(broker.SignalLogs, dir, newWriter, log)
+}
+
+// newDeltaWriter is one of the tail's writers: its own logs and AI logs
+// segment writers, as it buffers one project's rows at a time.
+func newDeltaWriter(dir string) (ingest.DeltaWriter, error) {
 	writers := map[string]*logs_ingester.LogIngester{}
 	for _, stream := range []string{logs_core.StreamLogs, logs_core.StreamAILogs} {
 		writer, err := logs_ingester.NewLogIngesterForStream(dir, stream,
 			segments.WithMaxRows(math.MaxInt), segments.WithMaxBytes(math.MaxInt64))
 		if err != nil {
-			return nil, fmt.Errorf("failed to create tail writer: %w", err)
+			return nil, err
 		}
 		// The durable writer records these rows' sources; the tail is rebuilt
 		// per query and would only add work to it.
@@ -63,5 +69,5 @@ func NewTail(dir string, log *slog.Logger) (*ingest.Tail, error) {
 		}
 		return files, nil
 	}
-	return ingest.NewTail(broker.SignalLogs, dir, write, log)
+	return write, nil
 }

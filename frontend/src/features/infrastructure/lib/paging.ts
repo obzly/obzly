@@ -212,6 +212,8 @@ export interface RegionRow {
 
 export interface MergedSummary {
   total: number;
+  /** Assets terminated (kept a while before they're dropped). */
+  terminated: number;
   kinds: Map<AssetKind, HealthCounts>;
   /** Assets not terminated, by health. */
   live: HealthCounts;
@@ -229,8 +231,10 @@ export const mergeSummaries = (sites: SiteSummary[], multiSite: boolean): Merged
   const regions = new Map<string, RegionRow>();
   const clusters = new Set<string>();
   let total = 0;
+  let terminated = 0;
   for (const { siteName, summary } of sites) {
     total += summary.total;
+    terminated += summary.states?.terminated ?? 0;
     for (const [kind, healths] of Object.entries(summary.kinds) as [
       AssetKind,
       Partial<Record<AssetHealth, number>>,
@@ -260,6 +264,7 @@ export const mergeSummaries = (sites: SiteSummary[], multiSite: boolean): Merged
   }
   return {
     total,
+    terminated,
     kinds,
     live,
     groups,

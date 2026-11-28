@@ -37,9 +37,17 @@ spec:
       terminationGracePeriodSeconds: 45
       nodeSelector:
         kubernetes.io/arch: arm64
+      # Constraints set here replace the scheduler's default node spreading, so
+      # the (preferred) node spread is explicit too.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: obzly-querier
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:

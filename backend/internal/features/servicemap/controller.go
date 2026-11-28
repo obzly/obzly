@@ -1,10 +1,14 @@
 package servicemap
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	users_middleware "obzly/internal/features/users/middleware"
+	"obzly/internal/query"
+	"obzly/internal/util/logger"
+	"obzly/internal/util/querylimit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -49,7 +53,7 @@ func (c *ServiceMapController) GetServiceMap(ctx *gin.Context) {
 
 	from, to := parseTimeRangeQuery(ctx)
 
-	response, err := c.service.GetServiceMap(projectID, from, to, user)
+	response, err := c.service.GetServiceMap(ctx.Request.Context(), projectID, from, to, user)
 	if err != nil {
 		c.handleError(ctx, err)
 		return
@@ -79,7 +83,21 @@ func (c *ServiceMapController) handleError(ctx *gin.Context, err error) {
 	switch err.Error() {
 	case "insufficient permissions to query project service map":
 		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-	default:
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
+	if message, refused := query.BudgetRefusal(err); refused {
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": message, "code": "QUERY_TOO_LARGE"})
+		return
+	}
+	if errors.Is(err, querylimit.ErrTooManyQueries) {
+		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		return
+	}
+	if query.IsTimeout(err) {
+		ctx.JSON(http.StatusRequestTimeout, gin.H{"error": "the service map timed out: narrow the time range"})
+		return
+	}
+	// Internal errors can carry file paths: log them, never return them.
+	logger.GetLogger().Error("service map failed", "error", err)
+	ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to build the service map"})
 }

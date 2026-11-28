@@ -99,8 +99,8 @@ func Test_SampleLogs_RuleWithPattern_SamplesOnlyThatPattern(t *testing.T) {
 // version 2 regrouped, and a rule with the version 2 hash matches them too.
 func Test_SampleLogs_WhenARuleHasAVersion1PatternHash_StillMatchesRegroupedLogs(t *testing.T) {
 	message := `order placed {"customer":"Ada Lovelace","city":"Contoso"}`
-	require.True(t, logs_core.PatternRegrouped(message))
-	for _, hash := range []string{logs_core.PatternHashOf(logs_core.MessagePatternV1(message)), logs_core.PatternHash(message)} {
+	require.NotEqual(t, logs_core.MessagePatternOf(message, 1), logs_core.MessagePattern(message))
+	for _, hash := range []string{logs_core.PatternHashOf(logs_core.MessagePatternOf(message, 1)), logs_core.PatternHash(message)} {
 		rules := projects_models.LogSampleRules{{Pattern: hash, Rate: 0}}
 		log := &logs_core.LogItem{ID: uuid.New(), Level: logs_core.LogLevelInfo, Message: message}
 		require.Empty(t, sampleLogs([]*logs_core.LogItem{log}, rules), hash)

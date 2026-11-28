@@ -26,8 +26,8 @@ Obzly stays read-only: it never changes a resource and never buys a commitment.
    - The same key joins the inventory asset, its cost rows (FOCUS `ResourceId`) and its findings
      (OCSF `resources[].uid`, Defender `resourceId`). The asset drawer shows all three.
 2. **Cost is read once per billing scope.**
-   - A connection to an AWS management account or an Azure billing scope reads the billing data for
-     all its members.
+   - A connection to an AWS management account or an Azure management group reads the billing data
+     for all its members.
    - A member account's connection shows "Cost via Contoso-Payer" and never reads cost itself, so
      nothing is counted twice.
 3. **One source per day, and the source is always shown.**
@@ -397,7 +397,8 @@ The source can be changed later without losing history.
   - billing scope: this account, or the management account / billing scope for all members;
   - data source cards (Automatic, Export only, API only) with live estimates;
   - the export's bucket and prefix, or storage account and container;
-  - a generated export definition (AWS Data Exports FOCUS 1.2; Azure `FocusCost`).
+  - the export's setup steps (AWS Data Exports "FOCUS 1.2 with AWS columns", daily; Azure "Cost and
+    usage details (FOCUS)", daily).
 - **Posture step:**
   - what the probe found per region (native on or off, standards enabled);
   - source cards (Automatic, Native only, Baseline only) with their costs.
@@ -416,11 +417,27 @@ bucket or storage account.
 
 | Use | AWS | Azure |
 | --- | --- | --- |
-| Cost: export | `s3:GetObject` and `s3:ListBucket` on the export prefix, `bcm-data-exports:GetExport` / `ListExports` | `Storage Blob Data Reader` on the export container |
-| Cost: API, forecasts and recommendations | `ce:GetCostAndUsage`, `GetCostForecast`, `GetDimensionValues`, `GetTags`, `GetSavingsPlansPurchaseRecommendation`, `GetReservationPurchaseRecommendation`, `GetSavingsPlansCoverage`, `GetSavingsPlansUtilizationDetails`, `GetReservationCoverage`, `GetReservationUtilization`; `compute-optimizer:GetEnrollmentStatus`, `GetEC2InstanceRecommendations`, `GetEBSVolumeRecommendations`, `GetIdleRecommendations`; `ec2:DescribeRegions`, `DescribeInstances`, `DescribeVolumes`, `DescribeAddresses` (Obzly checks) | `Cost Management Reader` (and `Billing Reader` at billing scope), which also reads Advisor; `Reservations Reader` for existing reservations and savings plans (optional, tenant level); `Reader` for the Obzly checks |
+| Cost: export | `s3:GetObject` and `s3:ListBucket` on the export prefix, `bcm-data-exports:GetExport` / `ListExports` | `Storage Blob Data Reader` on the export's storage account |
+| Cost: API, forecasts and recommendations | `ce:GetCostAndUsage`, `GetCostForecast`, `GetDimensionValues`, `GetTags`, `GetSavingsPlansPurchaseRecommendation`, `GetReservationPurchaseRecommendation`, `GetSavingsPlansCoverage`, `GetSavingsPlansUtilizationDetails`, `GetReservationCoverage`, `GetReservationUtilization`; `compute-optimizer:GetEnrollmentStatus`, `GetEC2InstanceRecommendations`, `GetEBSVolumeRecommendations`, `GetIdleRecommendations`; `ec2:DescribeRegions`, `DescribeInstances`, `DescribeVolumes`, `DescribeAddresses` (Obzly checks) | `Cost Management Reader` on the connection's subscription or management group, which also reads Advisor (no billing role: see below); `Reservations Reader` for existing reservations and savings plans (optional, tenant level); `Reader` for the Obzly checks |
 | Posture | `SecurityAudit` (baseline), `securityhub:DescribeHub`, `GetEnabledStandards`, `GetFindings` | `Security Reader`, and `Reader` for the baseline checks' resource reads |
 
 This replaces the cost and posture rows of the table in `INFRASTRUCTURE.md`.
+
+**Azure billing scopes.** The probe calls the Cost Management query and forecast APIs only at the
+connection's own scope, `/subscriptions/{id}` or
+`/providers/Microsoft.Management/managementGroups/{id}`, never at a billing account, billing profile
+or enrollment. Cost Management Reader there is enough; Billing Reader and the billing-account roles
+(EA enterprise read-only, MCA billing account or billing profile reader) are not used. Limits from
+Microsoft's scope rules:
+
+- Microsoft documents management group cost as unsupported for Microsoft Customer Agreement and
+  CSP subscriptions (it works for Enterprise Agreement ones). It also leaves out purchases
+  such as reservations and Marketplace offers, which only the billing scopes show.
+- A FOCUS export can't be created at a management group. To cover several subscriptions with one
+  export, create it at the billing account or billing profile (MCA) or the enrollment (EA): that
+  needs a billing role for the person creating it, not for Obzly, which only reads the files.
+- So for MCA or CSP estates, give the connection the "FOCUS export only" source with an export at
+  the billing account or billing profile, or connect each subscription.
 
 ## APIs
 
@@ -490,7 +507,9 @@ The release also updates:
 
 - Moving `cloud_cost_daily` to the segment store for estates with hundreds of thousands of
   resources.
-- Which Azure agreement types support `FocusCost` exports; the API fallback covers the rest.
+- Reading Cost Management at an Azure billing account or billing profile (MCA estates, where
+  management group cost isn't available); today those estates use the export or per-subscription
+  connections.
 - Security Hub `GetFindingsV2` is in public preview; `GetFindings` (ASFF) stays as the fallback
   until it is generally available.
 - The size of the first baseline catalog, and who reviews new checks.
@@ -505,6 +524,8 @@ The release also updates:
 - AWS Data Exports for FOCUS 1.2:
   <https://aws.amazon.com/blogs/aws-cloud-financial-management/data-exports-for-focus-1-2-is-now-generally-available>
 - Azure FOCUS exports: <https://focus.finops.org/get-started/microsoft/>
+- Azure Cost Management scopes and roles:
+  <https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-work-scopes>
 - Security Hub CSPM pricing: <https://aws.amazon.com/security-hub/cspm/pricing>
 - Security Hub `GetFindingsV2`:
   <https://docs.aws.amazon.com/securityhub/1.0/APIReference/API_GetFindingsV2.html>

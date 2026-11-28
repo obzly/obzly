@@ -80,6 +80,10 @@ func (s *Service) build(ctx context.Context, projectID uuid.UUID, now time.Time)
 	if err != nil {
 		return nil, err
 	}
+	refusals, err := s.repo.sumRefusals(ctx, projectID, now.Add(-refusedWindow))
+	if err != nil {
+		return nil, err
+	}
 	recent := make(map[[2]string]int64, len(counts))
 	for _, row := range counts {
 		recent[[2]string{row.SourceKey, row.Signal}] = row.Count
@@ -160,12 +164,14 @@ func (s *Service) build(ctx context.Context, projectID uuid.UUID, now time.Time)
 		truncated = true
 	}
 	return &IngestionStatusDTO{
-		Sources:           sources,
-		Truncated:         truncated,
-		GeneratedAt:       now,
-		QuietAfterMinutes: int(quietAfter / time.Minute),
-		StoppedAfterHours: int(stoppedAfter / time.Hour),
-		RateWindowMinutes: int(rateWindow / time.Minute),
+		Sources:            sources,
+		Truncated:          truncated,
+		GeneratedAt:        now,
+		QuietAfterMinutes:  int(quietAfter / time.Minute),
+		StoppedAfterHours:  int(stoppedAfter / time.Hour),
+		RateWindowMinutes:  int(rateWindow / time.Minute),
+		Refused:            refusedDTOs(refusals),
+		RefusedWindowHours: int(refusedWindow / time.Hour),
 	}, nil
 }
 

@@ -2,7 +2,6 @@ package users_models
 
 import (
 	users_enums "obzly/internal/features/users/enums"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,6 +55,12 @@ type User struct {
 	// only one that may deactivate it.
 	SCIMOrgID *uuid.UUID `json:"-" gorm:"column:scim_org_id"`
 
+	// EmailVerified: someone other than the account vouched for the email (an
+	// admin's invite, SCIM, a trusted SSO/OAuth sign-in, a control plane that
+	// says so); false after sign-up or a self-service email change. A control
+	// plane sends it to Sites, which match a local account by email only when true.
+	EmailVerified bool `json:"-" gorm:"column:email_verified"`
+
 	// UIPreferences is NULL until the user first saves a preference.
 	UIPreferences *UIPreferences `json:"-" gorm:"column:ui_preferences;type:jsonb"`
 }
@@ -93,24 +98,6 @@ func (u *User) IsActiveUser() bool {
 
 func (u *User) HasPassword() bool {
 	return u.HashedPassword != nil && *u.HashedPassword != ""
-}
-
-// mfaForEveryone reads the "require MFA for everyone" setting; the
-// settings service sets it (cached), so models don't import services.
-var mfaForEveryone atomic.Pointer[func() bool]
-
-func SetMFAForEveryone(source func() bool) {
-	mfaForEveryone.Store(&source)
-}
-
-// IsMFARequired is true for Admin-role users, and for everyone when the setting
-// says so. Derived from the current role, so there's no stored flag to drift.
-func (u *User) IsMFARequired() bool {
-	if u.Role == users_enums.UserRoleAdmin {
-		return true
-	}
-	source := mfaForEveryone.Load()
-	return source != nil && (*source)()
 }
 
 func (u *User) HasMFASecret() bool {

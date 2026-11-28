@@ -211,6 +211,9 @@ func seedParitySeries(t *testing.T, reference *referenceQueryable, start, end ti
 	require.NoError(t, metrics_core.GetMetricCoreRepository().StoreSamplesBatch(
 		map[uuid.UUID][]*metrics_core.MetricSample{projectID: batch}))
 	require.NoError(t, metrics_core.GetMetricCoreRepository().ForceFlush())
+	// As if series tracking started now: check moves it back for the
+	// series-id path.
+	require.NoError(t, obzly_storage.GetDb().Exec("UPDATE metric_series_coverage SET since = now() WHERE project_id = ?", projectID).Error)
 	return projectID
 }
 

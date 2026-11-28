@@ -1,6 +1,7 @@
 package spans_querier
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -15,12 +16,30 @@ import (
 
 const defaultAggregationLimit = 1000
 
-// maxAggregationLimit bounds request.Limit: it sizes a slice preallocation.
+// maxAggregationLimit bounds request.Limit.
 const maxAggregationLimit = 10_000
 
-// ExecuteAggregation answers span-backed dashboard panels. BucketMs and
-// GroupField are independently optional (time series, stacked time series
-// or top-N); Metric picks what is measured per group.
+type spanAggregationPlan struct {
+	// partialSelect / partialGroup: each fragment's columns over span stats
+	// (selectArgs bind in partialSelect); finalSQL merges them, ordered and
+	// limited (one argument: the limit).
+	partialSelect string
+	selectArgs    []any
+	partialGroup  string
+	finalSQL      string
+	// grain: the time buckets' width, 0 without.
+	grain time.Duration
+	scan  func(rowScanner) (spans_core.AggregationBucketDTO, error)
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// ExecuteAggregation answers span-backed dashboard panels (and alert
+// rules) from span stats. BucketMs and GroupField are independently
+// optional (time series, stacked time series or top-N); Metric picks what
+// is measured per group. Percentiles come from the duration histogram.
 func (q *SpanQuerier) ExecuteAggregation(
 	projectID uuid.UUID,
 	request *spans_core.AggregationRequestDTO,
@@ -36,29 +55,20 @@ func (q *SpanQuerier) ExecuteAggregation(
 	if request.ServiceName != "" {
 		hints.Services = []string{request.ServiceName}
 	}
-	tail, records, err := q.inputs(projectID, from, to, hints)
-	if err != nil {
-		return nil, err
-	}
 
-	var whereParts []string
-	whereArgs := []any{projectID.String(), from, to}
-	whereParts = append(whereParts, "project_id = ?", "start_time >= ?", "start_time <= ?")
-
+	var where []string
+	var whereArgs []any
 	if request.ServiceName != "" {
-		whereParts = append(whereParts, "service_name = ?")
+		where = append(where, "service_name = ?")
 		whereArgs = append(whereArgs, request.ServiceName)
 	}
 	if request.OperationName != "" {
-		whereParts = append(whereParts, "name = ?")
+		where = append(where, "name = ?")
 		whereArgs = append(whereArgs, request.OperationName)
 	}
 	if request.RootSpansOnly {
-		whereParts = append(whereParts, "parent_span_id = ''")
+		where = append(where, "root")
 	}
-	whereClause := strings.Join(whereParts, " AND ")
-
-	plan := buildSpanAggregationPlan(request)
 
 	limit := request.Limit
 	if limit <= 0 {
@@ -68,22 +78,21 @@ func (q *SpanQuerier) ExecuteAggregation(
 		limit = maxAggregationLimit
 	}
 
-	fromWhere := " FROM " + query.SourcePlaceholder + " WHERE " + whereClause + plan.groupClause
-	selectArgs := append(append([]any{}, plan.selectArgs...), whereArgs...)
-	buckets := make([]spans_core.AggregationBucketDTO, 0, limit)
-	_, err = q.run(query.Request{
-		Segments:     records,
-		LocalFiles:   tail,
-		FragmentSQL:  "SELECT " + plan.partialClause + fromWhere,
-		FragmentArgs: selectArgs,
-		FinalSQL: "SELECT " + plan.mergeClause + " FROM " + query.ResultsPlaceholder +
-			plan.groupClause + plan.orderClause + " LIMIT ?",
-		FinalArgs:  []any{limit},
-		SingleSQL:  "SELECT " + plan.selectClause + fromWhere + plan.orderClause + " LIMIT ?",
-		SingleArgs: append(selectArgs, limit),
-		// A quantile has no partial to merge: it reads every span at once.
-		SingleFragment: plan.partialClause == "",
-		ScanBudget:     request.ScanBudget,
+	plan := buildSpanAggregationPlan(request)
+	buckets := make([]spans_core.AggregationBucketDTO, 0, defaultAggregationLimit)
+	_, err := q.runStats(context.Background(), projectID, statsQuery{
+		schema:     spanStats,
+		ranges:     []interval{{start: from, end: to, includeEnd: true}},
+		hints:      hints,
+		grain:      plan.grain,
+		selectSQL:  plan.partialSelect,
+		selectArgs: plan.selectArgs,
+		whereSQL:   strings.Join(where, " AND "),
+		whereArgs:  whereArgs,
+		groupSQL:   plan.partialGroup,
+		finalSQL:   plan.finalSQL,
+		finalArgs:  []any{limit},
+		scanBudget: request.ScanBudget,
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			bucket, err := plan.scan(rows)
@@ -101,44 +110,26 @@ func (q *SpanQuerier) ExecuteAggregation(
 	return &spans_core.AggregationResponseDTO{Buckets: buckets}, nil
 }
 
-type spanAggregationPlan struct {
-	selectClause string
-	selectArgs   []any
-	// partialClause is the per-fragment form of selectClause (same args),
-	// "" when the metric can't be merged; mergeClause re-aggregates it.
-	partialClause string
-	mergeClause   string
-	groupClause   string
-	orderClause   string
-	scan          func(rowScanner) (spans_core.AggregationBucketDTO, error)
-}
-
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
 func buildSpanAggregationPlan(request *spans_core.AggregationRequestDTO) spanAggregationPlan {
 	bucketed := request.BucketMs > 0
 	grouped := request.GroupField != ""
 
-	var selectParts []string
+	var keyColumns, keys, orderParts []string
 	var selectArgs []any
-	var groupParts []string
-	var orderParts []string
-
+	var grain time.Duration
 	if bucketed {
 		// Floored at 1 s: a 1 ms bucket over a day is 86M buckets.
 		bucketSeconds := max(float64(request.BucketMs)/1000.0, 1)
-		selectParts = append(selectParts, "to_timestamp(floor(epoch(start_time) / ?) * ?) AS bucket_ts")
+		keyColumns = append(keyColumns, "to_timestamp(floor(epoch(timestamp) / ?) * ?) AS bucket_ts")
 		selectArgs = append(selectArgs, bucketSeconds, bucketSeconds)
-		groupParts = append(groupParts, "bucket_ts")
+		keys = append(keys, "bucket_ts")
 		orderParts = append(orderParts, "bucket_ts ASC")
+		grain = time.Duration(bucketSeconds * float64(time.Second))
 	}
-
 	if grouped {
 		// COALESCE to '': group_key must never scan as NULL.
-		selectParts = append(selectParts, "COALESCE("+string(request.GroupField)+", '') AS group_key")
-		groupParts = append(groupParts, "group_key")
+		keyColumns = append(keyColumns, "COALESCE("+string(request.GroupField)+", '') AS group_key")
+		keys = append(keys, "group_key")
 		if !bucketed {
 			orderParts = append(orderParts, "metric_value DESC", "group_key ASC")
 		} else {
@@ -148,79 +139,76 @@ func buildSpanAggregationPlan(request *spans_core.AggregationRequestDTO) spanAgg
 	if !bucketed && !grouped {
 		orderParts = append(orderParts, "metric_value DESC")
 	}
-
-	selectClause := metricExpression(request.Metric) + " AS metric_value"
-	partial, merge := metricPartial(request.Metric)
-	partialClause, mergeClause := "", ""
-	if partial != "" {
-		partialClause, mergeClause = partial, merge
+	order := " ORDER BY " + strings.Join(orderParts, ", ") + " LIMIT ?"
+	selected := ""
+	if len(keys) > 0 {
+		selected = strings.Join(keys, ", ") + ", "
 	}
-	if len(selectParts) > 0 {
-		selectClause = strings.Join(selectParts, ", ") + ", " + selectClause
-		if partial != "" {
-			partialClause = strings.Join(selectParts, ", ") + ", " + partial
-			mergeClause = strings.Join(groupParts, ", ") + ", " + merge
+
+	partials, groupKeys := metricPartial(request.Metric)
+	groupKeys = append(append([]string{}, keys...), groupKeys...)
+	partialGroup := ""
+	if len(groupKeys) > 0 {
+		partialGroup = " GROUP BY " + strings.Join(groupKeys, ", ")
+	}
+	// No spans leave an average or a percentile NULL: no row, as before.
+	var merged string
+	if quantile, ok := metricQuantile(request.Metric); ok {
+		histogram := histogramSQL("r", "cnt", keys, nil, []float64{quantile})
+		merged = "WITH r AS (SELECT * FROM " + query.ResultsPlaceholder + ") SELECT " + selected +
+			fmt.Sprintf("p%d", int(quantile*100+0.5)) + " AS metric_value FROM (" + histogram + ")"
+	} else {
+		merged = "SELECT " + selected + metricMerge(request.Metric) + " FROM " + query.ResultsPlaceholder
+		if len(keys) > 0 {
+			merged += " GROUP BY " + strings.Join(keys, ", ")
 		}
 	}
-
-	groupClause := ""
-	if len(groupParts) > 0 {
-		groupClause = " GROUP BY " + strings.Join(groupParts, ", ")
-	}
-
-	orderClause := " ORDER BY " + strings.Join(orderParts, ", ")
+	finalSQL := "SELECT * FROM (" + merged + ") WHERE metric_value IS NOT NULL" + order
 
 	return spanAggregationPlan{
-		selectClause:  selectClause,
+		partialSelect: strings.Join(append(keyColumns, partials), ", "),
 		selectArgs:    selectArgs,
-		partialClause: partialClause,
-		mergeClause:   mergeClause,
-		groupClause:   groupClause,
-		orderClause:   orderClause,
+		partialGroup:  partialGroup,
+		finalSQL:      finalSQL,
+		grain:         grain,
 		scan:          scannerFor(bucketed, grouped),
 	}
 }
 
-// metricExpression maps an AggregationMetric onto its DuckDB aggregate.
-// Duration uses epoch_ns: TIMESTAMP subtraction yields an INTERVAL.
-func metricExpression(metric spans_core.AggregationMetric) string {
-	const durationMsExpr = "(epoch_ns(end_time) - epoch_ns(start_time)) / 1000000.0"
-
+// metricPartial is a metric's per-fragment columns over span stats and the
+// extra columns they group by (a percentile's histogram bucket).
+func metricPartial(metric spans_core.AggregationMetric) (string, []string) {
 	switch metric {
 	case spans_core.AggregationMetricErrorCount:
-		return "count(*) FILTER (WHERE status_code = 'ERROR')"
+		return "coalesce(sum(cnt) FILTER (WHERE status_code = 'ERROR'), 0)::BIGINT AS metric_value", nil
 	case spans_core.AggregationMetricAvgDuration:
-		return "avg(" + durationMsExpr + ")"
-	case spans_core.AggregationMetricP50Duration:
-		return "approx_quantile(" + durationMsExpr + ", 0.5)"
-	case spans_core.AggregationMetricP95Duration:
-		return "approx_quantile(" + durationMsExpr + ", 0.95)"
-	case spans_core.AggregationMetricP99Duration:
-		return "approx_quantile(" + durationMsExpr + ", 0.99)"
-	case spans_core.AggregationMetricCount:
-		return "count(*)"
+		return "sum(duration_sum) AS duration_sum, sum(cnt)::BIGINT AS duration_count", nil
+	case spans_core.AggregationMetricP50Duration, spans_core.AggregationMetricP95Duration,
+		spans_core.AggregationMetricP99Duration:
+		return "duration_bucket, sum(cnt)::BIGINT AS cnt", []string{"duration_bucket"}
 	default:
-		return "count(*)"
+		return "sum(cnt)::BIGINT AS metric_value", nil
 	}
 }
 
-// metricPartial is a metric as per-fragment columns and their merge into
-// metric_value; "" for a quantile, which can't be merged from partials.
-func metricPartial(metric spans_core.AggregationMetric) (string, string) {
-	const durationMsExpr = "(epoch_ns(end_time) - epoch_ns(start_time)) / 1000000.0"
-
-	switch metric {
-	case spans_core.AggregationMetricErrorCount:
-		return "count(*) FILTER (WHERE status_code = 'ERROR') AS metric_value", "sum(metric_value)::DOUBLE AS metric_value"
-	case spans_core.AggregationMetricAvgDuration:
-		return "sum(" + durationMsExpr + ") AS duration_sum, count(*) AS duration_count",
-			"sum(duration_sum) / sum(duration_count) AS metric_value"
-	case spans_core.AggregationMetricP50Duration, spans_core.AggregationMetricP95Duration,
-		spans_core.AggregationMetricP99Duration:
-		return "", ""
-	default:
-		return "count(*) AS metric_value", "sum(metric_value)::DOUBLE AS metric_value"
+// metricMerge merges a sum-based metric's partials into metric_value.
+func metricMerge(metric spans_core.AggregationMetric) string {
+	if metric == spans_core.AggregationMetricAvgDuration {
+		return "sum(duration_sum) / sum(duration_count) AS metric_value"
 	}
+	return "coalesce(sum(metric_value), 0)::DOUBLE AS metric_value"
+}
+
+func metricQuantile(metric spans_core.AggregationMetric) (float64, bool) {
+	switch metric {
+	case spans_core.AggregationMetricP50Duration:
+		return 0.5, true
+	case spans_core.AggregationMetricP95Duration:
+		return 0.95, true
+	case spans_core.AggregationMetricP99Duration:
+		return 0.99, true
+	}
+	return 0, false
 }
 
 func scannerFor(bucketed, grouped bool) func(rowScanner) (spans_core.AggregationBucketDTO, error) {

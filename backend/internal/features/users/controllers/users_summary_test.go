@@ -53,10 +53,10 @@ func Test_GetUsersList_WithFilters_FiltersServerSide(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Four users sharing a name tag, so `query` scopes the list to them.
-	recentAdmin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)        // MFA on, seen now
-	recentMember := users_testing.CreateTestUser(users_enums.UserRoleMember)      // no MFA, seen now
-	staleMember := users_testing.CreateTestUser(users_enums.UserRoleMember)       // no MFA, seen 40 days ago
-	deactivatedMember := users_testing.CreateTestUser(users_enums.UserRoleMember) // no MFA, deactivated
+	recentAdmin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)                  // MFA on, seen now
+	recentMember := users_testing.CreateTestUserWithoutMFA(users_enums.UserRoleMember)      // no MFA, seen now
+	staleMember := users_testing.CreateTestUserWithoutMFA(users_enums.UserRoleMember)       // no MFA, 40 days ago
+	deactivatedMember := users_testing.CreateTestUserWithoutMFA(users_enums.UserRoleMember) // no MFA, deactivated
 	db := storage.GetDb()
 	for _, id := range []uuid.UUID{recentAdmin.UserID, recentMember.UserID, staleMember.UserID, deactivatedMember.UserID} {
 		require.NoError(t, db.Exec("UPDATE users SET name = ?, last_active_at = ? WHERE id = ?", tag, now, id).Error)

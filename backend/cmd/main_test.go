@@ -135,3 +135,20 @@ func Test_OpenQueryExecutorDB_RemovesSpillFilesLeftByAKilledExecutor(t *testing.
 	require.NoFileExists(t, leftover)
 	require.DirExists(t, spillDir)
 }
+
+// A broker caps Go's heap below its container, or a restart's stream
+// recovery is OOM-killed; GOMEMLIMIT, or no container limit, leaves it be.
+func Test_BrokerGoMemoryLimit_IsNinetyPercentOfTheContainerUnlessGOMEMLIMITIsSet(t *testing.T) {
+	assert.Equal(t, int64(1932735283), brokerGoMemoryLimit(2<<30, false))
+	assert.Zero(t, brokerGoMemoryLimit(2<<30, true))
+	assert.Zero(t, brokerGoMemoryLimit(0, false))
+}
+
+// A querier's Go limit leaves room for its DuckDB executor's use, unless
+// GOMEMLIMIT is set or the pod has no memory limit.
+func Test_ReplicaGoMemoryLimit_FollowsDuckDBUnlessGOMEMLIMITIsSet(t *testing.T) {
+	assert.Equal(t, int64(4<<30)*9/10-(1<<30), replicaGoMemoryLimit(4<<30, 1<<30, false))
+	assert.Equal(t, int64(1<<30), replicaGoMemoryLimit(4<<30, 4<<30, false), "never under a quarter")
+	assert.Zero(t, replicaGoMemoryLimit(4<<30, 1<<30, true))
+	assert.Zero(t, replicaGoMemoryLimit(0, 1<<30, false))
+}

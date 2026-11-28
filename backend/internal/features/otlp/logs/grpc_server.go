@@ -87,7 +87,8 @@ func grpcStatusFor(err error) error {
 	case ExportErrorUnauthenticated:
 		return status.Error(codes.Unauthenticated, exportErr.Message)
 	case ExportErrorResourceExhausted, ExportErrorUnavailable:
-		return otlp.RetryableGRPCError(exportErr.Code == ExportErrorResourceExhausted, exportErr.Message)
+		return otlp.RetryableGRPCError(
+			exportErr.Code == ExportErrorResourceExhausted, exportErr.Message, exportErr.RetryAfter)
 	default:
 		return status.Error(codes.InvalidArgument, exportErr.Message)
 	}

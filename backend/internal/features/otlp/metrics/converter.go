@@ -93,12 +93,20 @@ func convertMetric(
 			metrics_core.MetricTypeGauge,
 		), false
 	case metric.GetSum() != nil:
+		// A non-monotonic sum (an UpDownCounter: memory or filesystem in use, a
+		// queue's length) is a gauge, as OTel maps it to Prometheus: typed a
+		// counter, generated dashboards plotted its rate. A delta one still
+		// adds up to its current value.
+		metricType := metrics_core.MetricTypeCounter
+		if !metric.GetSum().GetIsMonotonic() {
+			metricType = metrics_core.MetricTypeGauge
+		}
 		return convertNumberDataPoints(
 			projectID,
 			attrnames.NormalizeMetricName(metric.GetName()),
 			metric.GetSum().GetDataPoints(),
 			resourceLabels,
-			metrics_core.MetricTypeCounter,
+			metricType,
 		), isDelta(metric.GetSum().GetAggregationTemporality())
 	case metric.GetHistogram() != nil:
 		return convertHistogramDataPoints(

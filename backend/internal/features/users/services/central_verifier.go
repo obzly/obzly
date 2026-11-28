@@ -14,13 +14,17 @@ import (
 // centralAssertionClaims is the ES256 assertion a control plane mints for one
 // (user, Site) exchange (ARCHITECTURE.md "Multi-site: control plane and Sites").
 type centralAssertionClaims struct {
-	Subject  string                    `json:"sub"`
-	Email    string                    `json:"email"`
-	Name     string                    `json:"name"`
-	JTI      string                    `json:"jti"`
-	SiteRole string                    `json:"site_role"`
-	AMR      []string                  `json:"amr"`
-	Projects []centralAssertionProject `json:"projects"`
+	Subject string `json:"sub"`
+	Email   string `json:"email"`
+	// EmailVerified: the control plane vouches that Email wasn't typed by the
+	// account itself (users_models.User.EmailVerified there). Absent from an
+	// older control plane's assertion, which counts as false.
+	EmailVerified bool                      `json:"email_verified"`
+	Name          string                    `json:"name"`
+	JTI           string                    `json:"jti"`
+	SiteRole      string                    `json:"site_role"`
+	AMR           []string                  `json:"amr"`
+	Projects      []centralAssertionProject `json:"projects"`
 	// AllProjectsRole is a Site-wide MEMBER/VIEWER grant applied to every project,
 	// including later ones (reconciled at each exchange).
 	AllProjectsRole string `json:"all_projects_role,omitempty"`

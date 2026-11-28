@@ -7,6 +7,8 @@ import (
 	"time"
 
 	metrics_promql "obzly/internal/features/metrics/promql"
+	"obzly/internal/query"
+	"obzly/internal/util/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -312,7 +314,19 @@ func writeQueryError(ctx *gin.Context, err error) {
 		writeError(ctx, http.StatusUnauthorized, "unauthorized", err.Error())
 		return
 	}
-	writeError(ctx, http.StatusUnprocessableEntity, "execution", err.Error())
+	if query.IsTimeout(err) {
+		writeError(ctx, http.StatusServiceUnavailable, "timeout", "the query timed out: narrow the time range")
+		return
+	}
+	message, ok := metrics_promql.ClientMessage(err)
+	if !ok {
+		// A storage failure can name segment files and executors: it goes to
+		// the log, as the other query handlers do, not to the caller.
+		logger.GetLogger().Error("Prometheus API query failed in storage", "path", ctx.FullPath(), "error", err)
+		writeError(ctx, http.StatusInternalServerError, "internal", "failed to execute the query")
+		return
+	}
+	writeError(ctx, http.StatusUnprocessableEntity, "execution", message)
 }
 
 func writeError(ctx *gin.Context, statusCode int, errorType, message string) {

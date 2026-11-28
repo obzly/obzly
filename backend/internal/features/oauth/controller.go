@@ -52,7 +52,7 @@ func (c *OAuthController) ProtectedResourceMetadata(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"resource":                 base + "/mcp",
 		"authorization_servers":    []string{base},
-		"scopes_supported":         []string{access_tokens.ScopeMCPRead, access_tokens.ScopeMCPWrite},
+		"scopes_supported":         supportedScopes(),
 		"bearer_methods_supported": []string{"header"},
 		"resource_name":            "Obzly",
 	})
@@ -68,14 +68,11 @@ func (c *OAuthController) AuthorizationServerMetadata(ctx *gin.Context) {
 	corsHeaders(ctx)
 	base := publicurl.BaseURL(ctx.Request)
 	ctx.JSON(http.StatusOK, gin.H{
-		"issuer":                 base,
-		"authorization_endpoint": base + "/oauth/authorize",
-		"token_endpoint":         base + "/oauth/token",
-		"registration_endpoint":  base + "/oauth/register",
-		"scopes_supported": []string{
-			access_tokens.ScopeMCPRead,
-			access_tokens.ScopeMCPWrite,
-		},
+		"issuer":                                         base,
+		"authorization_endpoint":                         base + "/oauth/authorize",
+		"token_endpoint":                                 base + "/oauth/token",
+		"registration_endpoint":                          base + "/oauth/register",
+		"scopes_supported":                               supportedScopes(),
 		"response_types_supported":                       []string{"code"},
 		"response_modes_supported":                       []string{"query"},
 		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
@@ -304,4 +301,13 @@ func corsHeaders(ctx *gin.Context) {
 func preflight(ctx *gin.Context) {
 	corsHeaders(ctx)
 	ctx.Status(http.StatusNoContent)
+}
+
+// supportedScopes leaves mcp:write out while MCP_WRITE_ENABLED is off, so
+// clients don't ask for it.
+func supportedScopes() []string {
+	if access_tokens.WriteEnabled() {
+		return []string{access_tokens.ScopeMCPRead, access_tokens.ScopeMCPWrite}
+	}
+	return []string{access_tokens.ScopeMCPRead}
 }

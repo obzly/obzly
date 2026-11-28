@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"obzly/internal/cache"
@@ -43,6 +44,16 @@ var ErrCentralExchangeAccountNotLinkable = errors.New(
 		"to remove the local account",
 )
 
+// ErrCentralExchangeEmailNotVerified: the local account with the assertion's
+// email would be claimed on the strength of an email the central user typed
+// themselves (sign-up or a self-service change), which anyone can set to
+// someone else's address.
+var ErrCentralExchangeEmailNotVerified = errors.New(
+	"this site has a local account with the same email, and the control plane can't vouch for that email " +
+		"(it was set at sign-up or changed by the user, or the control plane is older than this site) - " +
+		"ask a control-plane admin to invite the email again, or a Site admin to remove the local account",
+)
+
 const (
 	// centralExchangeTokenTTL is far shorter than accessTokenTTL: the control plane
 	// re-exchanges before expiry, so this only bounds a captured Site token.
@@ -57,6 +68,7 @@ const (
 // without a database; production wires the concrete repository.
 type centralIdentityRepositoryInterface interface {
 	GetUserByIdentity(issuer, subject string) (*users_models.User, error)
+	HasIdentityForIssuer(userID uuid.UUID, issuer string) (bool, error)
 	LinkIdentity(userID uuid.UUID, issuer, subject string) error
 }
 
@@ -221,6 +233,16 @@ func (s *UserService) exchangeCentralAssertion(
 		return nil, err
 	}
 
+	if user.Status == users_enums.UserStatusInvited {
+		if err := s.activateInvitedCentralUser(user, claims); err != nil {
+			if errors.Is(err, ErrCentralExchangeEmailNotVerified) {
+				s.auditCentralClaimRefused(user, claims)
+			}
+			return nil, err
+		}
+	}
+
+	// INACTIVE means a Site admin deactivated the account, which still wins.
 	if !user.IsActiveUser() {
 		return nil, ErrCentralExchangeAccountInactive
 	}
@@ -294,6 +316,21 @@ func (s *UserService) resolveOrProvisionCentralUser(
 			if hasOwnSignIn {
 				return nil, ErrCentralExchangeAccountNotLinkable
 			}
+			// Already someone at this control plane: a second subject carrying
+			// the same email later (reused or self-set) must not join it.
+			alreadyLinked, err := s.centralIdentityRepository.HasIdentityForIssuer(
+				userByEmail.ID, env.ControlPlaneIssuer,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to check central identity: %w", err)
+			}
+			if alreadyLinked {
+				return nil, ErrCentralExchangeAccountNotLinkable
+			}
+			if !claims.EmailVerified {
+				s.auditCentralClaimRefused(userByEmail, claims)
+				return nil, ErrCentralExchangeEmailNotVerified
+			}
 			if err := s.centralIdentityRepository.LinkIdentity(
 				userByEmail.ID, env.ControlPlaneIssuer, claims.Subject,
 			); err != nil {
@@ -326,6 +363,7 @@ func (s *UserService) resolveOrProvisionCentralUser(
 		PlanID:               planID,
 		Status:               users_enums.UserStatusActive,
 		CreatedAt:            time.Now().UTC(),
+		EmailVerified:        claims.EmailVerified,
 	}
 	if err := s.userRepository.CreateUser(user); err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
@@ -341,6 +379,63 @@ func (s *UserService) resolveOrProvisionCentralUser(
 		)
 	}
 	return user, nil
+}
+
+// activateInvitedCentralUser: an account added from a project's Members page
+// (or invited) on this Site stays INVITED, password-less, until its first
+// sign-in. A central sign-in is that first sign-in, as an SSO one is
+// (getOrCreateUserFromOAuth); refusing it locked such people out for good.
+// It takes the place of the invite token, so the control plane must vouch for
+// the very email that was invited: an unverified one let a central user set
+// their email to a pending invite's and take its project roles. This also
+// covers an account an older version linked before refusing it as INVITED.
+func (s *UserService) activateInvitedCentralUser(user *users_models.User, claims *centralAssertionClaims) error {
+	hasOwnSignIn, err := s.hasOwnSignIn(user)
+	if err != nil {
+		return err
+	}
+	if hasOwnSignIn {
+		return ErrCentralExchangeAccountNotLinkable
+	}
+	if !claims.EmailVerified || !strings.EqualFold(strings.TrimSpace(claims.Email), user.Email) {
+		return ErrCentralExchangeEmailNotVerified
+	}
+
+	if err := s.userRepository.UpdateUserStatus(user.ID, users_enums.UserStatusActive); err != nil {
+		return fmt.Errorf("failed to activate invited user: %w", err)
+	}
+	if err := s.userRepository.ClearInviteToken(user.ID); err != nil {
+		return fmt.Errorf("failed to clear invite token: %w", err)
+	}
+	if claims.Name != "" {
+		if err := s.userRepository.UpdateUserInfo(user.ID, &claims.Name, nil, false); err != nil {
+			return fmt.Errorf("failed to update name: %w", err)
+		}
+		user.Name = claims.Name
+	}
+	user.Status = users_enums.UserStatusActive
+
+	if s.auditLogWriter != nil {
+		s.auditLogWriter.WriteAuditLog(
+			fmt.Sprintf("Invited account activated by control-plane sign-in: %s", user.Email), &user.ID, nil,
+		)
+	}
+	return nil
+}
+
+// auditCentralClaimRefused: a Site admin should see that someone tried to take
+// a local account with an email the control plane doesn't vouch for.
+func (s *UserService) auditCentralClaimRefused(user *users_models.User, claims *centralAssertionClaims) {
+	if s.auditLogWriter == nil {
+		return
+	}
+	s.auditLogWriter.WriteAuditLog(
+		fmt.Sprintf(
+			"Control-plane sign-in refused: central account %s has an unverified email matching local account %s",
+			claims.Subject, user.Email,
+		),
+		&user.ID, nil,
+	)
 }
 
 func (s *UserService) hasOwnSignIn(user *users_models.User) (bool, error) {

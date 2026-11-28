@@ -27,11 +27,17 @@ const (
 	summaryTrendPoints = 30
 	// matchingTracesCap stops the header count on big windows ("10,000+").
 	matchingTracesCap = 10_000
-	// maxServiceErrorsRange: the per-service errors scan reads twice the range
-	// of raw spans (there is no spans rollup), so a longer range is clamped.
-	maxServiceErrorsRange = 7 * 24 * time.Hour
-	defaultServiceErrors  = 10
-	maxServiceErrors      = 50
+	// maxServiceErrorsRange: the longest trace view range (the Overview's
+	// 30 days) plus a day. The query reads twice the range from span
+	// rollups; segments without one yet (L0s, a backfill after an upgrade)
+	// are read raw, and a range planned past QUERY_MAX_SCAN_GB is refused
+	// (422) rather than scanned.
+	maxServiceErrorsRange = 31 * 24 * time.Hour
+	// maxLookupRange: the service and operation pickers' longest range, and
+	// their default: the longest trace view range plus a day, as above.
+	maxLookupRange       = 31 * 24 * time.Hour
+	defaultServiceErrors = 10
+	maxServiceErrors     = 50
 )
 
 // ErrInvalidSummaryRange: the summary needs a range with both ends, from
@@ -186,7 +192,13 @@ func (s *TraceQueryService) GetTrace(
 	return spans_core.GetSpanCoreRepository().GetTrace(projectID, traceID, timeRange)
 }
 
+// ListServices is the services seen in the range, at most the last
+// maxLookupRange of it (the default when no range is given, as the pickers
+// ask). Like the searches it takes a limiter slot, stops with ctx and is
+// refused past the scan budget: it used to read from 1970 on with none of
+// them, once per request.
 func (s *TraceQueryService) ListServices(
+	ctx context.Context,
 	projectID uuid.UUID,
 	timeRange *spans_core.TimeRangeDTO,
 	user *users_models.User,
@@ -194,10 +206,18 @@ func (s *TraceQueryService) ListServices(
 	if err := s.requireAccess(projectID, user); err != nil {
 		return nil, err
 	}
-	return spans_core.GetSpanCoreRepository().ListServices(projectID, timeRange)
+	release, err := s.queryLimiter.Acquire(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return spans_core.GetSpanCoreRepository().ListServices(
+		ctx, projectID, lookupRange(timeRange, time.Now().UTC()), config.GetEnv().QueryMaxScanBytes)
 }
 
+// ListOperations is serviceName's operations, bounded as ListServices is.
 func (s *TraceQueryService) ListOperations(
+	ctx context.Context,
 	projectID uuid.UUID,
 	serviceName string,
 	timeRange *spans_core.TimeRangeDTO,
@@ -206,7 +226,13 @@ func (s *TraceQueryService) ListOperations(
 	if err := s.requireAccess(projectID, user); err != nil {
 		return nil, err
 	}
-	return spans_core.GetSpanCoreRepository().ListOperations(projectID, serviceName, timeRange)
+	release, err := s.queryLimiter.Acquire(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return spans_core.GetSpanCoreRepository().ListOperations(
+		ctx, projectID, serviceName, lookupRange(timeRange, time.Now().UTC()), config.GetEnv().QueryMaxScanBytes)
 }
 
 // GetProjectStats returns a project's spans consumption stats.
@@ -231,11 +257,39 @@ func (s *TraceQueryService) requireAccess(projectID uuid.UUID, user *users_model
 	return nil
 }
 
+// lookupRange is timeRange for a service or operation lookup: from defaults
+// to maxLookupRange before to (now without one), and a longer range keeps
+// its newest maxLookupRange. Without a to the range stays open at the end,
+// as it was: a span stamped a little ahead of this clock is still found.
+func lookupRange(timeRange *spans_core.TimeRangeDTO, now time.Time) *spans_core.TimeRangeDTO {
+	resolved := &spans_core.TimeRangeDTO{}
+	end := now
+	if timeRange != nil && timeRange.To != nil {
+		to := timeRange.To.UTC()
+		resolved.To, end = &to, to
+	}
+	from := end.Add(-maxLookupRange)
+	if timeRange != nil && timeRange.From != nil && timeRange.From.After(from) {
+		from = timeRange.From.UTC()
+	}
+	resolved.From = &from
+	return resolved
+}
+
 // summaryStepMs is the trend bucket width: whole seconds, about
-// summaryTrendPoints buckets over span.
+// summaryTrendPoints buckets over span. Past a minute it's whole minutes,
+// past half an hour whole hours, so each bucket holds whole span rollup rows
+// (spans_1m, spans_1h): a day is 24 hourly points, not 30 of 48 minutes.
 func summaryStepMs(span time.Duration) int64 {
 	seconds := (span.Milliseconds() + 999) / 1000
-	return max(1, (seconds+summaryTrendPoints-1)/summaryTrendPoints) * 1000
+	step := max(1, (seconds+summaryTrendPoints-1)/summaryTrendPoints)
+	switch {
+	case step > 30*60:
+		step = (step + 3599) / 3600 * 3600
+	case step > 60:
+		step = (step + 59) / 60 * 60
+	}
+	return step * 1000
 }
 
 func buildTraceSummaryResponse(

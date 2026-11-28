@@ -26,11 +26,16 @@ Kubernetes in the ConfigMap and Secret (`deploy/kubernetes/eks/common/`) or the 
 | `WEBSITE_URL` | empty | Product website linked from the UI |
 | `APP_VERSION` | `dev` | Set by the image build; shown in Upgrade status and Site info |
 | `UPDATE_CHECK` | `true` | Settings > Updates asks GitHub for the latest Obzly release (an anonymous request with a generic User-Agent, cached 6 hours); `false` turns it off |
+| `MCP_WRITE_ENABLED` | `false` | Whether MCP clients can be given write access (create and end silences, create dashboards, add panels). `false`: every access token and connected app is read-only, including ones granted write access earlier, and the option isn't offered |
 | `BACKEND_ROOT_PATH` | working directory | Where `migrations/` is found |
 
 ## Valkey
 
-Caches, rate limits and leases only - no data that needs a backup.
+Caches, rate limits and leases only - no data that needs a backup. Ingest keeps going while Valkey
+is unreachable: request-path calls give up after 300 ms (250 ms for the logs rate limit) and skip
+Valkey for 2 s after one fails, projects and API keys a replica resolved in the last 30 s come from
+its memory, the rate limit from its own bucket, and shard workers keep the shards they hold. Watch
+`obzly_valkey_unreachable_total` and `obzly_ingest_shard_leases_unconfirmed`.
 
 | Variable | Default | |
 | --- | --- | --- |
@@ -60,12 +65,17 @@ Caches, rate limits and leases only - no data that needs a backup.
 | `INGEST_STREAM_MAX_BYTES` | 10 GiB | Each signal's buffer; when full, ingest answers `429` / `RESOURCE_EXHAUSTED`. The three must fit the broker volume |
 | `INGEST_L0_TARGET_BYTES` | 64 MiB | A worker writes a project's first-level segment once this much is buffered... |
 | `INGEST_L0_MAX_AGE` | `1h` (at least `5m`) | ...or once the oldest batch is this old. Buffered rows are searchable meanwhile |
+| `INGEST_LANES` | `auto` | `auto`: a project busier than half a worker gets more lanes (its batches spread over up to `INGEST_MAX_LANES` shards, so several workers write it) and fewer once it quietens ([design](INGEST_LANES.md)); needs `INGEST_SHARD_BALANCE=load`. `off`: every project on one shard |
+| `INGEST_MAX_LANES` | `8` | Most lanes one project gets per signal (1 to 64) |
+| `INGEST_SHARD_BALANCE` | `load` | How workers share the ingest shards: `load` spreads each signal's weighted bytes per second across workers in proportion to their CPU, moving busy shards to the workers with room ([design](INGEST_SHARD_BALANCING.md)); `count` gives each worker an even number of shards per signal, as before |
 
 ## Queries and executors
 
 | Variable | Default | |
 | --- | --- | --- |
 | `QUERY_MAX_SCAN_GB` | `100` | Most stored data one user query may read (GiB); over it the query is refused before reading. `0` off |
+| `QUERY_MEMORY_FRACTION` | `0.6` | Share of the container's memory limit that SQL-mode queries (and the AI usage pages and web analytics, which use the same sandbox) may use at once, beside what the long-lived handles use. A query gets what is free up to its cap and spills past it; with under 256 MB free it waits up to 10 s, then answers `429`. `0` off. See [MEMORY_AND_SIZING.md](MEMORY_AND_SIZING.md) |
+| `GOMEMLIMIT` | managed | Go's soft memory limit. Unset, Obzly keeps it at 90% of the container minus what DuckDB holds (at least a quarter of the container); setting it turns that off |
 | `QUERIER_TOKEN` | empty | Shared by `api` and `querier` replicas: signs query fragments (executors refuse unsigned ones) and authenticates the executors' result listener |
 | `QUERIER_GRPC_ADDR` | `:4319` | An executor's result listener - internal only |
 | `QUERIER_ADVERTISE_ADDR` | hostname + port | How `api` replicas reach it (the pod IP on Kubernetes) |
@@ -75,17 +85,19 @@ Caches, rate limits and leases only - no data that needs a backup.
 | `QUERIER_CONCURRENCY` | CPU count | Fragments an executor runs at once |
 | `QUERIER_SPILL_MAX_SIZE` | `8GB` | Most disk one DuckDB query handle's spill files may use: the executor's, and on `api`/`worker` replicas each stream's querier and each SQL-mode query (they share the data volume with segments and JetStream); a query that needs more fails instead of filling the disk. Leftover spill files are removed at start |
 | `QUERIER_WARM_HOURS` | `24` | On start, an executor downloads its share of this many hours of segments into its cache (up to half of `COLD_CACHE_MAX_SIZE_MB`), and from then on each segment it owns as it is uploaded; `0` turns both off |
+| `QUERIER_WARM_WAIT_SECONDS` | `300` | An executor that starts while others are running (a rolling update) warms its share before it takes fragments or opens its results port, for at most this long, so the rollout waits for it while the others serve; `0` joins at once |
 | `QUERY_CACHE_TTL_HOURS` | `24` | Histograms and dashboard series keep each finished hour's counts in Valkey this long, so asking again only scans what changed; `0` off |
 | `LOG_CONTEXT_DEFAULT_FIELDS` | | Comma-separated fields added to "Show logs around"'s default scope (the log's cluster, namespace, deployment/statefulset/daemonset/job, container and service), e.g. `team` |
 | `QUERY_PARTIAL_DOWNLOADS` | `true` | Read only the columns a query needs from a large cold segment (ranged reads into a sparse cache file) instead of downloading it whole |
 | `QUERY_CACHE_DELAY_SECONDS` | `300` | Partitions ending within this many seconds of now are never cached - rows still arrive for them |
+| `METRICS_PARTIALS_1M_DAYS` | `7` | Days of 1-minute metric partials the workers build and keep, which answer PromQL at a 1 m step (Grafana's usual step over a day) without reading samples; they hold about half the samples' rows. Older hours keep the 5-minute partials (any step that is a multiple of 5 m) and are read from samples at a 1 m step. `0` builds none and drops existing ones. Set it on `worker` and `api` replicas alike |
 
 ## Alerting
 
 | Variable | Default | |
 | --- | --- | --- |
 | `ALERT_EVAL_SHARDS` | `1` | Rule evaluation split this many ways, each under its own leader lock |
-| `INVENTORY_RETENTION_DAYS` | `30` | Infrastructure inventory: an asset not seen for this many days is dropped (terminated pods and containers after 7 days; a Job or CronJob run's pod once it succeeds, or a day after it failed) |
+| `INVENTORY_RETENTION_DAYS` | `30` | Infrastructure inventory: an asset not seen for this many days is dropped (terminated pods and containers after 24 hours, deleted workloads after 7 days; a Job or CronJob run's pod once it succeeds, or a day after it failed) |
 | `INVENTORY_MAX_ASSETS_PER_PROJECT` | `50000` | Infrastructure inventory: past this many assets in a project the least recently seen are dropped, with a warning in the worker log |
 | `WEB_ANALYTICS_GEOIP_DB` | `/app/geoip/dbip-country-lite.mmdb` | Web analytics: the country database visitor IPs are looked up in. The image bundles DB-IP Lite (CC BY 4.0; the report shows "IP geolocation by DB-IP"); any GeoIP2-Country compatible `.mmdb` (e.g. your own MaxMind GeoLite2-Country) works. A missing or unreadable file only leaves the Countries panel empty |
 | `ALERT_EGRESS_ALLOWLIST` | empty | CIDRs webhooks, and Synthetics Tests run from the control plane, may reach although not public (in-network receivers) |

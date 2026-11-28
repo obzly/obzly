@@ -52,6 +52,23 @@ runs with none.
   until a worker writes them; size `broker.storage.size` for about an hour of ingest and keep
   three `broker.streamMaxBytes` inside it. `broker.replicas` is 3 (R3 streams, one pod per zone)
   or 1 (no failover); 2 is refused.
+- Spreading: brokers spread over zones (`broker.zoneSpread`) and nodes (`broker.hostSpread`), both
+  required with a skew of 1. With three or more usable nodes that is one broker per node, so losing
+  a node never takes two brokers (and quorum) with it, and a descheduler's `RemoveDuplicates` has
+  nothing to evict. One- and two-node clusters still install (all three on one node, or 2+1);
+  nodes the brokers can't use (taints they don't tolerate, `broker.nodeSelector`) don't count, which
+  needs Kubernetes 1.26 or later. Queriers prefer one per node (`querier.hostSpread`, never blocks
+  scheduling). Set either to `false` only if you spread the pods yourself with `affinity`. Pod
+  topology constraints replace the scheduler's default node spreading, which is why the chart
+  states it. Each broker requests a full CPU; on busy nodes give them
+  Guaranteed QoS (`broker.resources` requests equal to limits, CPU included), since a starved
+  broker misses heartbeats and moves stream leaders while ingest stalls.
+- Valkey: the bundled one is a single pod without persistence. Ingest rides out a Valkey outage
+  (projects and API keys come from each replica's memory, rate limits from its own bucket, shard
+  workers keep consuming), but sign-in, live tail, query caches and leader-locked tasks wait for
+  it. For production set `valkey.enabled: false` and point `valkey.external` at a managed Valkey
+  or Redis with automatic failover behind one endpoint (ElastiCache Multi-AZ, Azure Cache for
+  Redis), or keep the bundled one on an on-demand node.
 - `config.trustedProxies`: your load balancer's CIDRs, so client IPs are real.
 - `tls.otlpGrpc.secretName`: a `kubernetes.io/tls` Secret (e.g. from cert-manager) when OTLP/gRPC
   on 4317 is reachable without a TLS-terminating proxy; plaintext otherwise.
@@ -61,6 +78,10 @@ runs with none.
 - `api.autoscaling` and `querier.autoscaling` (HPA on CPU), `querier.networkPolicy` (needs a CNI
   that enforces NetworkPolicy), `metrics.serviceMonitor` (a Prometheus Operator PodMonitor for
   every tier).
+- Pod memory: the defaults suit a small Site. Size `api` up (4-8 GiB, requests equal to limits)
+  when users run SQL mode over long windows; each `api` replica runs the SQL queries it receives.
+  See [`docs/MEMORY_AND_SIZING.md`](../../../docs/MEMORY_AND_SIZING.md) for sizes per tier, the
+  memory gate (`QUERY_MEMORY_FRACTION`) and the metrics to watch.
 - `config.extra` for any other setting, e.g. `QUERY_MAX_SCAN_GB`, or `SITE_ID`,
   `CONTROL_PLANE_ISSUER` to enroll the Site in a control plane.
 

@@ -174,7 +174,7 @@ func (s *UserService) SignUp(request *users_dto.SignUpRequestDTO, clientIP strin
 		}
 
 		name := request.Name
-		if err := s.userRepository.UpdateUserInfo(existingUser.ID, &name, nil); err != nil {
+		if err := s.userRepository.UpdateUserInfo(existingUser.ID, &name, nil, false); err != nil {
 			return fmt.Errorf("failed to update name: %w", err)
 		}
 
@@ -377,17 +377,10 @@ func (s *UserService) SignIn(
 		}
 	}
 
+	// No token yet, so no "signed in" audit: CompleteMFASignIn writes it.
 	outcome, err := s.completeAuthentication(user)
 	if err != nil {
 		return nil, err
-	}
-
-	if outcome.Token != "" {
-		s.auditLogWriter.WriteAuditLog(
-			fmt.Sprintf("User signed in with email: %s", user.Email),
-			&user.ID,
-			nil,
-		)
 	}
 
 	return outcome.toSignInResponse(), nil
@@ -433,11 +426,11 @@ func (o *authOutcome) toOAuthCallbackResponse(isNewUser bool) *users_dto.OAuthCa
 	return response
 }
 
-// completeAuthentication is the single point every login path goes through
-// once identity is confirmed, so MFA enforcement applies uniformly:
+// completeAuthentication is the single point every local login path goes
+// through once identity is confirmed. MFA is required for every role, so it
+// never issues an access token itself:
 //   - MFA enabled: issue a login challenge (/users/mfa/login-verify).
-//   - MFA required but not enabled: issue a setup challenge (/users/mfa/login-setup).
-//   - Neither: issue the access token.
+//   - Not enabled yet: issue a setup challenge (/users/mfa/login-setup).
 func (s *UserService) completeAuthentication(user *users_models.User) (*authOutcome, error) {
 	if user.MFAEnabled {
 		token, err := mfa_services.GetMFAService().IssueLoginChallengeToken(user.ID)
@@ -447,24 +440,11 @@ func (s *UserService) completeAuthentication(user *users_models.User) (*authOutc
 		return &authOutcome{MFARequired: true, MFAToken: token}, nil
 	}
 
-	if user.IsMFARequired() {
-		token, err := mfa_services.GetMFAService().IssueSetupChallengeToken(user.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to issue MFA setup challenge: %w", err)
-		}
-		return &authOutcome{MFASetupRequired: true, MFAToken: token}, nil
-	}
-
-	tokenResponse, err := s.GenerateAccessToken(user)
+	token, err := mfa_services.GetMFAService().IssueSetupChallengeToken(user.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to issue MFA setup challenge: %w", err)
 	}
-
-	return &authOutcome{
-		Token:  tokenResponse.Token,
-		UserID: tokenResponse.UserID,
-		Email:  user.Email,
-	}, nil
+	return &authOutcome{MFASetupRequired: true, MFAToken: token}, nil
 }
 
 // GetUserFromToken validates a local access token and loads its user; every
@@ -475,8 +455,15 @@ func (s *UserService) GetUserFromToken(token string) (*users_models.User, error)
 }
 
 // jwtParseOptions: HS256 only, and v4's checks kept on v5 (exp and nbf are
-// v5's defaults; iat in the future is rejected as v4 did).
-var jwtParseOptions = []jwt.ParserOption{jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuedAt()}
+// v5's defaults; iat in the future is rejected as v4 did). The leeway covers
+// clock skew between replicas: iat is whole seconds, so a token signed just
+// after a second ticked on one replica was "issued in the future" on another
+// whose clock was a few milliseconds behind, and the next request got a 401.
+var jwtParseOptions = []jwt.ParserOption{
+	jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuedAt(), jwt.WithLeeway(jwtClockLeeway),
+}
+
+const jwtClockLeeway = 30 * time.Second
 
 // GetUserAndClaimsFromToken is GetUserFromToken plus the verified claims, which
 // the middleware needs to tell exchanged and IdP-MFA sessions from local ones.
@@ -677,6 +664,30 @@ func (s *UserService) completeOAuthAuthentication(
 		UserID: tokenResponse.UserID,
 		Email:  user.Email,
 	}, nil
+}
+
+// CompleteMFASignIn mints the session for a sign-in whose local second factor
+// was just verified (firstSetup: MFA was enrolled in the same step). Password
+// and untrusted-provider sign-ins all end here, so this is where "signed in"
+// is audited; the challenge steps before it issue no token.
+func (s *UserService) CompleteMFASignIn(
+	user *users_models.User,
+	firstSetup bool,
+) (*users_dto.SignInResponseDTO, error) {
+	response, err := s.GenerateAccessToken(user)
+	if err != nil {
+		return nil, err
+	}
+	response.Email = user.Email
+
+	if s.auditLogWriter != nil {
+		how := "MFA verified"
+		if firstSetup {
+			how = "MFA set up"
+		}
+		s.auditLogWriter.WriteAuditLog(fmt.Sprintf("User signed in: %s (%s)", user.Email, how), &user.ID, nil)
+	}
+	return response, nil
 }
 
 // GenerateAccessToken mints a standard local access token.
@@ -1056,6 +1067,9 @@ func (s *UserService) inviteUser(
 		CreatedAt:            time.Now().UTC(),
 		InviteTokenHash:      &inviteTokenHash,
 		InviteTokenExpiresAt: &inviteTokenExpiresAt,
+		// Only an admin's invite vouches for the email: a member who may invite
+		// gets the invite token back and could complete the sign-up themselves.
+		EmailVerified: invitedBy.Role == users_enums.UserRoleAdmin,
 	}
 
 	if err := s.userRepository.CreateUser(user); err != nil {
@@ -1180,7 +1194,12 @@ func (s *UserService) UpdateUserInfo(
 		}
 	}
 
-	if err := s.userRepository.UpdateUserInfo(userID, request.Name, request.Email); err != nil {
+	// An email the user typed themselves is unverified; an unchanged one keeps its flag.
+	var newEmail *string
+	if emailChanging {
+		newEmail = request.Email
+	}
+	if err := s.userRepository.UpdateUserInfo(userID, request.Name, newEmail, false); err != nil {
 		return fmt.Errorf("failed to update user info: %w", err)
 	}
 
@@ -1574,7 +1593,7 @@ func (s *UserService) getOrCreateUserFromOAuth(
 				return nil, fmt.Errorf("failed to activate user: %w", err)
 			}
 
-			if err := s.userRepository.UpdateUserInfo(userByEmail.ID, &name, nil); err != nil {
+			if err := s.userRepository.UpdateUserInfo(userByEmail.ID, &name, nil, false); err != nil {
 				return nil, fmt.Errorf("failed to update name: %w", err)
 			}
 		}
@@ -1594,6 +1613,21 @@ func (s *UserService) getOrCreateUserFromOAuth(
 			}
 		}
 
+		// The provider's trusted email matched the account's.
+		if err := s.userRepository.SetEmailVerified(userByEmail.ID, true); err != nil {
+			return nil, fmt.Errorf("failed to mark email verified: %w", err)
+		}
+
+		// At link time, not at token time: the link stands even if the MFA
+		// step that follows is never finished.
+		if s.auditLogWriter != nil {
+			s.auditLogWriter.WriteAuditLog(
+				fmt.Sprintf("%s OAuth linked to existing account", provider),
+				&userByEmail.ID,
+				nil,
+			)
+		}
+
 		if onUserIdentified != nil {
 			onUserIdentified(userByEmail.ID)
 		}
@@ -1606,14 +1640,6 @@ func (s *UserService) getOrCreateUserFromOAuth(
 		outcome, err := s.completeOAuthAuthentication(user, idpMFATrusted)
 		if err != nil {
 			return nil, err
-		}
-
-		if outcome.Token != "" && s.auditLogWriter != nil {
-			s.auditLogWriter.WriteAuditLog(
-				fmt.Sprintf("%s OAuth linked to existing account", provider),
-				&user.ID,
-				nil,
-			)
 		}
 
 		return outcome.toOAuthCallbackResponse(false), nil
@@ -1663,6 +1689,8 @@ func (s *UserService) getOrCreateUserFromOAuth(
 		GitHubOAuthID:        githubOAuthID,
 		GoogleOAuthID:        googleOAuthID,
 		CreatedAt:            time.Now().UTC(),
+		// Reached only with an email the provider verified or the connector trusts.
+		EmailVerified: true,
 	}
 
 	if err := s.userRepository.CreateUser(newUser); err != nil {
@@ -1679,23 +1707,10 @@ func (s *UserService) getOrCreateUserFromOAuth(
 	if onUserIdentified != nil {
 		onUserIdentified(newUser.ID)
 
-		// A group may have just made them an Admin, who must complete MFA
-		// before getting a token - unless the provider enforces MFA.
+		// A group may have just made them an Admin; the token's role claim must say so.
 		if refreshed, err := s.userRepository.GetUserByID(newUser.ID); err == nil && refreshed != nil {
 			tokenUser = refreshed
-			if refreshed.IsMFARequired() && !idpMFATrusted {
-				outcome, err := s.completeAuthentication(refreshed)
-				if err != nil {
-					return nil, err
-				}
-				return outcome.toOAuthCallbackResponse(true), nil
-			}
 		}
-	}
-
-	tokenResponse, err := s.GenerateAccessTokenWithOptions(tokenUser, oauthTokenOptions(idpMFATrusted))
-	if err != nil {
-		return nil, err
 	}
 
 	if s.auditLogWriter != nil {
@@ -1706,12 +1721,12 @@ func (s *UserService) getOrCreateUserFromOAuth(
 		)
 	}
 
-	return &users_dto.OAuthCallbackResponseDTO{
-		UserID:    tokenResponse.UserID,
-		Email:     newUser.Email,
-		Token:     tokenResponse.Token,
-		IsNewUser: true,
-	}, nil
+	// A new account has no MFA yet: it goes through setup unless the provider enforces MFA.
+	outcome, err := s.completeOAuthAuthentication(tokenUser, idpMFATrusted)
+	if err != nil {
+		return nil, err
+	}
+	return outcome.toOAuthCallbackResponse(true), nil
 }
 
 // fetchGitHubEmail prefers /user/emails (the only source of verified status);

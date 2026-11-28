@@ -434,9 +434,12 @@ func Test_DeleteApiKey_WhenUserIsProjectOwner_ApiKeyDeleted(t *testing.T) {
 	project, _ := projects_testing.CreateTestProjectViaAPI("Test Project", owner, router)
 	apiKey := CreateTestApiKey("Delete Key", project.ID, owner.Token, router)
 
+	// MFA is required for every account, so deleting a key asks for a code.
+	mfaCode := users_testing.EnableRealMFAForTestUser(owner.UserID, owner.Email)
 	resp := test_utils.MakeRequest(t, router, test_utils.RequestOptions{
 		Method:         "DELETE",
 		URL:            "/api/v1/projects/api-keys/" + project.ID.String() + "/" + apiKey.ID.String(),
+		Body:           DeleteApiKeyRequestDTO{MFACode: &mfaCode},
 		AuthToken:      "Bearer " + owner.Token,
 		ExpectedStatus: http.StatusOK,
 	})
@@ -456,9 +459,12 @@ func Test_DeleteApiKey_WhenUserIsProjectAdmin_ApiKeyDeleted(t *testing.T) {
 	projects_testing.AddMemberToProject(project, admin, users_enums.ProjectRoleAdmin, owner.Token, router)
 	apiKey := CreateTestApiKey("Admin Delete Key", project.ID, owner.Token, router)
 
+	// MFA is required for every account, so deleting a key asks for a code.
+	mfaCode := users_testing.EnableRealMFAForTestUser(admin.UserID, admin.Email)
 	resp := test_utils.MakeRequest(t, router, test_utils.RequestOptions{
 		Method:         "DELETE",
 		URL:            "/api/v1/projects/api-keys/" + project.ID.String() + "/" + apiKey.ID.String(),
+		Body:           DeleteApiKeyRequestDTO{MFACode: &mfaCode},
 		AuthToken:      "Bearer " + admin.Token,
 		ExpectedStatus: http.StatusOK,
 	})
@@ -520,9 +526,12 @@ func Test_DeleteApiKey_WithNonExistentApiKey_ReturnsBadRequest(t *testing.T) {
 	owner := users_testing.CreateTestUser(users_enums.UserRoleMember)
 	project, _ := projects_testing.CreateTestProjectViaAPI("Test Project", owner, router)
 
+	// MFA is required for every account, so deleting a key asks for a code.
+	mfaCode := users_testing.EnableRealMFAForTestUser(owner.UserID, owner.Email)
 	resp := test_utils.MakeRequest(t, router, test_utils.RequestOptions{
 		Method:         "DELETE",
 		URL:            "/api/v1/projects/api-keys/" + project.ID.String() + "/" + uuid.New().String(),
+		Body:           DeleteApiKeyRequestDTO{MFACode: &mfaCode},
 		AuthToken:      "Bearer " + owner.Token,
 		ExpectedStatus: http.StatusBadRequest,
 	})
@@ -578,9 +587,12 @@ func Test_DeleteApiKey_WithApiKeyFromDifferentProject_ReturnsBadRequest(t *testi
 	apiKey := CreateTestApiKey("Cross Project Delete Key", project1.ID, owner1.Token, router)
 
 	// Try to delete it via project2 endpoint
+	// MFA is required for every account, so deleting a key asks for a code.
+	mfaCode := users_testing.EnableRealMFAForTestUser(owner2.UserID, owner2.Email)
 	resp := test_utils.MakeRequest(t, router, test_utils.RequestOptions{
 		Method:         "DELETE",
 		URL:            "/api/v1/projects/api-keys/" + project2.ID.String() + "/" + apiKey.ID.String(),
+		Body:           DeleteApiKeyRequestDTO{MFACode: &mfaCode},
 		AuthToken:      "Bearer " + owner2.Token,
 		ExpectedStatus: http.StatusBadRequest,
 	})

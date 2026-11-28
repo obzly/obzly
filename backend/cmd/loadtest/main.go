@@ -17,6 +17,20 @@
 //
 //	go run ./cmd/loadtest -mode otlp -signal traces -protocol grpc \
 //	  -grpc-addr localhost:4317 -api-key <key> -gzip
+//
+// -profile k8s (OTLP logs) sends a Kubernetes cluster's worth of varied,
+// high-cardinality logs (k8slogs.go) at -lines-per-second on a simulated
+// clock; -backfill starts that clock in the past and catches up as fast as
+// the server accepts. Seven days of a 150 M lines/day project:
+//
+//	go run ./cmd/loadtest -mode otlp -profile k8s -api-key <key> -gzip \
+//	  -lines-per-second 1750 -backfill 168h -duration 720h -batch-size 1000
+//
+// -profile cluster takes the same flags and sends a whole cluster's logs
+// (cluster.go): the k8s profile's applications in several languages, as
+// Deployments, StatefulSets and DaemonSets with istio-proxy sidecars, plus
+// ingress-nginx, CoreDNS, kube-proxy and other cluster components,
+// Postgres, Redis and Kafka, and a few VMs logging syslog.
 package main
 
 import (
@@ -29,9 +43,11 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	ossignal "os/signal"
 	"sort"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -112,6 +128,11 @@ func (s *restSender) target() string { return s.url }
 func (s *restSender) unit() string   { return "logs" }
 func (s *restSender) close()         {}
 
+// progressReporter is a sender that can say how far a long run has got.
+type progressReporter interface {
+	progress() string
+}
+
 type result struct {
 	latency        time.Duration
 	sentBytes      int
@@ -136,6 +157,22 @@ func main() {
 	batchSize := flag.Int("batch-size", 100, "logs, spans or data points per request (server caps at 5000)")
 	rps := flag.Int("rps", 0, "cap this tool's own send rate in requests/sec, 0 = unlimited (send as fast as possible)")
 	timeout := flag.Duration("timeout", 10*time.Second, "per-request timeout")
+	profile := flag.String(
+		"profile",
+		"simple",
+		"otlp: simple (fixed messages, small span trees, two metrics), k8s (a Kubernetes shop: its apps' logs, "+
+			"request traces across its services, or its collector's host, pod and app metrics) or cluster "+
+			"(logs only: apps, cluster components, data services and VMs)",
+	)
+	linesPerSecond := flag.Float64(
+		"lines-per-second",
+		1750,
+		"k8s and cluster profiles: simulated log lines (or, for traces, spans) per second once caught up",
+	)
+	scrapeInterval := flag.Duration("scrape-interval", 30*time.Second,
+		"k8s metrics: every series gets a point this often (about 29 series a pod, 137 a node)")
+	backfill := flag.Duration("backfill", 0, "k8s and cluster profiles: start the simulated clock this far in the past")
+	pods := flag.Int("pods", 40, "k8s and cluster profiles: pods across the simulated Deployments")
 	flag.Parse()
 
 	if *batchSize < 1 || *batchSize > 5000 {
@@ -186,6 +223,30 @@ func main() {
 			os.Exit(1)
 		}
 		s = otlp
+		switch *profile {
+		case "simple":
+		case "k8s", "cluster":
+			if (*profile == "cluster" && *signal != "logs") || *linesPerSecond <= 0 || *pods < 1 ||
+				*scrapeInterval <= 0 {
+				fmt.Fprintf(os.Stderr, "error: -profile %s needs -lines-per-second > 0, -pods >= 1 and "+
+					"-scrape-interval > 0 (cluster: -signal logs only)\n", *profile)
+				os.Exit(2)
+			}
+			start := time.Now().Add(-*backfill)
+			switch {
+			case *profile == "cluster":
+				s = newClusterLogsSender(otlp, start, *linesPerSecond, *pods)
+			case *signal == "traces":
+				s = newK8sTracesSender(otlp, start, *linesPerSecond, *pods)
+			case *signal == "metrics":
+				s = newK8sMetricsSender(otlp, start, *scrapeInterval, *pods)
+			default:
+				s = newK8sLogsSender(otlp, start, *linesPerSecond, *pods)
+			}
+		default:
+			fmt.Fprintln(os.Stderr, "error: -profile must be simple, k8s or cluster")
+			os.Exit(2)
+		}
 	default:
 		fmt.Fprintln(os.Stderr, "error: -mode must be rest or otlp")
 		os.Exit(2)
@@ -197,20 +258,28 @@ func main() {
 		s.target(), *duration, *concurrency, *batchSize, rpsLabel(*rps), *useGzip && *mode == "otlp",
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), *duration)
+	// Stopping the run (Ctrl-C, systemctl stop) still prints the report.
+	stopCtx, stop := ossignal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(stopCtx, *duration)
 	defer cancel()
 
 	resultsCh := make(chan result, *concurrency*2)
 	var wg sync.WaitGroup
 
+	// One ticker shared by every worker: each tick lets one request out, so it
+	// fires rps times a second whatever -concurrency is.
 	var ticker *time.Ticker
 	if *rps > 0 {
-		perWorkerInterval := time.Duration(float64(*concurrency) / float64(*rps) * float64(time.Second))
-		if perWorkerInterval <= 0 {
-			perWorkerInterval = time.Millisecond
+		interval := time.Duration(float64(time.Second) / float64(*rps))
+		if interval <= 0 {
+			interval = time.Millisecond
 		}
-		ticker = time.NewTicker(perWorkerInterval)
+		ticker = time.NewTicker(interval)
 		defer ticker.Stop()
+	}
+	if p, ok := s.(progressReporter); ok {
+		go reportProgress(ctx, p, time.Minute)
 	}
 
 	start := time.Now()
@@ -232,7 +301,12 @@ func main() {
 						return
 					}
 				}
-				reqCtx, reqCancel := context.WithTimeout(ctx, *timeout)
+				// A sender that retries by itself times each attempt; a timeout
+				// around its whole retry loop would silently abandon the batch.
+				reqCtx, reqCancel := ctx, context.CancelFunc(func() {})
+				if _, retries := s.(*k8sLogsSender); !retries {
+					reqCtx, reqCancel = context.WithTimeout(ctx, *timeout)
+				}
 				r := s.send(reqCtx, rng)
 				reqCancel()
 				if ctx.Err() != nil && r.err != nil {
@@ -396,6 +470,19 @@ func printReport(in reportInput) {
 		fmt.Printf("Sample errors (first %d):\n", len(in.sampleErrors))
 		for _, e := range in.sampleErrors {
 			fmt.Printf("  - %s\n", e)
+		}
+	}
+}
+
+func reportProgress(ctx context.Context, p progressReporter, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fmt.Printf("%s  %s\n", time.Now().UTC().Format(time.RFC3339), p.progress())
 		}
 	}
 }

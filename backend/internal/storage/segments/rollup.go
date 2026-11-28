@@ -23,48 +23,8 @@ var RollupStreams = map[string]time.Duration{
 func (c *Compactor) BuildGroupedRollup(
 	record *SegmentRecord, sourceStream, stream, selectList, groupBy, dataDir string,
 ) (*Segment, error) {
-	source, args := SourceExpr(sourceStream, []ResolvedFile{{Path: record.Path, Legacy: record.IsLegacy()}})
-	query := "SELECT " + selectList + " FROM " + source + " GROUP BY " + groupBy
-
-	segmentDir := filepath.Join(dataDir, stream, record.ProjectID.String())
-	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create rollup directory: %w", err)
-	}
-	outputPath := filepath.Join(segmentDir, fmt.Sprintf("%d_%s.parquet", time.Now().UnixNano(), uuid.NewString()[:8]))
-	if err := c.execGated(false, compactionCopySQL(query, outputPath), args...); err != nil {
-		_ = os.Remove(outputPath)
-		return nil, fmt.Errorf("failed to build %s rollup of segment %s: %w", stream, record.ID, err)
-	}
-
-	var rows int64
-	var minTime, maxTime *time.Time
-	if err := c.db.QueryRow("SELECT count(*), min(timestamp), max(timestamp) FROM read_parquet(?)", outputPath).
-		Scan(&rows, &minTime, &maxTime); err != nil {
-		_ = os.Remove(outputPath)
-		return nil, fmt.Errorf("failed to read rollup of segment %s: %w", record.ID, err)
-	}
-	if rows == 0 || minTime == nil || maxTime == nil {
-		_ = os.Remove(outputPath)
-		return nil, nil
-	}
-	info, err := os.Stat(outputPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat rollup: %w", err)
-	}
-	return &Segment{
-		Path:          outputPath,
-		ProjectID:     record.ProjectID,
-		Stream:        stream,
-		RowCount:      int(rows),
-		SizeBytes:     info.Size(),
-		RawSizeBytes:  info.Size(),
-		MinTime:       minTime.UTC(),
-		MaxTime:       maxTime.UTC(),
-		CreatedAt:     time.Now().UTC(),
-		SchemaVersion: CurrentSchemaVersion,
-		Stats:         &SegmentStats{Source: record.ID.String()},
-		Level:         LevelCold,
-	}, nil
+	return c.BuildRollupQuery(record, sourceStream, stream,
+		"SELECT "+selectList+" FROM "+RollupSourcePlaceholder+" GROUP BY "+groupBy, dataDir, false)
 }
 
 // BuildRollup writes stream's rollup of one metrics segment: per series

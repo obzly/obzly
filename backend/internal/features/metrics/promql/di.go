@@ -17,6 +17,10 @@ func GetParser() parser.Parser {
 	return queryParser
 }
 
+// lookbackDelta is Prometheus's default; pushed-down instant selectors use
+// it too.
+const lookbackDelta = 5 * time.Minute
+
 // engine is shared process-wide, as in Prometheus: an Engine holds no
 // per-query state beyond its in-flight tracker.
 var engine = promql.NewEngine(promql.EngineOpts{
@@ -24,7 +28,7 @@ var engine = promql.NewEngine(promql.EngineOpts{
 	MaxSamples: 50_000_000,
 	Timeout:    2 * time.Minute,
 	// Prometheus's defaults: 5m lookback, 1m subquery step.
-	LookbackDelta:            5 * time.Minute,
+	LookbackDelta:            lookbackDelta,
 	NoStepSubqueryIntervalFn: func(int64) int64 { return (1 * time.Minute).Milliseconds() },
 	EnableAtModifier:         true,
 	EnableNegativeOffset:     true,

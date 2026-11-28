@@ -13,11 +13,13 @@ import (
 )
 
 var (
-	ErrAlreadyEnabled   = errors.New("MFA is already enabled")
-	ErrNotSetUp         = errors.New("MFA setup has not been started - call setup first")
-	ErrNotEnabled       = errors.New("MFA is not enabled on this account")
-	ErrRequiredForAdmin = errors.New("MFA is required for admin accounts and cannot be disabled")
-	ErrUserNotFound     = errors.New("user not found")
+	ErrAlreadyEnabled = errors.New("MFA is already enabled")
+	ErrNotSetUp       = errors.New("MFA setup has not been started - call setup first")
+	ErrNotEnabled     = errors.New("MFA is not enabled on this account")
+	ErrRequired       = errors.New(
+		"MFA is required for every account and can't be turned off; if you lost your device, ask an admin to reset it",
+	)
+	ErrUserNotFound = errors.New("user not found")
 )
 
 type Service struct {
@@ -33,7 +35,7 @@ func (s *Service) SetAuditLogWriter(writer users_interfaces.AuditLogWriter) {
 func (s *Service) GetStatus(user *users_models.User) *mfa_dto.StatusResponseDTO {
 	return &mfa_dto.StatusResponseDTO{
 		Enabled:  user.MFAEnabled,
-		Required: user.IsMFARequired(),
+		Required: true,
 	}
 }
 
@@ -90,29 +92,13 @@ func (s *Service) Enable(user *users_models.User, code string) error {
 	return nil
 }
 
-// Disable requires a valid code and is refused for Admin-role accounts, which
-// is what makes MFA required for them.
-func (s *Service) Disable(user *users_models.User, code string) error {
+// Disable is always refused: MFA is required for every account. The route
+// stays for API compatibility; AdminReset is the lost-device path.
+func (s *Service) Disable(user *users_models.User, _ string) error {
 	if !user.MFAEnabled {
 		return ErrNotEnabled
 	}
-	if user.IsMFARequired() {
-		return ErrRequiredForAdmin
-	}
-
-	if _, err := s.verifyCode(user, code); err != nil {
-		return err
-	}
-
-	if err := s.userRepository.ClearMFA(user.ID); err != nil {
-		return fmt.Errorf("failed to disable MFA: %w", err)
-	}
-
-	if s.auditLogWriter != nil {
-		s.auditLogWriter.WriteAuditLog("MFA disabled", &user.ID, nil)
-	}
-
-	return nil
+	return ErrRequired
 }
 
 // AdminReset clears targetUser's MFA (lost device). Callers authorize

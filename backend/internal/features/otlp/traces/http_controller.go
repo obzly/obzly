@@ -77,7 +77,7 @@ func (c *HTTPController) writeError(ctx *gin.Context, err error, isJSON bool) {
 	case ExportErrorUnauthenticated:
 		statusCode = http.StatusUnauthorized
 	case ExportErrorResourceExhausted, ExportErrorUnavailable:
-		statusCode = otlp.WriteRetryableHTTPStatus(ctx, exportErr.Code == ExportErrorResourceExhausted)
+		statusCode = otlp.WriteRetryableHTTPStatus(ctx, exportErr.Code == ExportErrorResourceExhausted, 0)
 	}
 
 	response := &collectortracev1.ExportTraceServiceResponse{

@@ -236,8 +236,10 @@ func generatedSuffix(i int) string {
 func Test_PatternTrends_WhenTheWeekReachesBeforeThePatternVersion_LeavesRegroupedPatternsOutOfNew(t *testing.T) {
 	router, owner, project, uniqueID := SetupBasicQueryTest(t, "Pattern trends version")
 	unlimited(project, owner.Token, router)
+	// Version 2, which regrouped the order pattern, started just before the
+	// current one: the week reaches both.
 	since := time.Now().UTC().Add(-2 * time.Hour)
-	logs_core.SetPatternVersionSinceForTest(since)
+	logs_core.SetPatternVersionStartsForTest(map[int]time.Time{2: since.Add(-time.Minute), logs_core.PatternVersion: since})
 	t.Cleanup(func() { logs_core.SetPatternVersionSinceForTest(time.Time{}) })
 	now := time.Now().UTC().Truncate(10 * time.Minute)
 	from := now.Add(-time.Hour)

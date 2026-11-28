@@ -32,6 +32,9 @@ type SpanCompactor struct {
 	compactor   *segments.Compactor
 	// objectStore is nil unless object storage is configured (WithObjectStore).
 	objectStore *segments.ObjectStore
+	// publisher uploads each merge before it replaces its sources (nil
+	// without object storage).
+	publisher segments.Publisher
 }
 
 type Option func(*options)
@@ -66,6 +69,11 @@ func NewSpanCompactor(dataDir string, opts ...Option) (*SpanCompactor, error) {
 		compactor:   compactor,
 		objectStore: cfg.objectStore,
 	}, nil
+}
+
+// SetPublisher uploads each merge before it replaces its sources.
+func (c *SpanCompactor) SetPublisher(publisher segments.Publisher) {
+	c.publisher = publisher
 }
 
 func (c *SpanCompactor) Close() error {
@@ -139,23 +147,17 @@ func (c *SpanCompactor) CompactSmallSegments(
 			telemetry.SpansSampledOut.Add(float64(max(inputRows-int64(merged.RowCount), 0)))
 		}
 
-		mergedRecord := segments.FromSegment(*merged)
-		if err := c.segmentRepo.ReplaceSegments(idsOf(group), mergedRecord); err != nil {
-			// Discard the merged file; its rows are either still in the
-			// sources or were deliberately deleted.
-			if cleanupErr := c.compactor.DeleteSegmentFiles(
-				[]*segments.SegmentRecord{mergedRecord},
-			); cleanupErr != nil {
-				return result, fmt.Errorf("failed to discard merged segment: %w", cleanupErr)
-			}
-			if errors.Is(err, segments.ErrSegmentsGone) {
-				continue
-			}
-			return result, fmt.Errorf("failed to record merged segment: %w", err)
+		committed, err := segments.CommitMerge(context.Background(), c.segmentRepo, c.publisher,
+			c.deleteSegmentData, group, segments.FromSegment(*merged))
+		if errors.Is(err, segments.ErrMergeNotPublished) {
+			mergeErrs = append(mergeErrs, err)
+			continue
 		}
-
-		if err := c.deleteSegmentData(group); err != nil {
-			return result, fmt.Errorf("failed to clean up merged-away segments: %w", err)
+		if err != nil {
+			return result, err
+		}
+		if !committed {
+			continue
 		}
 
 		result.MergedGroups++
@@ -201,6 +203,15 @@ func (c *SpanCompactor) DeleteAllForProject(projectID uuid.UUID) (int, error) {
 	records, err := c.segmentRepo.DeleteByProject(projectID, streamSpans)
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete segments: %w", err)
+	}
+	for _, stream := range spans_core.SpanRollupStreams {
+		rollups, err := c.segmentRepo.DeleteByProject(projectID, stream)
+		if err != nil {
+			return 0, fmt.Errorf("failed to delete %s rollups: %w", stream, err)
+		}
+		if err := c.deleteSegmentData(rollups); err != nil {
+			return 0, err
+		}
 	}
 
 	return len(records), c.deleteSegmentData(records)

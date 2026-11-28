@@ -110,7 +110,7 @@ func (c *HTTPController) writeError(ctx *gin.Context, err error) {
 	case WriteErrorResourceExhausted, WriteErrorUnavailable:
 		// 503 even when full: Prometheus retries 429 only with
 		// retry_on_http_429, but always retries 5xx.
-		statusCode = otlp.WriteRetryableHTTPStatus(ctx, false)
+		statusCode = otlp.WriteRetryableHTTPStatus(ctx, false, 0)
 	}
 	ctx.JSON(statusCode, gin.H{"error": writeErr.Message})
 }

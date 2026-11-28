@@ -3,9 +3,6 @@ package users_services
 import (
 	"cmp"
 	"fmt"
-	"log/slog"
-	"sync"
-	"time"
 
 	users_dto "obzly/internal/features/users/dto"
 	users_interfaces "obzly/internal/features/users/interfaces"
@@ -18,40 +15,17 @@ type SettingsService struct {
 	auditLogWriter         users_interfaces.AuditLogWriter
 }
 
-// Every authenticated request asks whether MFA is required; other replicas
-// see a change within this long.
-const mfaSettingTTL = 15 * time.Second
-
-var mfaSetting struct {
-	sync.Mutex
-	value   bool
-	readAt  time.Time
-	present bool
-}
-
 func (s *SettingsService) SetAuditLogWriter(writer users_interfaces.AuditLogWriter) {
 	s.auditLogWriter = writer
 }
 
 func (s *SettingsService) GetSettings() (*users_models.UsersSettings, error) {
-	return s.userSettingsRepository.GetSettings()
-}
-
-// MFARequiredForEveryone is the setting, cached for mfaSettingTTL; on a
-// read error it keeps the last value it had.
-func (s *SettingsService) MFARequiredForEveryone() bool {
-	mfaSetting.Lock()
-	defer mfaSetting.Unlock()
-	if mfaSetting.present && time.Since(mfaSetting.readAt) < mfaSettingTTL {
-		return mfaSetting.value
-	}
 	settings, err := s.userSettingsRepository.GetSettings()
 	if err != nil {
-		slog.Warn("reading the MFA setting failed; keeping the last value", "error", err)
-		return mfaSetting.value
+		return nil, err
 	}
-	mfaSetting.value, mfaSetting.readAt, mfaSetting.present = settings.IsMFARequiredForEveryone, time.Now().UTC(), true
-	return mfaSetting.value
+	settings.IsMFARequiredForEveryone = true
+	return settings, nil
 }
 
 func (s *SettingsService) UpdateSettings(
@@ -90,7 +64,6 @@ func (s *SettingsService) UpdateSettings(
 	change("isAllowMemberInvitations", &existingSettings.IsAllowMemberInvitations, request.IsAllowMemberInvitations)
 	change("isMemberAllowedToCreateProjects", &existingSettings.IsMemberAllowedToCreateProjects,
 		request.IsMemberAllowedToCreateProjects)
-	change("isMfaRequiredForEveryone", &existingSettings.IsMFARequiredForEveryone, request.IsMFARequiredForEveryone)
 	if request.IsUserThemeChoiceAllowed != nil {
 		change("isUserThemeChoiceAllowed", &existingSettings.IsUserThemeChoiceAllowed,
 			*request.IsUserThemeChoiceAllowed)
@@ -109,11 +82,7 @@ func (s *SettingsService) UpdateSettings(
 	if err := s.userSettingsRepository.UpdateSettings(existingSettings); err != nil {
 		return nil, fmt.Errorf("failed to update settings: %w", err)
 	}
-	mfaSetting.Lock()
-	mfaSetting.value, mfaSetting.readAt, mfaSetting.present = existingSettings.IsMFARequiredForEveryone, time.Now().
-		UTC(),
-		true
-	mfaSetting.Unlock()
+	existingSettings.IsMFARequiredForEveryone = true
 
 	for _, message := range auditLogMessages {
 		s.auditLogWriter.WriteAuditLog(

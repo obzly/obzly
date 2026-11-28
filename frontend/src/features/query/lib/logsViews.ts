@@ -19,3 +19,24 @@ export const LOGS_VIEWS: LogsViewTab[] = [
   { key: 'health', label: 'Health map', isNew: true },
   { key: 'web', label: 'Web analytics', isNew: true },
 ];
+
+const LOGS_VIEW_STORAGE_KEY = 'obzly-logs-view';
+
+// Per browser tab (sessionStorage), like the selected page: a reload keeps the
+// view, a new visit opens Search.
+export const readStoredLogsView = (): string => {
+  try {
+    const stored = sessionStorage.getItem(LOGS_VIEW_STORAGE_KEY);
+    return LOGS_VIEWS.some((view) => view.key === stored) ? (stored as string) : LOGS_SEARCH_VIEW;
+  } catch {
+    return LOGS_SEARCH_VIEW;
+  }
+};
+
+export const storeLogsView = (view: string): void => {
+  try {
+    sessionStorage.setItem(LOGS_VIEW_STORAGE_KEY, view);
+  } catch {
+    /* a reload opens Search */
+  }
+};

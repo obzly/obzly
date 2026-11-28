@@ -42,6 +42,17 @@ var DeduplicatingMerges = map[string]string{
 		"max(last_seen) AS last_seen FROM %s GROUP BY project_id, series_id ORDER BY metric_name, series_id",
 }
 
+// CompactionUniqueColumn is each stream's row id. Ingest assigns it before
+// the broker, so a batch redelivered after it was already persisted (a
+// worker or broker restart between upload and ack) repeats its ids. Sorted
+// merges, where both copies meet minutes later, keep one row per id.
+var CompactionUniqueColumn = map[string]string{
+	"logs":    "id",
+	"ai_logs": "id",
+	"spans":   "id",
+	"metrics": "id",
+}
+
 // CompactionTimeColumn is each stream's row time, the first sort key in
 // hour buckets.
 var CompactionTimeColumn = map[string]string{

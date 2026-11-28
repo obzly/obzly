@@ -6,6 +6,7 @@ export type { LogSampleRule, RetentionPolicy, RetentionSignal } from './model/Re
 export type { PromotedField, PromotedFieldType } from './model/PromotedField';
 export type {
   IngestionHealth,
+  IngestionRefusal,
   IngestionSignal,
   IngestionSignalStatus,
   IngestionSource,

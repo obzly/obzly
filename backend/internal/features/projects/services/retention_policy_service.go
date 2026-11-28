@@ -1,6 +1,7 @@
 package projects_services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	users_models "obzly/internal/features/users/models"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 )
 
 var (
@@ -20,9 +22,17 @@ var (
 	ErrRetentionPolicyNotFound  = errors.New("insufficient permissions to view project")
 )
 
-// logRulesTTL: how long ingest reuses a project's log sampling rules; a
-// change reaches every replica within it.
-const logRulesTTL = 30 * time.Second
+const (
+	// logRulesTTL: how long ingest reuses a project's log sampling rules; a
+	// change reaches every replica within it.
+	logRulesTTL = 30 * time.Second
+	// logRulesTimeout, logRulesRetry: a hung database held every log request
+	// (each on its own pool connection) until it answered, warm replicas too
+	// once the rules expired. A failed read now keeps the last rules (none:
+	// keep everything) and is retried after logRulesRetry.
+	logRulesTimeout = 3 * time.Second
+	logRulesRetry   = 10 * time.Second
+)
 
 // RetentionPolicyService manages per-signal retention and sampling.
 type RetentionPolicyService struct {
@@ -30,6 +40,7 @@ type RetentionPolicyService struct {
 	repository      *projects_repositories.RetentionPolicyRepository
 	auditLogService *audit_logs.AuditLogService
 	logRules        sync.Map // uuid.UUID -> cachedLogRules
+	logRulesReads   singleflight.Group
 }
 
 type cachedLogRules struct {
@@ -99,20 +110,31 @@ func (s *RetentionPolicyService) SetRetentionPolicies(
 }
 
 // LogSampleRules is projectID's log sampling rules for ingest, cached for
-// logRulesTTL; nil (keep everything) when they can't be read.
+// logRulesTTL; the last rules read (none: keep everything) when they can't
+// be read.
 func (s *RetentionPolicyService) LogSampleRules(projectID uuid.UUID) projects_models.LogSampleRules {
+	var cached cachedLogRules
 	if value, ok := s.logRules.Load(projectID); ok {
-		if cached, ok := value.(cachedLogRules); ok && time.Since(cached.fetched) < logRulesTTL {
+		cached, _ = value.(cachedLogRules)
+		if time.Since(cached.fetched) < logRulesTTL {
 			return cached.rules
 		}
 	}
-	policies, err := s.PoliciesFor(projectID)
-	if err != nil {
-		return nil
-	}
-	rules := policies[projects_models.SignalLogs].SampleRules
-	s.logRules.Store(projectID, cachedLogRules{rules: rules, fetched: time.Now()})
-	return rules
+	rules, _, _ := s.logRulesReads.Do(projectID.String(), func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), logRulesTimeout)
+		defer cancel()
+		stored, err := s.repository.ListByProjectContext(ctx, projectID)
+		if err != nil {
+			retryAt := time.Now().UTC().Add(logRulesRetry - logRulesTTL)
+			s.logRules.Store(projectID, cachedLogRules{rules: cached.rules, fetched: retryAt})
+			return cached.rules, nil
+		}
+		rules := withDefaults(projectID, stored)[projects_models.SignalLogs].SampleRules
+		s.logRules.Store(projectID, cachedLogRules{rules: rules, fetched: time.Now().UTC()})
+		return rules, nil
+	})
+	result, _ := rules.(projects_models.LogSampleRules)
+	return result
 }
 
 // PoliciesFor is projectID's policy per signal, defaults filled in, for

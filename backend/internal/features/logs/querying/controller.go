@@ -1,6 +1,9 @@
 package logs_querying
 
 import (
+	"errors"
+	"obzly/internal/util/logger"
+
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -10,6 +13,7 @@ import (
 	logs_core "obzly/internal/features/logs/core"
 	users_models "obzly/internal/features/users/models"
 	"obzly/internal/query"
+	"obzly/internal/util/querylimit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -708,6 +712,11 @@ func (c *LogQueryController) ExecuteHealthMap(ctx *gin.Context) {
 
 func (c *LogQueryController) handleError(ctx *gin.Context, err error) {
 	status, body := c.errorResponse(err)
+	if status == http.StatusInternalServerError {
+		// The client only gets a generic message, so the cause goes here.
+		logger.GetLogger().Error("Log query failed", "path", ctx.FullPath(),
+			"projectId", ctx.Param("projectId"), "error", err)
+	}
 	ctx.JSON(status, body)
 }
 
@@ -722,6 +731,18 @@ func (c *LogQueryController) errorResponse(err error) (int, gin.H) {
 			"error": validationErr.Message,
 			"code":  validationErr.Code,
 		}
+	}
+
+	if errors.Is(err, logs_core.ErrSQLOutOfMemory) {
+		return http.StatusUnprocessableEntity, gin.H{
+			"error": logs_core.ErrSQLOutOfMemory.Error(),
+			"code":  "QUERY_NEEDS_MORE_MEMORY",
+		}
+	}
+
+	// segments.ErrMemoryBusy among them: the replica is short of memory for now.
+	if errors.Is(err, querylimit.ErrTooManyQueries) {
+		return http.StatusTooManyRequests, gin.H{"error": err.Error(), "code": logs_core.ErrorTooManyConcurrentQueries}
 	}
 
 	if strings.Contains(err.Error(), "insufficient permissions") {

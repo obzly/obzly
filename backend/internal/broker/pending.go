@@ -17,8 +17,10 @@ const pendingBatch = 256
 // PendingMessage is one stored ingest batch no worker has acked yet: its
 // rows are in no queryable segment.
 type PendingMessage struct {
-	Seq  uint64
-	Data []byte
+	Seq uint64
+	// Subject names the lane shard the batch went to.
+	Subject string
+	Data    []byte
 }
 
 type directGetRequest struct {
@@ -46,18 +48,26 @@ func (c *Client) PendingIngest(
 	return c.PendingIngestRange(ctx, signal, projectID, 1, 0, maxBytes)
 }
 
-// FirstPendingSeq is the sequence of the project's oldest pending batch;
-// ok is false when none is pending.
-func (c *Client) FirstPendingSeq(ctx context.Context, signal string, projectID uuid.UUID) (uint64, bool, error) {
+// FirstPendingSeqs is, per subject, the sequence of its oldest pending
+// batch; a subject with none pending is left out. A shard's batches are
+// acked oldest first, so everything of a subject below its sequence is
+// written.
+func (c *Client) FirstPendingSeqs(ctx context.Context, signal string, subjects []string) (map[string]uint64, error) {
 	stream, err := streamFor(signal)
 	if err != nil {
-		return 0, false, err
+		return nil, err
 	}
-	batch, _, err := c.directGetBatch(ctx, stream, IngestSubject(signal, projectID), 1, 0, 1)
-	if err != nil || len(batch) == 0 {
-		return 0, false, err
+	firsts := map[string]uint64{}
+	for _, subject := range subjects {
+		batch, _, err := c.directGetBatch(ctx, stream, subject, 1, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) > 0 {
+			firsts[subject] = batch[0].Seq
+		}
 	}
-	return batch[0].Seq, true, nil
+	return firsts, nil
 }
 
 // PendingIngestRange is PendingIngest for sequences fromSeq..upToSeq
@@ -74,7 +84,7 @@ func (c *Client) PendingIngestRange(
 		return nil, err
 	}
 
-	subject := IngestSubject(signal, projectID)
+	subject := ProjectSubjects(signal, projectID)
 	var messages []PendingMessage
 	total := 0
 	next := max(fromSeq, 1)
@@ -142,7 +152,7 @@ func (c *Client) directGetBatch(
 		if err != nil {
 			return nil, false, fmt.Errorf("direct get on %s: bad sequence header: %w", stream, err)
 		}
-		batch = append(batch, PendingMessage{Seq: msgSeq, Data: msg.Data})
+		batch = append(batch, PendingMessage{Seq: msgSeq, Subject: msg.Header.Get(nats.JSSubject), Data: msg.Data})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"testing"
 
+	users_dto "obzly/internal/features/users/dto"
 	users_enums "obzly/internal/features/users/enums"
 	users_models "obzly/internal/features/users/models"
 	users_testing "obzly/internal/features/users/testing"
@@ -265,4 +266,41 @@ func Test_UpdateUserSettings_ThemeDefaultsAsMember_ReturnsForbidden(t *testing.T
 	)
 	assert.Equal(t, "emerald-dark", response.DefaultDarkTheme)
 	assert.True(t, response.IsUserThemeChoiceAllowed)
+}
+
+// MFA is required for every account: the old "require MFA for everyone"
+// field is still reported (true) for API compatibility, and turning it off is ignored.
+func Test_UpdateUserSettings_TurningMFAForEveryoneOff_IsIgnored(t *testing.T) {
+	users_testing.ResetSettingsToDefaults()
+	router := createSettingsTestRouter()
+	admin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
+
+	var updated users_models.UsersSettings
+	test_utils.MakePutRequestAndUnmarshal(
+		t, router, "/api/v1/users/settings", "Bearer "+admin.Token,
+		map[string]any{
+			"isAllowExternalRegistrations":    true,
+			"isAllowMemberInvitations":        true,
+			"isMemberAllowedToCreateProjects": true,
+			"isMfaRequiredForEveryone":        false,
+		},
+		http.StatusOK, &updated,
+	)
+	assert.True(t, updated.IsMFARequiredForEveryone)
+
+	var fetched users_models.UsersSettings
+	test_utils.MakeGetRequestAndUnmarshal(
+		t, router, "/api/v1/users/settings", "Bearer "+admin.Token, http.StatusOK, &fetched,
+	)
+	assert.True(t, fetched.IsMFARequiredForEveryone)
+
+	member := createUserWithPassword(t, users_enums.UserRoleMember, "memberpass123")
+	var signIn users_dto.SignInResponseDTO
+	test_utils.MakePostRequestAndUnmarshal(
+		t, createE2ETestRouter(), "/api/v1/users/signin", "",
+		users_dto.SignInRequestDTO{Email: member.Email, Password: "memberpass123"},
+		http.StatusOK, &signIn,
+	)
+	assert.True(t, signIn.MFASetupRequired, "a Member is still sent to MFA setup")
+	assert.Empty(t, signIn.Token)
 }

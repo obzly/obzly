@@ -11,6 +11,7 @@ import (
 	dashboards_services "obzly/internal/features/dashboards/services"
 	users_middleware "obzly/internal/features/users/middleware"
 	"obzly/internal/query"
+	"obzly/internal/util/logger"
 	"obzly/internal/util/querylimit"
 
 	"github.com/gin-gonic/gin"
@@ -756,6 +757,15 @@ func (c *DashboardController) errorResponse(err error) (int, gin.H) {
 	}
 	if errors.Is(err, querylimit.ErrTooManyQueries) {
 		return http.StatusTooManyRequests, gin.H{"error": err.Error()}
+	}
+	if query.IsTimeout(err) {
+		return http.StatusRequestTimeout, gin.H{"error": "the panel query timed out: narrow the time range"}
+	}
+	if errors.Is(err, dashboards_services.ErrPanelQueryFailed) {
+		// A storage failure can name segment files and executors: it goes to
+		// the log, and the caller gets the sentinel's text alone.
+		logger.GetLogger().Error("Panel query failed", "error", err)
+		return http.StatusInternalServerError, gin.H{"error": dashboards_services.ErrPanelQueryFailed.Error()}
 	}
 	switch err.Error() {
 	case "insufficient permissions to access project dashboards",

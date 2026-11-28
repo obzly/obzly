@@ -31,7 +31,6 @@ func Test_OAuth_WriteScope_IsGrantedOnlyWhenRequestedAndApproved(t *testing.T) {
 	server := httptest.NewServer(router)
 	defer server.Close()
 	clientID := registerClient(t, server.URL)
-	// Test admins have MFA on; the Member hasn't.
 	admin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
 	member := users_testing.CreateTestUser(users_enums.UserRoleMember)
 
@@ -46,7 +45,7 @@ func Test_OAuth_WriteScope_IsGrantedOnlyWhenRequestedAndApproved(t *testing.T) {
 		{"toggle on, write not requested", admin, "mcp:read", true, "mcp:read"},
 		{"no scope, toggle on", admin, "", true, "mcp:read"},
 		{"write requested and approved", admin, "mcp:write", true, "mcp:read mcp:write"},
-		{"member without MFA, toggle left off", member, "mcp:read mcp:write", false, "mcp:read"},
+		{"member, toggle left off", member, "mcp:read mcp:write", false, "mcp:read"},
 	}
 	for _, tc := range cases {
 		verifier := strings.Repeat("w", 50)
@@ -77,23 +76,24 @@ func Test_OAuth_WriteScope_IsGrantedOnlyWhenRequestedAndApproved(t *testing.T) {
 	}
 }
 
-func Test_OAuth_WriteApprovedWithoutMFA_IsRefused(t *testing.T) {
+// MFA is required for every account: a session without it is sent to MFA
+// setup instead of the consent screen, so it can approve nothing.
+func Test_OAuth_ConsentWithoutMFA_IsSentToMFASetup(t *testing.T) {
 	router := createWriteRouter()
 	server := httptest.NewServer(router)
 	defer server.Close()
 	clientID := registerClient(t, server.URL)
-	member := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	member := users_testing.CreateTestUserWithoutMFA(users_enums.UserRoleMember)
 	params := scopedParams(server.URL, clientID, strings.Repeat("m", 50), "mcp:read mcp:write")
 
-	var info oauth.ConsentInfo
-	postJSON(t, server.URL+"/api/v1/oauth/authorize/validate", member.Token, params, http.StatusOK, &info)
-	assert.True(t, info.WriteRequested)
-	assert.True(t, info.WriteNeedsMFA)
+	var body map[string]any
+	postJSON(t, server.URL+"/api/v1/oauth/authorize/validate", member.Token, params, http.StatusForbidden, &body)
+	assert.Equal(t, true, body["mfaSetupRequired"])
 
 	params["approve"], params["allowWrite"] = true, true
-	var body map[string]any
-	postJSON(t, server.URL+"/api/v1/oauth/authorize/decision", member.Token, params, http.StatusBadRequest, &body)
-	assert.Contains(t, body["error"], "two-factor")
+	body = map[string]any{}
+	postJSON(t, server.URL+"/api/v1/oauth/authorize/decision", member.Token, params, http.StatusForbidden, &body)
+	assert.Equal(t, true, body["mfaSetupRequired"])
 }
 
 func Test_OAuth_UnknownScope_IsSentBackToTheClient(t *testing.T) {

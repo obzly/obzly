@@ -192,6 +192,9 @@ func seedParitySeries(t *testing.T, now time.Time) (uuid.UUID, []*metrics_core.M
 		_, err = ingester.FlushAll()
 		require.NoError(t, err)
 	}
+	// As if series tracking started now: tests that want the series stream
+	// move coverage back themselves.
+	require.NoError(t, storage.GetDb().Exec("UPDATE metric_series_coverage SET since = now() WHERE project_id = ?", projectID).Error)
 	repo := &segments.SegmentRepository{}
 	records, err := repo.ListByProject(projectID, "metrics")
 	require.NoError(t, err)

@@ -149,7 +149,9 @@ on its own (`SERVICE_MODE`), so each part scales and fails independently:
 - **Durable ingest**: a batch is acknowledged only after the JetStream buffer has stored it
   (three replicas on a broker cluster), so losing an `api` pod, a worker or one broker loses no
   acknowledged data. When the buffer is full, clients get `429` / `RESOURCE_EXHAUSTED` and
-  OTel Collectors retry. Rows are searchable before they are written to Parquet.
+  OTel Collectors retry. Rows are searchable before they are written to Parquet. A batch the
+  broker redelivers after a restart (written, but not yet acknowledged) is dropped again when
+  its files merge, since every row keeps the id it got on arrival.
 - **Columnar storage on object storage**: ZSTD-compressed Parquet on S3, GCS, Azure Blob or MinIO,
   compacted in levels into hour-sorted files of one day each, with a partitioned Postgres
   catalog whose per-file statistics let queries skip files that can't match.
@@ -215,7 +217,7 @@ that holds the key and accepts OTLP (with CORS for browsers) from the app.
 - **Federated SSO**: Generic OIDC, configurable per-connector from the portal - works with AWS
   Cognito, Google Workspace, Microsoft Entra ID, or any standard OIDC provider - with IdP groups
   mapped to project and Site roles
-- **TOTP MFA**: Required for Admin-role accounts, optional for Members, compatible with Google
+- **TOTP MFA**: Required for every account, whatever its role, compatible with Google
   Authenticator/Authy/1Password/etc.
 - **SCIM 2.0**: users and groups provisioned from Okta or Microsoft Entra ID into an organization
   and its teams; deprovisioning deactivates accounts the organization's SCIM created
@@ -403,7 +405,7 @@ Management (typically the root admin), clear it from the command line:
 docker exec -it obzly ./main --email="admin" --reset-mfa
 ```
 
-The user signs in with their password and, being an admin, is asked to set MFA up again. Add
+The user signs in with their password and is asked to set MFA up again. Add
 `--new-password` (or run the password reset above) if the password is lost too. The reset is
 written to the audit log. On a control plane use its container and login, for example
 `docker exec -it obzly-control-plane ./main --email="superadmin" --reset-mfa`.
@@ -411,8 +413,8 @@ written to the audit log. On a control plane use its container and login, for ex
 SSO users may not need this, depending on their connector's **Trust the provider's MFA** setting
 (API field `mfaTrust`):
 
-- **Always use Obzly's MFA** (`off`, the default): Obzly asks for its own code wherever policy
-  requires MFA.
+- **Always use Obzly's MFA** (`off`, the default): Obzly asks for its own code (MFA is required
+  for every account).
 - **When the provider reports it** (`amr`): a sign-in whose ID token says a second factor was used
   (`amr` with `mfa`, `otp`, `hwk`, `swk`, `sms`, `fido` or `email_otp`) skips Obzly's code; one
   without it is asked for Obzly's, with a note that the provider didn't report a second factor.
@@ -426,12 +428,14 @@ only with managed login and MFA configured on the user pool; users federated fro
 ### 🔐 Multi-Factor Authentication (MFA)
 
 TOTP-based MFA (compatible with Google Authenticator, Authy, 1Password, etc.) is **required for
-Admin-role accounts** and **optional for Members**. An Admin without MFA set up is prompted to set
-it up immediately on their next sign-in (or blocked from every other action if they're already
-signed in) - there's no way to skip it. Members can turn it on/off for themselves from their
-profile. If someone loses their authenticator device, any admin can reset their MFA (Users page →
-Reset MFA) so they can sign in and set it up again - including resetting another admin's, since an
-admin can't turn off their own required MFA.
+every account**, whatever its role, and can't be turned off. A user without MFA set up is prompted
+to set it up on their next sign-in (or blocked from every other action if they're already signed
+in) - there's no way to skip it. The only sign-ins that don't ask for Obzly's code are those whose
+second factor was already checked: through an SSO connector that trusts its provider's MFA (see
+above) or through a control plane where the user passed MFA. API keys and MCP access tokens don't
+ask for a code per request. If someone loses their authenticator device, any admin can reset their
+MFA (Users page → Reset MFA) so they can sign in and set it up again - including resetting another
+admin's.
 
 ### 🏷️ Attribute names
 

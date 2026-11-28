@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"obzly/internal/features/ingestion"
+	logs_core "obzly/internal/features/logs/core"
 	logs_receiving "obzly/internal/features/logs/receiving"
 	projects_testing "obzly/internal/features/projects/testing"
 	system_metrics "obzly/internal/features/system/metrics"
@@ -212,4 +214,80 @@ func Test_SubmitLogs_WithNonExistentProject_ReturnsNotFound(t *testing.T) {
 	)
 
 	assert.Contains(t, string(resp.Body), "project not found")
+}
+
+func Test_SubmitLogs_WhenProjectLookupFails_Returns503AndRecoversAtOnce(t *testing.T) {
+	router := CreateLogsTestRouter()
+	user := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	uniqueID := uuid.NewString()
+	project := projects_testing.CreateTestProject("Project lookup outage "+uniqueID[:8], user, router)
+	url := fmt.Sprintf("/api/v1/logs/receiving/%s", project.ID)
+	body := &logs_receiving.SubmitLogsRequestDTO{Logs: CreateValidLogItems(2, uniqueID)}
+
+	stop := test_utils.FailQueriesOn(t, "projects")
+	response := test_utils.MakeRequest(t, router, test_utils.RequestOptions{
+		Method: http.MethodPost, URL: url, Body: body,
+	})
+	stop()
+	require.Equal(t, http.StatusServiceUnavailable, response.StatusCode, "a retryable answer, never 404")
+	require.Contains(t, string(response.Body), logs_core.ErrorIngestUnavailable)
+	require.NotEmpty(t, response.Headers.Get("Retry-After"))
+
+	// The failure was not cached as "project not found".
+	var accepted logs_receiving.SubmitLogsResponseDTO
+	test_utils.MakePostRequestAndUnmarshal(t, router, url, "", body, http.StatusAccepted, &accepted)
+	require.Equal(t, 2, accepted.Accepted)
+}
+
+// A Valkey outage with the database down too: a project this replica served
+// lately keeps ingesting (its lookup from memory, the rate limit from the
+// replica's own bucket), and nothing waits on Valkey.
+func Test_SubmitLogs_WhenValkeyAndDatabaseAreDown_KnownProjectStillAccepted(t *testing.T) {
+	router := CreateLogsTestRouter()
+	user := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	uniqueID := uuid.NewString()
+	project := projects_testing.CreateTestProject("Valkey outage "+uniqueID[:8], user, router)
+	url := fmt.Sprintf("/api/v1/logs/receiving/%s", project.ID)
+	body := &logs_receiving.SubmitLogsRequestDTO{Logs: CreateValidLogItems(2, uniqueID)}
+	var accepted logs_receiving.SubmitLogsResponseDTO
+	test_utils.MakePostRequestAndUnmarshal(t, router, url, "", body, http.StatusAccepted, &accepted)
+
+	test_utils.ValkeyUnreachable(t)
+	test_utils.FailQueriesOn(t, "projects")
+
+	started := time.Now()
+	body = &logs_receiving.SubmitLogsRequestDTO{Logs: CreateValidLogItems(3, uniqueID)}
+	test_utils.MakePostRequestAndUnmarshal(t, router, url, "", body, http.StatusAccepted, &accepted)
+	require.Equal(t, 3, accepted.Accepted)
+	require.Less(t, time.Since(started), 2*time.Second, "no call waited out a Valkey timeout")
+}
+
+func Test_SubmitLogs_WhenDatabaseHangsAndProjectIsNotCached_Returns503Quickly(t *testing.T) {
+	router := CreateLogsTestRouter()
+	test_utils.HangQueriesOn(t, "projects")
+
+	started := time.Now()
+	url := fmt.Sprintf("/api/v1/logs/receiving/%s", uuid.New())
+	body := &logs_receiving.SubmitLogsRequestDTO{Logs: CreateValidLogItems(1, uuid.NewString())}
+	test_utils.MakePostRequest(t, router, url, "", body, http.StatusServiceUnavailable)
+	require.Less(t, time.Since(started), 10*time.Second, "the lookup has a deadline")
+}
+
+func Test_SubmitLogs_WhenRetentionPoliciesHang_AcceptsWithoutWaitingForTheDatabase(t *testing.T) {
+	users_testing.CleanupPlans()
+	router := CreateLogsTestRouter()
+	user := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	uniqueID := uuid.New().String()
+	project := projects_testing.CreateTestProject("Hung Policies "+uniqueID[:8], user, router)
+	test_utils.HangQueriesOn(t, "retention_policies")
+	url := fmt.Sprintf("/api/v1/logs/receiving/%s", project.ID.String())
+
+	started := time.Now()
+	body := &logs_receiving.SubmitLogsRequestDTO{Logs: CreateValidLogItems(1, uniqueID)}
+	test_utils.MakePostRequest(t, router, url, "", body, http.StatusAccepted)
+	require.Less(t, time.Since(started), 10*time.Second, "the sampling rules read has a deadline")
+
+	started = time.Now()
+	test_utils.MakePostRequest(t, router, url, "", body, http.StatusAccepted)
+	require.Less(t, time.Since(started), 2*time.Second, "a failed read isn't retried on every request")
 }

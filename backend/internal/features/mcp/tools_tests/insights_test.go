@@ -95,12 +95,16 @@ func Test_MCP_TraceInsightTools_SummarizeRequestsAndErrors(t *testing.T) {
 	current := summary["current"].(map[string]any)
 	assert.Equal(t, float64(6), current["count"], summary)
 	assert.Equal(t, float64(3), current["errors"], summary)
-	assert.Contains(t, callError(t, e.session, "trace_summary", map[string]any{"project": project, "since": "8d"}),
-		"7 days")
+	// A month reads span rollups: allowed since the summary stopped scanning raw spans.
+	month := call(t, e.session, "trace_summary", map[string]any{"project": project, "since": "30d"})
+	assert.Equal(t, float64(6), month["current"].(map[string]any)["count"], month)
+	assert.Contains(t, callError(t, e.session, "trace_summary", map[string]any{"project": project, "since": "32d"}),
+		"31 days")
 
 	errorsByService := call(t, e.session, "service_errors", map[string]any{"project": project, "limit": 5})
 	services := list(t, errorsByService, "services")
 	require.Len(t, services, 1, errorsByService)
+	assert.Equal(t, false, errorsByService["clamped"], errorsByService)
 	assert.Equal(t, "checkout", services[0].(map[string]any)["serviceName"])
 	assert.Equal(t, float64(3), services[0].(map[string]any)["errors"])
 }

@@ -67,7 +67,7 @@ func (q *projectQuerier) Select(
 			RangeMs:   rangeMs,
 		})
 	if err != nil {
-		return storage.ErrSeriesSet(fmt.Errorf("failed to select series: %w", err))
+		return storage.ErrSeriesSet(&StorageError{Err: fmt.Errorf("failed to select series: %w", err)})
 	}
 
 	series := make([]storage.Series, len(response.Series))
@@ -95,7 +95,7 @@ func (q *projectQuerier) LabelValues(
 			TimeRange: q.timeRange(),
 		})
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list label values: %w", err)
+		return nil, nil, &StorageError{Err: fmt.Errorf("failed to list label values: %w", err)}
 	}
 	return response.Values, nil, nil
 }
@@ -111,7 +111,7 @@ func (q *projectQuerier) LabelNames(
 			TimeRange: q.timeRange(),
 		})
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list label names: %w", err)
+		return nil, nil, &StorageError{Err: fmt.Errorf("failed to list label names: %w", err)}
 	}
 	return response.Names, nil, nil
 }

@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"slices"
 	"sort"
 	"time"
 
 	metrics_promql "obzly/internal/features/metrics/promql"
 	users_models "obzly/internal/features/users/models"
+	obzly_query "obzly/internal/query"
+	"obzly/internal/util/logger"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/prometheus/model/labels"
@@ -58,8 +61,17 @@ type PromQLQueryResponseDTO struct {
 }
 
 // ErrInvalidPromQL wraps errors that are safe and useful to show the caller
-// (syntax, resolution, evaluation, timeout).
+// (syntax, resolution, evaluation).
 var ErrInvalidPromQL = errors.New("invalid PromQL")
+
+// ErrPromQLTimeout: a valid query that ran past promQLQueryTimeout. It was
+// "invalid PromQL" and a 400, as if the query were wrong.
+var ErrPromQLTimeout = errors.New("the PromQL query timed out")
+
+// ErrPromQLFailed: storage failed under a valid query. The cause is logged,
+// never returned: it used to reach the caller as "invalid PromQL: query
+// fragment failed: ...", with executor ids and segment paths.
+var ErrPromQLFailed = errors.New("failed to execute the PromQL query")
 
 func (s *MetricQueryService) PromQLQuery(
 	ctx context.Context,
@@ -109,16 +121,14 @@ func (s *MetricQueryService) PromQLQuery(
 		query, err = metrics_promql.NewRangeQuery(ctx, projectID, expression, start, end, step)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidPromQL, err)
+		// Creating the query already runs the pushed-down fragments in storage.
+		return nil, promQLError(ctx, projectID, err)
 	}
 	defer query.Close()
 
 	result := query.Exec(ctx)
 	if result.Err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("%w: query timed out after %s", ErrInvalidPromQL, promQLQueryTimeout)
-		}
-		return nil, fmt.Errorf("%w: %v", ErrInvalidPromQL, result.Err)
+		return nil, promQLError(ctx, projectID, result.Err)
 	}
 
 	response := toPromQLResponse(result.Value, seriesLimit(request.MaxSeries))
@@ -187,4 +197,37 @@ func finite(f float64) float64 {
 		return 0
 	}
 	return f
+}
+
+// promQLError classifies a failure to build or evaluate a query: past the
+// deadline here or in a query fragment (the engine's own timeout can end one
+// just before ctx), a mistake in the query, or a storage failure, whose
+// cause is logged here and left out of the error.
+func promQLError(ctx context.Context, projectID uuid.UUID, err error) error {
+	if ctx.Err() != nil || obzly_query.IsTimeout(err) {
+		return fmt.Errorf("%w after %s: narrow the time range or the series it selects",
+			ErrPromQLTimeout, promQLQueryTimeout)
+	}
+	message, ok := metrics_promql.ClientMessage(err)
+	if !ok {
+		logger.GetLogger().Error("PromQL query failed in storage",
+			"projectId", projectID.String(), "error", err)
+		return ErrPromQLFailed
+	}
+	return fmt.Errorf("%w: %s", ErrInvalidPromQL, message)
+}
+
+// promQLErrorStatus is the HTTP status for a PromQL query's error: 400 for
+// a mistake in it, 408 when it ran out of time, 500 when storage failed, 0
+// for anything else.
+func promQLErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, ErrPromQLTimeout):
+		return http.StatusRequestTimeout
+	case errors.Is(err, ErrInvalidPromQL):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrPromQLFailed):
+		return http.StatusInternalServerError
+	}
+	return 0
 }

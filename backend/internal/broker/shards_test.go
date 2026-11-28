@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"obzly/internal/cache"
 
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -218,4 +220,15 @@ func Test_Poisoned_NeedsManyDeliveriesAndADay(t *testing.T) {
 	require.True(t, poisoned(poisonDeliveries, now.Add(-poisonAge), now))
 	require.False(t, poisoned(poisonDeliveries, now.Add(-time.Hour), now), "an outage under a day loses nothing")
 	require.False(t, poisoned(1, now.Add(-3*poisonAge), now), "a backlog's first delivery is written")
+}
+
+// A fetch that ends with an error and nothing in it waits before the next
+// (no consumer leader while a broker restarts), so the shard loops don't
+// spin; a timeout or a fetch that brought messages goes straight on.
+func Test_FetchFailedEmpty_OnlyAnErrorWithNoMessagesWaits(t *testing.T) {
+	require.True(t, fetchFailedEmpty(0, nats.ErrNoResponders))
+	require.True(t, fetchFailedEmpty(0, fmt.Errorf("fetch: %w", nats.ErrConnectionClosed)))
+	require.False(t, fetchFailedEmpty(0, nats.ErrTimeout))
+	require.False(t, fetchFailedEmpty(0, nil))
+	require.False(t, fetchFailedEmpty(3, nats.ErrNoResponders))
 }

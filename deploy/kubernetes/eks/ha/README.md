@@ -9,8 +9,8 @@ from values.
 ## What's in `kustomization.yaml`
 
 - `obzly-broker` (`broker.yaml`): the NATS JetStream ingest buffer. `SERVICE_MODE=broker`, a
-  three-pod StatefulSet (one per zone, on-demand nodes only, a 50 Gi PVC each), streams
-  replicated three ways, a PodDisruptionBudget so brokers roll one at a time.
+  three-pod StatefulSet (one per zone and one per node, on-demand nodes only, a 50 Gi PVC each),
+  streams replicated three ways, a PodDisruptionBudget so brokers roll one at a time.
 - `obzly-api` (`deployment-api.yaml`): `SERVICE_MODE=api`, `replicas: 2`, `RollingUpdate`,
   `emptyDir` local disk. Serves the UI, the query API and ingest (REST, OTLP HTTP and gRPC), and
   coordinates queries. Readiness fails on SIGTERM and the pod keeps serving for

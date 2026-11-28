@@ -23,6 +23,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useEffect, useState } from 'react';
 
+import { IS_CONTROL_PLANE } from '../../../constants';
 import type {
   AddMemberRequest,
   AddMemberResponse,
@@ -572,8 +573,9 @@ export function ProjectMembershipComponent({
               />
             )}
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-300">
-              If the user exists, they will be added directly. Otherwise, an invitation will be
-              sent.
+              {IS_CONTROL_PLANE
+                ? 'Adds people who have already signed in to this site. To add someone new, invite them on the Users page and give them access under Sites → Access.'
+                : 'If the user exists, they will be added directly. Otherwise, an invitation will be sent.'}
             </div>
           </div>
 

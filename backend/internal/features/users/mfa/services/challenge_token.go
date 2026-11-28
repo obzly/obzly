@@ -69,7 +69,8 @@ func parseChallengeToken(
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte(secretKey), nil
-	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuedAt())
+		// Another replica issued it: allow for clock skew (whole-second iat).
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuedAt(), jwt.WithLeeway(30*time.Second))
 	if err != nil || !parsed.Valid {
 		return uuid.Nil, errChallengeTokenInvalid
 	}

@@ -151,7 +151,7 @@ func (c *TraceQueryController) GetTraceSummary(ctx *gin.Context) {
 
 // GetServiceErrors
 // @Summary Get the services with the most errors
-// @Description Each service's entry spans (SERVER/CONSUMER spans and trace roots) and failed ones in the range and the same-length range before it, most errors first. Ranges over 7 days are clamped to the last 7 days.
+// @Description Each service's entry spans (SERVER/CONSUMER spans and trace roots) and failed ones in the range and the same-length range before it, most errors first. Ranges over 31 days are clamped to the last 31 days (clamped says so).
 // @Tags traces-query
 // @Accept json
 // @Produce json
@@ -235,7 +235,7 @@ func (c *TraceQueryController) GetTrace(ctx *gin.Context) {
 // @Produce json
 // @Security BearerAuth
 // @Param projectId path string true "Project ID"
-// @Param from query string false "Range start, RFC3339"
+// @Param from query string false "Range start, RFC3339 (at most 31 days before to)"
 // @Param to query string false "Range end, RFC3339"
 // @Success 200 {object} spans_core.ListServicesResponseDTO
 // @Failure 401 {object} map[string]string
@@ -253,7 +253,7 @@ func (c *TraceQueryController) ListServices(ctx *gin.Context) {
 		return
 	}
 
-	response, err := c.traceQueryService.ListServices(projectID, timeRangeFromQuery(ctx), user)
+	response, err := c.traceQueryService.ListServices(ctx.Request.Context(), projectID, timeRangeFromQuery(ctx), user)
 	if err != nil {
 		c.handleError(ctx, err)
 		return
@@ -269,7 +269,7 @@ func (c *TraceQueryController) ListServices(ctx *gin.Context) {
 // @Security BearerAuth
 // @Param projectId path string true "Project ID"
 // @Param service query string true "Service name"
-// @Param from query string false "Range start, RFC3339"
+// @Param from query string false "Range start, RFC3339 (at most 31 days before to)"
 // @Param to query string false "Range end, RFC3339"
 // @Success 200 {object} spans_core.ListOperationsResponseDTO
 // @Failure 400 {object} map[string]string
@@ -294,7 +294,8 @@ func (c *TraceQueryController) ListOperations(ctx *gin.Context) {
 		return
 	}
 
-	response, err := c.traceQueryService.ListOperations(projectID, serviceName, timeRangeFromQuery(ctx), user)
+	response, err := c.traceQueryService.ListOperations(
+		ctx.Request.Context(), projectID, serviceName, timeRangeFromQuery(ctx), user)
 	if err != nil {
 		c.handleError(ctx, err)
 		return
@@ -342,6 +343,10 @@ func (c *TraceQueryController) handleError(ctx *gin.Context, err error) {
 	}
 	if errors.Is(err, querylimit.ErrTooManyQueries) {
 		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		return
+	}
+	if query.IsTimeout(err) {
+		ctx.JSON(http.StatusRequestTimeout, gin.H{"error": "the query timed out: narrow the time range"})
 		return
 	}
 	if errors.Is(err, ErrInvalidSummaryRange) {

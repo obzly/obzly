@@ -17,3 +17,6 @@ type MetricSample struct {
 	Timestamp  time.Time         `json:"timestamp"`
 	Type       MetricType        `json:"type"`
 }
+
+// RowID is the row's id (ingest.Identified).
+func (r *MetricSample) RowID() uuid.UUID { return r.ID }

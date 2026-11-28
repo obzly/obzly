@@ -12,7 +12,7 @@ const PILL_BAD = `${PILL} bg-red-500/15 text-[var(--v2-red)]`;
 const PILL_NEUTRAL = `${PILL} bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300`;
 const FIELD_LABEL = 'mb-1 text-xs font-medium text-gray-500 dark:text-gray-400';
 
-/** Admins get no disable button: the backend refuses it for them anyway. */
+/** No disable button: MFA is required for every account and the backend refuses it. */
 export function MFASettingsComponent() {
   const { message } = App.useApp();
   const [status, setStatus] = useState<MFAStatus | null>(null);
@@ -21,10 +21,6 @@ export function MFASettingsComponent() {
   const [pendingSetup, setPendingSetup] = useState<MFASetupResponse | null>(null);
   const [enableCode, setEnableCode] = useState('');
   const [isEnabling, setIsEnabling] = useState(false);
-
-  const [isDisabling, setIsDisabling] = useState(false);
-  const [disableCode, setDisableCode] = useState('');
-  const [showDisableForm, setShowDisableForm] = useState(false);
 
   const loadStatus = () => {
     setIsLoading(true);
@@ -70,26 +66,6 @@ export function MFASettingsComponent() {
     }
   };
 
-  const confirmDisable = async () => {
-    if (disableCode.length !== 6) {
-      message.error('Enter the 6-digit code from your authenticator app');
-      return;
-    }
-
-    setIsDisabling(true);
-    try {
-      await mfaApi.disable(disableCode);
-      message.success('MFA disabled successfully');
-      setShowDisableForm(false);
-      setDisableCode('');
-      loadStatus();
-    } catch (error: unknown) {
-      message.error(error instanceof Error ? error.message : 'Failed to disable MFA');
-    } finally {
-      setIsDisabling(false);
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="flex items-center py-2">
@@ -125,45 +101,9 @@ export function MFASettingsComponent() {
       )}
 
       {status.enabled ? (
-        <div>
-          {status.required ? (
-            <div className="rounded-xl bg-gray-50 px-3.5 py-3 text-[13.5px] text-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
-              MFA is required for Admin accounts and can&apos;t be disabled. If you&apos;ve lost
-              your device, ask another admin to reset it for you.
-            </div>
-          ) : !showDisableForm ? (
-            <Button danger onClick={() => setShowDisableForm(true)}>
-              Disable MFA
-            </Button>
-          ) : (
-            <div className="max-w-[260px] rounded-xl border border-gray-200 p-3 dark:border-gray-700">
-              <div className={FIELD_LABEL}>Enter your current 6-digit code to confirm</div>
-              <Input
-                placeholder="000000"
-                value={disableCode}
-                onChange={(e) =>
-                  setDisableCode(e.currentTarget.value.replace(/\D/g, '').slice(0, 6))
-                }
-                maxLength={6}
-                inputMode="numeric"
-                className="!font-mono"
-              />
-              <div className="mt-2 flex gap-2">
-                <Button danger loading={isDisabling} onClick={confirmDisable}>
-                  Confirm disable
-                </Button>
-                <Button
-                  type="default"
-                  onClick={() => {
-                    setShowDisableForm(false);
-                    setDisableCode('');
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
+        <div className="rounded-xl bg-gray-50 px-3.5 py-3 text-[13.5px] text-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
+          MFA is required for every account and can&apos;t be turned off. If you&apos;ve lost your
+          device, ask an admin to reset it for you.
         </div>
       ) : pendingSetup ? (
         <div className="flex flex-col items-start gap-3 rounded-xl border border-gray-200 p-4 dark:border-gray-700">

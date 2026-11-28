@@ -25,8 +25,12 @@ const (
 	assetGoneAfter = 24 * time.Hour
 	// newFor: an asset first seen this recently is "new".
 	newFor = 24 * time.Hour
-	// keepTerminatedPods: terminated pods and containers are dropped after this.
-	keepTerminatedPods = 7 * 24 * time.Hour
+	// keepTerminatedPods: terminated pods and containers are dropped after
+	// this. A cluster that replaces nodes often ends thousands of pods a day.
+	keepTerminatedPods = 24 * time.Hour
+	// keepTerminatedWorkloads: a deleted Deployment, StatefulSet or DaemonSet
+	// is dropped after this (other assets wait for retention).
+	keepTerminatedWorkloads = 7 * 24 * time.Hour
 	// keepFailedRuns: a Job or CronJob run's pod is dropped once it ends,
 	// unless it failed; a failed run (and a finished Job) stays this long.
 	// A CronJob every 10 minutes would otherwise leave a thousand pods a week.
@@ -632,6 +636,12 @@ func reconcile(
 		}
 	}
 	reporting := reportingScopes(all)
+	agent := agentClusters(observed)
+	for _, a := range all {
+		if removedNode(a, agent, reporting, now) {
+			a.State = StateTerminated
+		}
+	}
 	var stale []uuid.UUID
 	drop := func(key string) {
 		if id := all[key].ID; id != uuid.Nil {
@@ -644,10 +654,11 @@ func reconcile(
 		switch {
 		case gone > retention,
 			a.State == StateTerminated && (a.Kind == KindPod || a.Kind == KindContainer) && gone > keepTerminatedPods,
+			a.State == StateTerminated && a.Kind == KindWorkload && gone > keepTerminatedWorkloads,
 			runs[key] && a.Kind == KindPod && a.State == StateTerminated &&
 				(a.Metrics.Phase != "Failed" || gone > keepFailedRuns),
 			isJob(a) && (a.State == StateTerminated && gone > keepFailedRuns || cronJobOf(a, all) != nil),
-			observed[key] == nil && isCronJobAsDeployment(a, all),
+			observed[key] == nil && isCronJobAsWorkload(a, all),
 			replaced(a, reporting, now):
 			drop(key)
 		}
@@ -1077,11 +1088,43 @@ func runCronJob(a *Asset, all map[string]*Asset) *Asset {
 	return all[workloadKey(a.Cluster, a.Namespace, "CronJob", m[1])]
 }
 
-// isCronJobAsDeployment: a Deployment an earlier build made up from a
-// CronJob's run pods.
-func isCronJobAsDeployment(a *Asset, all map[string]*Asset) bool {
-	return a.Kind == KindWorkload && a.Subtype == "Deployment" &&
-		all[workloadKey(a.Cluster, a.Namespace, "CronJob", a.Name)] != nil
+// isCronJobAsWorkload: a workload an earlier build made up from a CronJob's
+// run pods: a Deployment named after the CronJob, or a StatefulSet named
+// after one run (<cronjob>-<scheduled minute>).
+func isCronJobAsWorkload(a *Asset, all map[string]*Asset) bool {
+	if a.Kind != KindWorkload {
+		return false
+	}
+	switch a.Subtype {
+	case "Deployment":
+		return all[workloadKey(a.Cluster, a.Namespace, "CronJob", a.Name)] != nil
+	case "StatefulSet":
+		m := cronJobRun.FindStringSubmatch(a.Name)
+		return m != nil && len(a.Name)-len(m[1]) > 8 &&
+			all[workloadKey(a.Cluster, a.Namespace, "CronJob", m[1])] != nil
+	}
+	return false
+}
+
+// removedNode: the cluster agent reports every node the cluster has,
+// NotReady ones included, so a node with no data while the agent still
+// reports its cluster's other nodes was removed (scaled in, spot reclaimed).
+// It shows as terminated, not critical, until replaced drops it. Without
+// the agent a silent node may be broken, so it stays not reporting.
+func removedNode(a *Asset, agent map[string]bool, reporting map[string]time.Time, now time.Time) bool {
+	return a.Kind == KindNode && a.State == StateNotReporting && agent[a.Cluster] &&
+		now.Sub(reporting["nodes:"+a.Cluster]) < notReportingAfter
+}
+
+// agentClusters: the clusters whose agent reported node readiness this build.
+func agentClusters(observed map[string]*Asset) map[string]bool {
+	clusters := map[string]bool{}
+	for _, a := range observed {
+		if a.Kind == KindNode && a.Cluster != "" && a.Metrics.Ready != nil {
+			clusters[a.Cluster] = true
+		}
+	}
+	return clusters
 }
 
 func cronJobID(l map[string]string, name string) string {

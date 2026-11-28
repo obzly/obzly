@@ -14,7 +14,7 @@ export const MFA_TRUST_OPTIONS: MFATrustOption[] = [
     label: "Always use Obzly's MFA",
     shortLabel: 'Obzly MFA',
     description:
-      "Sign-ins through this provider are asked for Obzly's authenticator code wherever policy requires MFA (always for admins).",
+      "Sign-ins through this provider are asked for Obzly's authenticator code (MFA is required for every account).",
   },
   {
     value: 'amr',

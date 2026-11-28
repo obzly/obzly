@@ -1,8 +1,9 @@
 import { LoadingOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin } from 'antd';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  type HealthGroup,
   type HealthMapGroupBy,
   type HealthMapResponse,
   type HealthTile,
@@ -12,6 +13,7 @@ import {
 } from '../../../entity/query';
 import { useTheme } from '../../../shared/theme';
 import { Card } from '../../../shared/ui/v2';
+import { type MapTile, layoutHealthMap } from '../lib/healthTreemap';
 import {
   ERROR_LEVELS,
   type HealthColourBy,
@@ -23,6 +25,7 @@ import {
   healthTileFilter,
   levelsNode,
 } from '../lib/logInsights';
+import { HealthHoneycomb } from './HealthHoneycomb';
 import { LogExplainPanelComponent } from './LogExplainPanelComponent';
 import { SegmentedControl, TonePill } from './LogsViewTabs';
 import type { TimeRange } from './TimeRangePickerComponent';
@@ -45,8 +48,25 @@ const RANGES = [
   { value: '24h', label: 'Last 24 hours', hours: 24 },
   { value: '7d', label: 'Last 7 days', hours: 24 * 7 },
 ];
-const MAX_GROUPS = 10;
-const MAX_TILES_PER_GROUP = 10;
+// The map fills the window below its top; never shorter than this.
+const MIN_MAP_HEIGHT = 380;
+// The card's padding and the page's margin under the map.
+const BOTTOM_SPACE = 40;
+const ZOOM_BAR_HEIGHT = 32;
+const VIEW_STORAGE_KEY = 'obzly-health-map-view';
+type MapView = 'honeycomb' | 'treemap';
+
+const readView = (): MapView => {
+  try {
+    return localStorage.getItem(VIEW_STORAGE_KEY) === 'treemap' ? 'treemap' : 'honeycomb';
+  } catch {
+    return 'honeycomb';
+  }
+};
+const GROUP_HEADER = 20;
+// Below these a tile or group can't show its name, so it rolls into "+N more".
+const TILE_MIN = { w: 64, h: 34 };
+const GROUP_MIN = { w: 96, h: 60 };
 const TOP_ERROR_PATTERNS = 3;
 const PATTERN_SAMPLE_ROWS = 20_000;
 const MAP_TITLES: Record<HealthMapGroupBy, string> = {
@@ -54,6 +74,19 @@ const MAP_TITLES: Record<HealthMapGroupBy, string> = {
   host: 'Hosts and services',
   service: 'Services',
 };
+const GROUP_NOUNS: Record<HealthMapGroupBy, string> = {
+  k8s: 'namespaces',
+  host: 'hosts',
+  service: 'groups',
+};
+
+/** A zoomed-in part of the map: some groups, or one group's tiles. */
+interface Zoom {
+  label: string;
+  groups?: string[];
+  group?: string;
+  tiles?: string[];
+}
 
 /** Logs › Health map: workloads sized by log volume, coloured by error share; click for details. */
 export const LogHealthMapTabComponent = ({
@@ -74,11 +107,43 @@ export const LogHealthMapTabComponent = ({
   const [selected, setSelected] = useState<{ group: string; tile: string } | null>(null);
   const [errorPatterns, setErrorPatterns] = useState<LogPattern[] | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
+  const [zoom, setZoom] = useState<Zoom[]>([]);
+  const [mapView, setMapView] = useState<MapView>(readView);
+  const mapRef = useRef<HTMLDivElement>(null);
+  const [mapWidth, setMapWidth] = useState(0);
+  const [mapHeight, setMapHeight] = useState(MIN_MAP_HEIGHT);
+
+  useEffect(() => {
+    const element = mapRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setMapWidth(Math.floor(entry.contentRect.width)),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  // Measured on load and resize, not on scroll, so the map doesn't change size under the reader.
+  const hasResponse = response !== null;
+  useEffect(() => {
+    const fit = () => {
+      const element = mapRef.current;
+      if (!element) return;
+      const room = window.innerHeight - element.getBoundingClientRect().top - BOTTOM_SPACE;
+      setMapHeight(
+        Math.max(MIN_MAP_HEIGHT, Math.floor(Math.min(room, window.innerHeight - BOTTOM_SPACE))),
+      );
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [hasResponse, groupBy, error]);
 
   useEffect(() => {
     const abort = new AbortController();
     setIsLoading(true);
     setError(null);
+    setZoom([]);
     queryApi
       .getHealthMap(
         projectId,
@@ -155,14 +220,36 @@ export const LogHealthMapTabComponent = ({
   );
   const explainQuery = useMemo(() => andNodes(query, tileFilter?.node), [query, tileFilter]);
 
-  const groups = (response?.groups ?? []).slice(0, MAX_GROUPS);
-  const notShown =
-    (response?.hiddenTiles ?? 0) +
-    (response?.groups ?? []).reduce(
-      (sum, g, i) =>
-        sum + (i < MAX_GROUPS ? Math.max(g.tiles.length - MAX_TILES_PER_GROUP, 0) : g.tiles.length),
-      0,
-    );
+  const groups = response?.groups ?? [];
+  const notShown = response?.hiddenTiles ?? 0;
+  const zoomed = zoom[zoom.length - 1] as Zoom | undefined;
+  const treemapHeight = mapHeight - (zoom.length > 0 ? ZOOM_BAR_HEIGHT : 0);
+  const blocks = useMemo(() => {
+    let view: HealthGroup[] = response?.groups ?? [];
+    if (zoomed?.groups) view = view.filter((g) => zoomed.groups?.includes(g.name));
+    if (zoomed?.group) {
+      const group = view.find((g) => g.name === zoomed.group);
+      const tiles = (group?.tiles ?? []).filter(
+        (t) => !zoomed.tiles || zoomed.tiles.includes(t.name),
+      );
+      view = group ? [{ ...group, tiles, total: tiles.reduce((sum, t) => sum + t.total, 0) }] : [];
+    }
+    if (!mapWidth) return [];
+    return layoutHealthMap(view, mapWidth, treemapHeight, {
+      tile: TILE_MIN,
+      group: GROUP_MIN,
+      header: zoomed?.group ? 0 : GROUP_HEADER,
+    });
+  }, [response, zoomed, mapWidth, treemapHeight]);
+  const zoomInto = (next: Zoom) => setZoom((stack) => [...stack, next]);
+  const openTile = (group: string, tile: MapTile) =>
+    tile.merged
+      ? zoomInto({
+          label: `${tile.merged.length} smaller in ${group}`,
+          group,
+          tiles: tile.merged,
+        })
+      : setSelected({ group, tile: tile.tile.name });
   const { warnAt, badAt } = healthScale(colourBy);
   const scaleGradient = `linear-gradient(90deg, ${status.ok}, ${status.warn} ${(warnAt / badAt) * 100}%, ${status.bad})`;
   const metricText = (tile: HealthTile) => {
@@ -224,6 +311,23 @@ export const LogHealthMapTabComponent = ({
               { value: 'chg', label: 'Change vs yesterday' },
             ]}
           />
+          <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">View</span>
+          <SegmentedControl
+            label="View"
+            value={mapView}
+            onChange={(value) => {
+              setMapView(value);
+              try {
+                localStorage.setItem(VIEW_STORAGE_KEY, value);
+              } catch {
+                /* the next visit opens the honeycomb */
+              }
+            }}
+            options={[
+              { value: 'honeycomb', label: 'Honeycomb' },
+              { value: 'treemap', label: 'Treemap' },
+            ]}
+          />
           <span className="flex-1" />
           <span className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
             0%
@@ -249,73 +353,131 @@ export const LogHealthMapTabComponent = ({
         <Card
           className="min-w-0 flex-[999_1_640px]"
           title={MAP_TITLES[groupBy]}
-          subtitle={`Tile size is log volume; click a tile for details${
+          subtitle={`${
+            mapView === 'honeycomb'
+              ? 'One hexagon per workload, sized by log volume within its namespace, worst first'
+              : 'Tile size is log volume'
+          }; hover for its name, click for details${
             notShown > 0 ? ` · ${notShown} smaller tile${notShown === 1 ? '' : 's'} not shown` : ''
           }`}
         >
-          {isLoading && !response ? (
-            <div className="flex h-[380px] items-center justify-center">
-              <Spin indicator={<LoadingOutlined spin />} />
-            </div>
-          ) : groups.length === 0 ? (
-            <div className="flex h-[200px] items-center justify-center text-sm text-gray-500 dark:text-gray-400">
-              No logs in this range
-            </div>
-          ) : (
+          <div ref={mapRef}>
+            {isLoading && !response ? (
+              <div className="flex items-center justify-center" style={{ height: mapHeight }}>
+                <Spin indicator={<LoadingOutlined spin />} />
+              </div>
+            ) : groups.length === 0 ? (
+              <div className="flex h-[200px] items-center justify-center text-sm text-gray-500 dark:text-gray-400">
+                No logs in this range
+              </div>
+            ) : null}
+            {mapView === 'honeycomb' && response && groups.length > 0 && mapWidth > 0 && (
+              <HealthHoneycomb
+                groups={groups}
+                metric={(tile) => healthMetric(tile, colourBy)}
+                color={(tile) => healthColor(healthMetric(tile, colourBy), colourBy, status)}
+                metricText={metricText}
+                selected={selected}
+                selectedColor={definition.colors.text}
+                onSelect={(group, tile) => setSelected({ group, tile })}
+                width={mapWidth}
+                height={mapHeight}
+              />
+            )}
+            {mapView === 'treemap' && zoom.length > 0 && (
+              <nav
+                aria-label="Health map zoom"
+                className="mb-2 flex flex-wrap items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+              >
+                <Button size="small" type="link" className="!px-0" onClick={() => setZoom([])}>
+                  All {GROUP_NOUNS[groupBy]}
+                </Button>
+                {zoom.map((z, i) => (
+                  <React.Fragment key={i}>
+                    <span aria-hidden="true">›</span>
+                    {i === zoom.length - 1 ? (
+                      <span className="font-mono text-gray-700 dark:text-gray-200">{z.label}</span>
+                    ) : (
+                      <Button
+                        size="small"
+                        type="link"
+                        className="!px-0 font-mono"
+                        onClick={() => setZoom(zoom.slice(0, i + 1))}
+                      >
+                        {z.label}
+                      </Button>
+                    )}
+                  </React.Fragment>
+                ))}
+              </nav>
+            )}
             <div
-              role="img"
+              role="group"
               aria-label={`Health map of ${MAP_TITLES[groupBy].toLowerCase()}, tiles sized by log volume and coloured by ${colourBy === 'chg' ? 'change against yesterday' : 'error share'}`}
-              className="flex h-[380px] gap-1"
+              className="relative"
+              style={{ height: treemapHeight }}
+              hidden={!response || groups.length === 0 || mapView !== 'treemap'}
             >
-              {groups.map((g) => {
-                const tiles = g.tiles.slice(0, MAX_TILES_PER_GROUP);
-                return (
-                  <div
-                    key={g.name}
-                    className="flex min-w-0 flex-col gap-1"
-                    style={{ flex: `${Math.max(g.total, 1)} 1 0` }}
-                  >
-                    <span
-                      className="truncate font-mono text-xs text-gray-500 dark:text-gray-400"
-                      title={`${g.name} · ${g.total.toLocaleString()} lines`}
-                    >
-                      {g.name} · {formatCount(g.total)}
-                    </span>
-                    <div className="flex min-h-0 flex-1 flex-col gap-1">
-                      {tiles.map((t) => {
-                        const isSelected = selected?.group === g.name && selected?.tile === t.name;
-                        const background = healthColor(healthMetric(t, colourBy), colourBy, status);
-                        return (
-                          <button
-                            key={t.name}
-                            type="button"
-                            aria-pressed={isSelected}
-                            title={`${t.name}: ${t.total.toLocaleString()} lines, ${metricText(t)}`}
-                            onClick={() => setSelected({ group: g.name, tile: t.name })}
-                            className="flex min-h-[22px] cursor-pointer flex-col justify-between overflow-hidden rounded-lg px-2 py-1.5 text-left text-white"
-                            style={{
-                              flex: `${Math.max(t.total, 1)} 1 0`,
-                              background,
-                              outline: isSelected ? `3px solid ${definition.colors.text}` : 'none',
-                              outlineOffset: 1,
-                              textShadow: '0 1px 2px rgba(0,0,0,.35)',
-                            }}
-                          >
-                            <span className="truncate font-mono text-xs font-semibold">
-                              {t.name}
-                            </span>
-                            <span className="truncate text-[11px] opacity-95">
-                              {formatCount(t.total)} · {metricText(t)}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
+              {blocks.map((b) =>
+                b.merged ? (
+                  <HealthTileButton
+                    key={`merged:${b.group.name}`}
+                    mapTile={b.tiles[0]}
+                    label={`+${b.merged.length} more ${GROUP_NOUNS[groupBy]}`}
+                    metricText={metricText}
+                    background={healthColor(
+                      healthMetric(b.tiles[0].tile, colourBy),
+                      colourBy,
+                      status,
+                    )}
+                    isSelected={false}
+                    selectedColor={definition.colors.text}
+                    onClick={() =>
+                      zoomInto({
+                        label: `${b.merged?.length} smaller ${GROUP_NOUNS[groupBy]}`,
+                        groups: b.merged,
+                      })
+                    }
+                  />
+                ) : (
+                  <React.Fragment key={b.group.name}>
+                    {!zoomed?.group && (
+                      <button
+                        type="button"
+                        title={`${b.group.name} · ${b.group.total.toLocaleString()} lines · click to zoom in`}
+                        onClick={() => zoomInto({ label: b.group.name, group: b.group.name })}
+                        className="absolute cursor-pointer truncate border-0 bg-transparent p-0 text-left font-mono text-xs text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
+                        style={{
+                          left: b.rect.x + 2,
+                          top: b.rect.y,
+                          width: Math.max(b.rect.w - 4, 0),
+                          height: GROUP_HEADER,
+                        }}
+                      >
+                        {b.group.name} · {formatCount(b.group.total)}
+                      </button>
+                    )}
+                    {b.tiles.map((t) => (
+                      <HealthTileButton
+                        key={t.tile.name}
+                        mapTile={t}
+                        label={t.tile.name}
+                        metricText={metricText}
+                        background={healthColor(healthMetric(t.tile, colourBy), colourBy, status)}
+                        isSelected={
+                          !t.merged &&
+                          selected?.group === b.group.name &&
+                          selected?.tile === t.tile.name
+                        }
+                        selectedColor={definition.colors.text}
+                        onClick={() => openTile(b.group.name, t)}
+                      />
+                    ))}
+                  </React.Fragment>
+                ),
+              )}
             </div>
-          )}
+          </div>
         </Card>
 
         <Card
@@ -405,5 +567,66 @@ export const LogHealthMapTabComponent = ({
         />
       )}
     </div>
+  );
+};
+
+interface HealthTileButtonProps {
+  mapTile: MapTile;
+  label: string;
+  metricText: (tile: HealthTile) => string;
+  background: string;
+  isSelected: boolean;
+  selectedColor: string;
+  onClick: () => void;
+}
+
+// Labels only where they fit: a clipped second line reads as noise.
+const HealthTileButton = ({
+  mapTile,
+  label,
+  metricText,
+  background,
+  isSelected,
+  selectedColor,
+  onClick,
+}: HealthTileButtonProps): React.JSX.Element => {
+  const { rect, tile, merged } = mapTile;
+  const width = Math.max(rect.w - 4, 1);
+  const height = Math.max(rect.h - 4, 1);
+  const showName = width >= 36 && height >= 26;
+  const showStats = width >= 64 && height >= 42;
+  const stats = `${formatCount(tile.total)} · ${metricText(tile)}`;
+  return (
+    <button
+      type="button"
+      aria-pressed={merged ? undefined : isSelected}
+      title={
+        merged
+          ? `${label}: ${tile.total.toLocaleString()} lines, ${metricText(tile)} · click to zoom in`
+          : `${label}: ${tile.total.toLocaleString()} lines, ${metricText(tile)}`
+      }
+      onClick={onClick}
+      className="absolute flex cursor-pointer flex-col justify-between overflow-hidden rounded-lg border-0 px-2 py-1.5 text-left text-white"
+      style={{
+        left: rect.x + 2,
+        top: rect.y + 2,
+        width,
+        height,
+        background,
+        boxShadow: merged ? 'inset 0 0 0 1px rgba(255,255,255,.55)' : undefined,
+        outline: isSelected ? `3px solid ${selectedColor}` : 'none',
+        outlineOffset: 1,
+        textShadow: '0 1px 2px rgba(0,0,0,.35)',
+        padding: showName ? undefined : 0,
+      }}
+    >
+      {showName && (
+        <span className="truncate font-mono text-xs font-semibold">
+          {label}
+          {merged ? ' ›' : ''}
+        </span>
+      )}
+      {showStats && <span className="truncate text-[11px] opacity-95">{stats}</span>}
+    </button>
   );
 };

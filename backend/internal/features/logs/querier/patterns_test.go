@@ -28,7 +28,7 @@ func Test_ExecutePatterns_GroupsByTemplate_AndHashFiltersBack(t *testing.T) {
 	require.Len(t, response.Patterns, 2)
 
 	top := response.Patterns[0]
-	assert.Equal(t, `<ip> "GET /healthz HTTP/<num>" <num>`, top.Pattern)
+	assert.Equal(t, `<ip> "GET <path>" <num>`, top.Pattern)
 	assert.Equal(t, int64(3), top.Count)
 	assert.Contains(t, top.Sample, "GET /healthz")
 	assert.Equal(t, logs_core.PatternHash(top.Sample), top.Hash)

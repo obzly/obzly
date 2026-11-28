@@ -2,6 +2,8 @@ package ingest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,11 @@ const publishTimeout = 4 * time.Second
 // RetryAfterSeconds is the Retry-After a receiver sends with ErrIngestFull
 // or ErrIngestUnavailable.
 const RetryAfterSeconds = 5
+
+// Identified is an ingest row with an id (logs, spans, metric samples).
+type Identified interface {
+	RowID() uuid.UUID
+}
 
 // EncodePayloads JSON-encodes items into message payloads (JSON arrays of
 // at most broker.MaxIngestPayload bytes).
@@ -46,16 +53,19 @@ func DecodePayload[T any](data []byte) ([]T, error) {
 
 // Publish stores one project's items in signal's stream and returns once
 // JetStream holds them. Errors wrap broker.ErrIngestFull or
-// broker.ErrIngestUnavailable.
+// broker.ErrIngestUnavailable. A payload's message id is a hash of its
+// rows' ids (encoded rows for items without one): receivers derive row ids
+// from the request (RowIDs), so a resent batch is dropped by the stream
+// even when a field such as the client IP differs.
 func Publish[T any](client *broker.Client, signal string, projectID uuid.UUID, items []T) error {
-	payloads, err := EncodePayloads(items)
+	payloads, msgIDs, err := encodeForPublish(items)
 	if err != nil {
 		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 	defer cancel()
-	err = client.PublishIngest(ctx, signal, projectID, payloads)
+	err = client.PublishIngestWithIDs(ctx, signal, projectID, payloads, msgIDs)
 	switch {
 	case err == nil:
 		telemetry.IngestPublishes.WithLabelValues(signal, telemetry.ResultOK).Inc()
@@ -65,4 +75,34 @@ func Publish[T any](client *broker.Client, signal string, projectID uuid.UUID, i
 		telemetry.IngestPublishes.WithLabelValues(signal, telemetry.ResultUnavailable).Inc()
 	}
 	return err
+}
+
+func encodeForPublish[T any](items []T) (payloads [][]byte, msgIDs []string, err error) {
+	encoded := make([][]byte, 0, len(items))
+	for _, item := range items {
+		data, err := json.Marshal(item)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to encode ingest item: %w", err)
+		}
+		encoded = append(encoded, data)
+	}
+	payloads, starts := broker.SplitPayloadRanges(encoded)
+	msgIDs = make([]string, len(payloads))
+	for p, start := range starts {
+		end := len(items)
+		if p+1 < len(starts) {
+			end = starts[p+1]
+		}
+		h := sha256.New()
+		for i := start; i < end; i++ {
+			if row, ok := any(items[i]).(Identified); ok {
+				id := row.RowID()
+				h.Write(id[:])
+			} else {
+				h.Write(encoded[i])
+			}
+		}
+		msgIDs[p] = hex.EncodeToString(h.Sum(nil))
+	}
+	return payloads, msgIDs, nil
 }

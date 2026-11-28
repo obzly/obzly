@@ -49,33 +49,85 @@ type LogReceivingService struct {
 	logger            *slog.Logger
 }
 
+// SubmitLogs accepts a batch for projectID. A refused batch is counted on
+// the project's ingestion status by reason, but only for a caller the project
+// accepts (it exists, its domain and IP filters pass, the API key is valid):
+// the endpoint is open and the project id comes from the URL, so counting
+// earlier let anyone add to a project's refusals or fill the tracker with
+// unknown projects.
 func (s *LogReceivingService) SubmitLogs(
 	projectID uuid.UUID,
 	request *SubmitLogsRequestDTO,
 	clientIP, apiKey, origin string,
 ) (*SubmitLogsResponseDTO, error) {
-	if err := s.validateBasicBatchLimits(request); err != nil {
-		return nil, err
+	limitsErr := s.validateBasicBatchLimits(request)
+	project, authErr := s.authorize(projectID, clientIP, apiKey, origin)
+	if limitsErr != nil {
+		if authErr == nil {
+			s.countRefused(projectID, limitsErr, len(request.Logs))
+		}
+		return nil, limitsErr
+	}
+	if authErr != nil {
+		return nil, authErr
 	}
 
+	response, err := s.submitAuthorized(project, request, clientIP)
+	if err != nil {
+		s.countRefused(projectID, err, len(request.Logs))
+	}
+	return response, err
+}
+
+// authorize returns the project when this caller may send it logs.
+func (s *LogReceivingService) authorize(
+	projectID uuid.UUID,
+	clientIP, apiKey, origin string,
+) (*projects_models.Project, error) {
 	project, err := s.validateBasicProjectConstraints(projectID, origin, clientIP)
 	if err != nil {
 		return nil, err
 	}
-
 	if err := s.validateApiKey(project, apiKey); err != nil {
 		return nil, err
 	}
+	return project, nil
+}
 
-	validLogs, errors, totalBatchSize, acceptedBytes := s.processLogItemsWithRateLimit(
-		request.Logs, project, projectID, clientIP,
+// countRefused records an authorized caller's refused batch. rows is capped
+// at MaxBatchSize: an oversized request states its own length.
+func (s *LogReceivingService) countRefused(projectID uuid.UUID, err error, rows int) {
+	var validationErr *logs_core.ValidationError
+	if !errors.As(err, &validationErr) || rows <= 0 {
+		return
+	}
+	ingestion.GetTracker().Refused(projectID, ingestion.SignalLogs, validationErr.Code, min(rows, MaxBatchSize))
+}
+
+func (s *LogReceivingService) submitAuthorized(
+	project *projects_models.Project,
+	request *SubmitLogsRequestDTO,
+	clientIP string,
+) (*SubmitLogsResponseDTO, error) {
+	projectID := project.ID
+
+	ids := requestRowIDs(projectID, request)
+	validLogs, errors, totalBatchSize, acceptedBytes := s.processLogItems(
+		request.Logs, project, projectID, clientIP, ids,
 	)
 
 	if err := s.validateTotalBatchSize(totalBatchSize); err != nil {
 		return nil, err
 	}
 
+	if err := s.takeRateLimit(project, len(validLogs)); err != nil {
+		return nil, err
+	}
+
 	s.logRejectionsIfAny(projectID, errors)
+	for code, count := range rejectedByCode(errors) {
+		ingestion.GetTracker().Refused(projectID, ingestion.SignalLogs, code, count)
+	}
 	// Sampled-out logs still count as accepted: dropping them is policy,
 	// not an error the sender should retry.
 	accepted := len(validLogs)
@@ -104,21 +156,24 @@ func (s *LogReceivingService) SubmitLogs(
 	}, nil
 }
 
-func (s *LogReceivingService) processLogItemsWithRateLimit(
+// processLogItems validates and converts each item. The project's rate limit
+// applies to the whole batch afterwards (takeRateLimit), never per item: an
+// item refused inside an accepted batch is dropped by the sender.
+func (s *LogReceivingService) processLogItems(
 	logItems []LogItemRequestDTO,
 	project *projects_models.Project,
 	projectID uuid.UUID,
 	clientIP string,
+	ids *ingest.RowIDs,
 ) ([]*logs_core.LogItem, []LogSubmissionError, int, int64) {
 	var validLogs []*logs_core.LogItem
 	var errors []LogSubmissionError
 	var totalBatchSize int
 	var acceptedBytes int64
 
-	logsAcceptedCount := 0
-	maxLogsPerBatch := s.calculateMaxLogsPerBatch(project)
-
 	for i, logItem := range logItems {
+		// Every item takes its id, so ids follow the item's position.
+		id := ids.Next()
 		logSize, err := s.calculateLogSize(&logItem)
 		if err != nil {
 			errors = append(errors, s.createLogError(i, err))
@@ -133,23 +188,13 @@ func (s *LogReceivingService) processLogItemsWithRateLimit(
 			continue
 		}
 
-		if logsAcceptedCount >= maxLogsPerBatch {
-			errors = append(errors, LogSubmissionError{Index: i, Message: logs_core.ErrorRateLimitExceeded})
-			continue
-		}
-
-		if err := s.checkPerLogRateLimit(project); err != nil {
-			errors = append(errors, s.createLogError(i, err))
-			continue
-		}
-
 		for key, value := range logItem.Fields {
 			logItem.Fields[key] = s.convertFieldValueToString(value)
 		}
 		logItem.Fields = attrnames.NormalizeMap(logItem.Fields)
 
 		validLogs = append(validLogs, &logs_core.LogItem{
-			ID:        uuid.New(),
+			ID:        id,
 			ProjectID: projectID,
 			Timestamp: time_parser.ParseTimestamp(logItem.Timestamp),
 			Level:     logItem.Level,
@@ -161,7 +206,6 @@ func (s *LogReceivingService) processLogItemsWithRateLimit(
 		})
 
 		acceptedBytes += int64(logSize)
-		logsAcceptedCount++
 	}
 
 	return validLogs, errors, totalBatchSize, acceptedBytes
@@ -182,15 +226,40 @@ func (s *LogReceivingService) logRejectionsIfAny(projectID uuid.UUID, errors []L
 		return
 	}
 
+	s.logger.Warn("some log items in this batch were rejected",
+		slog.String("projectId", projectID.String()),
+		slog.Int("rejectedCount", len(errors)),
+		slog.Any("rejectedByCode", rejectedByCode(errors)))
+}
+
+func rejectedByCode(errors []LogSubmissionError) map[string]int {
 	byCode := make(map[string]int, len(errors))
 	for _, e := range errors {
 		byCode[e.Message]++
 	}
+	return byCode
+}
 
-	s.logger.Warn("some log items in this batch were rejected",
-		slog.String("projectId", projectID.String()),
-		slog.Int("rejectedCount", len(errors)),
-		slog.Any("rejectedByCode", byCode))
+// requestRowIDs seeds the batch's row ids from the request as the sender
+// sent it, so a resent batch stores the same rows (ingest.RowIDs). A batch
+// with a line lacking a timestamp gets random ids: that line is stamped on
+// arrival, so the same request sent again later is new data, not a resend.
+func requestRowIDs(projectID uuid.UUID, request *SubmitLogsRequestDTO) *ingest.RowIDs {
+	encoded, err := json.Marshal(request.Logs)
+	if err != nil || !allTimestamped(request.Logs) {
+		random := uuid.New()
+		encoded = random[:]
+	}
+	return ingest.NewRowIDs(projectID, encoded)
+}
+
+func allTimestamped(items []LogItemRequestDTO) bool {
+	for _, item := range items {
+		if item.Timestamp == nil || item.Timestamp == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *LogReceivingService) queueValidLogs(
@@ -282,10 +351,18 @@ func (s *LogReceivingService) validateBasicProjectConstraints(
 	origin, clientIP string,
 ) (*projects_models.Project, error) {
 	project, err := s.projectService.GetProjectWithCache(projectID)
-	if err != nil {
+	if errors.Is(err, projects_services.ErrProjectNotFound) {
 		return nil, &logs_core.ValidationError{
 			Code:    logs_core.ErrorProjectNotFound,
 			Message: "project not found",
+		}
+	}
+	if err != nil {
+		s.logger.Warn("Project lookup failed; logs refused as retryable",
+			slog.String("projectId", projectID.String()), slog.String("error", err.Error()))
+		return nil, &logs_core.ValidationError{
+			Code:    logs_core.ErrorIngestUnavailable,
+			Message: "project lookup is unavailable, retry later",
 		}
 	}
 
@@ -314,7 +391,10 @@ func (s *LogReceivingService) validateApiKey(project *projects_models.Project, a
 
 	result, err := s.apiKeyService.ValidateApiKey(apiKey, project.ID)
 	if err != nil {
-		return fmt.Errorf("failed to validate API key: %w", err)
+		return &logs_core.ValidationError{
+			Code:    logs_core.ErrorIngestUnavailable,
+			Message: api_keys.LookupUnavailableMessage,
+		}
 	}
 
 	if !result.IsValid {
@@ -383,53 +463,26 @@ func (s *LogReceivingService) validateIPFilter(project *projects_models.Project,
 	}
 }
 
-func (s *LogReceivingService) calculateMaxLogsPerBatch(project *projects_models.Project) int {
+// takeRateLimit admits or refuses the batch's n items as one. A refusal is
+// a 429 with Retry-After, which every sender retries; refusing items one by
+// one inside a 200 made OTLP senders drop them.
+func (s *LogReceivingService) takeRateLimit(project *projects_models.Project, n int) error {
 	limit := project.EffectiveLogsPerSecondLimit()
-	if limit == 0 {
-		return MaxBatchSize
-	}
-
-	burstLimit := limit * LogsBurstMultiplier
-
-	rateLimitInfo, err := s.rateLimiter.GetRateLimitInfo(project.ID, limit, burstLimit)
-	if err != nil {
-		return 0
-	}
-
-	availableTokens := rateLimitInfo.Remaining
-	if rateLimitInfo.Allowed {
-		availableTokens++
-	}
-
-	maxLogsForThisBatch := limit
-	if availableTokens < maxLogsForThisBatch {
-		maxLogsForThisBatch = availableTokens
-	}
-
-	return maxLogsForThisBatch
-}
-
-func (s *LogReceivingService) checkPerLogRateLimit(project *projects_models.Project) error {
-	limit := project.EffectiveLogsPerSecondLimit()
-	if limit == 0 {
+	if limit == 0 || n == 0 {
 		return nil
 	}
 
-	burstLimit := limit * LogsBurstMultiplier
-
-	result, err := s.rateLimiter.CheckRateLimit(project.ID, limit, burstLimit)
-	if err != nil {
-		return fmt.Errorf("rate limit check failed: %w", err)
+	decision := s.rateLimiter.TakeBatch(project.ID, n, limit, limit*LogsBurstMultiplier)
+	if decision.Allowed {
+		return nil
 	}
 
-	if !result.Allowed {
-		return &logs_core.ValidationError{
-			Code:    logs_core.ErrorRateLimitExceeded,
-			Message: logs_core.ErrorRateLimitExceeded,
-		}
+	telemetry.IngestThrottledRows.WithLabelValues(telemetry.SignalLogs).Add(float64(n))
+	return &logs_core.ValidationError{
+		Code:       logs_core.ErrorRateLimitExceeded,
+		Message:    fmt.Sprintf("project rate limit of %d logs/s exceeded, retry later", limit),
+		RetryAfter: decision.RetryAfter,
 	}
-
-	return nil
 }
 
 func (s *LogReceivingService) validateLogItemWithSize(

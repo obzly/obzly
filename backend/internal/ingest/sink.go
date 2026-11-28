@@ -19,8 +19,29 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// uploadTimeout bounds the uploads of one flush.
+// uploadTimeout bounds one segment upload.
 const uploadTimeout = 2 * time.Minute
+
+const (
+	// AckWait is the shard consumers' ack wait. A batch held longer (up to
+	// INGEST_L0_MAX_AGE for a quiet project) is kept alive with InProgress
+	// every ackProgressEvery. It used to be the max-age plus 10 minutes: a
+	// delivery lost while a broker restarted then stayed unseen for 70
+	// minutes.
+	AckWait          = 5 * time.Minute
+	ackProgressEvery = 2 * time.Minute
+	// laneIdleFlush: a buffer only extra lanes carry, with no batch for this
+	// long, lost its lane (the lane count came down) and is flushed rather
+	// than held until max-age.
+	laneIdleFlush = time.Minute
+	// queuedFlushes: flushed batches of a project waiting for their upload
+	// before its next flush waits. Uploads run beside the shard's fetch
+	// loop; in the homelab a metrics shard spent a fifth of its time
+	// blocked on them (4-5 s per 3.6 MB segment).
+	queuedFlushes = 2
+	// concurrentUploads: segment uploads one sink runs at once.
+	concurrentUploads = 8
+)
 
 // ErrUndecodable marks a payload that redelivery can never fix.
 var ErrUndecodable = errors.New("undecodable ingest payload")
@@ -47,15 +68,48 @@ type Sink struct {
 
 	mu       sync.Mutex
 	projects map[uuid.UUID]*projectBuffer
+
+	// unacked: batches written whose ack JetStream hasn't confirmed,
+	// retried every tick until it does or, after AckWait, has redelivered
+	// them anyway.
+	ackMu      sync.Mutex
+	unacked    []unconfirmedAck
+	ackFailing bool
+
+	uploads chan struct{}
 }
 
-// projectBuffer is touched only by its shard's goroutine; mu guards the map.
+type unconfirmedAck struct {
+	ack   broker.Ack
+	since time.Time
+}
+
+// projectBuffer is one project's batches on this worker since its last
+// flush. With lanes (docs/INGEST_LANES.md) several of this worker's shards
+// can carry the project, and its rows share one writer buffer, so one
+// project buffer serves them all: mu serializes them, shards lists them.
+// A batch's rows are appended and its ack added under mu, as a flush takes
+// the acks and flushes the writer, so a flush covers exactly the batches
+// whose rows it writes.
 type projectBuffer struct {
-	shard   int
-	bytes   int64
-	oldest  time.Time
-	acks    []broker.Ack
-	flushed []flushedBatch
+	mu     sync.Mutex
+	shards map[int]bool
+	bytes  int64
+	oldest time.Time
+	// newest: when the last batch arrived; progressed: when the held
+	// batches' ack wait was last restarted.
+	newest     time.Time
+	progressed time.Time
+	acks       []broker.Ack
+	flushed    []flushedBatch
+	// uploading: a background uploader owns flushed[0] and removes batches
+	// as they are acked; nothing else uploads meanwhile. uploaded is
+	// signalled (on mu) whenever it removes one or stops.
+	uploading bool
+	uploaded  *sync.Cond
+	// gone: removed from the sink; a goroutine that finds it gone takes a
+	// new one.
+	gone bool
 }
 
 // flushedBatch: segments written but not all uploaded yet, and the
@@ -83,12 +137,21 @@ func NewSink(
 		maxAge:      maxAge,
 		log:         log.With("signal", signal),
 		projects:    map[uuid.UUID]*projectBuffer{},
+		uploads:     make(chan struct{}, concurrentUploads),
 	}
 }
 
-// Handle buffers one message.
+// Handle buffers one message. Its rows are appended under the project
+// buffer's lock: with lanes another shard's flush could otherwise write them
+// before their ack is added, and a failed flush would drop them while the
+// ack survives.
 func (s *Sink) Handle(shard int, projectID uuid.UUID, data []byte, ack broker.Ack) error {
-	if err := s.appendRows(projectID, data); err != nil {
+	buf := s.lockedBuffer(shard, projectID)
+	defer buf.mu.Unlock()
+	started := time.Now()
+	err := s.appendRows(projectID, data)
+	s.observe("append", started)
+	if err != nil {
 		if errors.Is(err, ErrUndecodable) {
 			s.log.Error("Dropping undecodable batch", "project", projectID, "error", err)
 			return ack.Term()
@@ -96,41 +159,93 @@ func (s *Sink) Handle(shard int, projectID uuid.UUID, data []byte, ack broker.Ac
 		return err
 	}
 
-	buf := s.buffer(shard, projectID)
+	now := time.Now().UTC()
 	if len(buf.acks) == 0 {
-		buf.oldest = time.Now().UTC()
+		buf.oldest = now
+		if len(buf.flushed) == 0 {
+			buf.progressed = now
+		}
 	}
+	buf.newest = now
 	buf.bytes += int64(len(data))
 	buf.acks = append(buf.acks, ack)
 	s.held().Inc()
 
 	if buf.bytes >= s.targetBytes {
 		s.flush(projectID, buf)
+		s.awaitUploads(projectID, buf)
 	}
 	return nil
 }
 
-// Tick flushes shard's projects past maxAge and retries failed uploads.
+// Tick flushes shard's projects past maxAge (or left by their lane),
+// retries failed uploads, and keeps held batches from being redelivered.
 func (s *Sink) Tick(_ context.Context, shard int) {
-	cutoff := time.Now().UTC().Add(-s.maxAge)
-	for projectID, buf := range s.shardBuffers(shard) {
-		if len(buf.acks) > 0 && buf.oldest.Before(cutoff) {
-			s.flush(projectID, buf)
-		} else if len(buf.flushed) > 0 {
-			s.uploadFlushed(projectID, buf)
+	s.retryAcks()
+	now := time.Now().UTC()
+	cutoff := now.Add(-s.maxAge)
+	for projectID, buf := range s.buffers() {
+		buf.mu.Lock()
+		if buf.gone || !buf.shards[shard] {
+			buf.mu.Unlock()
+			continue
 		}
-		s.forgetIfEmpty(projectID, buf)
+		if len(buf.acks) > 0 && (buf.oldest.Before(cutoff) || laneLeft(projectID, buf, now)) {
+			s.flush(projectID, buf)
+		} else {
+			s.startUpload(projectID, buf)
+		}
+		if len(buf.acks) == 0 && len(buf.flushed) == 0 && !buf.uploading {
+			s.forget(projectID, buf)
+		} else if now.Sub(buf.progressed) >= ackProgressEvery {
+			for _, ack := range buf.acks {
+				_ = ack.InProgress()
+			}
+			for _, batch := range buf.flushed {
+				for _, ack := range batch.acks {
+					_ = ack.InProgress()
+				}
+			}
+			buf.progressed = now
+		}
+		buf.mu.Unlock()
 	}
+}
+
+// laneLeft: buf is carried only by extra lanes of the project and has had
+// no batch for laneIdleFlush. A busy project's lanes get batches round-robin
+// all the time; an idle one was dropped, and its last batches would wait
+// for max-age (an hour by default) under target bytes.
+func laneLeft(projectID uuid.UUID, buf *projectBuffer, now time.Time) bool {
+	return !buf.shards[broker.ShardFor(projectID)] && now.Sub(buf.newest) >= laneIdleFlush
 }
 
 // Release flushes and uploads everything in shard. Batches whose upload
 // still fails stay unacked and are redelivered after AckWait.
+//
+// A project buffer another of this worker's shards still carries (lanes) is
+// flushed too, acking that shard's batches as well, and kept for it.
 func (s *Sink) Release(_ context.Context, shard int) {
-	for projectID, buf := range s.shardBuffers(shard) {
+	s.retryAcks()
+	for projectID, buf := range s.buffers() {
+		buf.mu.Lock()
+		if buf.gone || !buf.shards[shard] {
+			buf.mu.Unlock()
+			continue
+		}
 		if len(buf.acks) > 0 {
 			s.flush(projectID, buf)
-		} else if len(buf.flushed) > 0 {
+		}
+		for buf.uploading {
+			buf.uploaded.Wait()
+		}
+		if len(buf.flushed) > 0 {
 			s.uploadFlushed(projectID, buf)
+		}
+		delete(buf.shards, shard)
+		if len(buf.shards) > 0 {
+			buf.mu.Unlock()
+			continue
 		}
 		if len(buf.flushed) > 0 {
 			s.log.Warn("Releasing shard with segments not yet uploaded; their batches will be redelivered",
@@ -141,17 +256,18 @@ func (s *Sink) Release(_ context.Context, shard int) {
 			}
 			s.held().Sub(float64(held))
 		}
-		s.mu.Lock()
-		delete(s.projects, projectID)
-		s.mu.Unlock()
+		s.forget(projectID, buf)
+		buf.mu.Unlock()
 	}
 }
 
-// flush writes the project's rows in every stream to segments, then
-// uploads and acks.
+// flush writes the project's rows in every stream to segments and starts
+// their upload; batches are acked once it is done.
 func (s *Sink) flush(projectID uuid.UUID, buf *projectBuffer) {
 	acks := buf.acks
 	buf.acks, buf.bytes, buf.oldest = nil, 0, time.Time{}
+	started := time.Now()
+	defer s.observe("flush", started)
 
 	var records []*segments.SegmentRecord
 	for _, writer := range s.writers {
@@ -171,22 +287,80 @@ func (s *Sink) flush(projectID uuid.UUID, buf *projectBuffer) {
 	}
 
 	buf.flushed = append(buf.flushed, flushedBatch{records: records, acks: acks})
-	s.uploadFlushed(projectID, buf)
+	s.startUpload(projectID, buf)
 }
 
-// uploadFlushed uploads pending segments in order and acks each batch once
-// all of its segments are durable.
-func (s *Sink) uploadFlushed(projectID uuid.UUID, buf *projectBuffer) {
-	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
-	defer cancel()
+// awaitUploads holds the caller (a shard's fetch loop) while more than
+// queuedFlushes batches wait for their upload. With uploads failing nothing
+// runs in the background, and it retries them itself as before.
+func (s *Sink) awaitUploads(projectID uuid.UUID, buf *projectBuffer) {
+	started := time.Now()
+	waited := false
+	for len(buf.flushed) > queuedFlushes {
+		if !buf.uploading {
+			s.uploadFlushed(projectID, buf)
+			break
+		}
+		waited = true
+		buf.uploaded.Wait()
+	}
+	if waited {
+		s.observe("wait", started)
+	}
+}
 
+// startUpload uploads buf's flushed batches in the background, unless that
+// already runs. Call with buf.mu held.
+func (s *Sink) startUpload(projectID uuid.UUID, buf *projectBuffer) {
+	if buf.uploading || len(buf.flushed) == 0 {
+		return
+	}
+	buf.uploading = true
+	go s.uploadInBackground(projectID, buf)
+}
+
+// uploadInBackground uploads and acks buf's flushed batches in order, with
+// buf.mu released while it waits on object storage, and stops when none are
+// left or an upload fails (the next tick starts it again).
+func (s *Sink) uploadInBackground(projectID uuid.UUID, buf *projectBuffer) {
+	buf.mu.Lock()
+	defer func() {
+		buf.uploading = false
+		buf.uploaded.Broadcast()
+		buf.mu.Unlock()
+	}()
+	for len(buf.flushed) > 0 {
+		for len(buf.flushed[0].records) > 0 {
+			record := buf.flushed[0].records[0]
+			buf.mu.Unlock()
+			err := s.upload(projectID, record)
+			buf.mu.Lock()
+			if err != nil {
+				for _, ack := range buf.flushed[0].acks {
+					_ = ack.InProgress()
+				}
+				return
+			}
+			buf.flushed[0].records = buf.flushed[0].records[1:]
+		}
+		acks := buf.flushed[0].acks
+		buf.mu.Unlock()
+		s.ackAll(acks)
+		buf.mu.Lock()
+		s.held().Sub(float64(len(acks)))
+		buf.flushed = buf.flushed[1:]
+		buf.uploaded.Broadcast()
+	}
+}
+
+// uploadFlushed uploads pending segments in order, holding buf.mu, and acks
+// each batch once all of its segments are durable. Only while no background
+// upload runs.
+func (s *Sink) uploadFlushed(projectID uuid.UUID, buf *projectBuffer) {
 	for len(buf.flushed) > 0 {
 		batch := &buf.flushed[0]
 		for len(batch.records) > 0 {
-			record := batch.records[0]
-			if err := s.writers[record.Stream].Upload(ctx, record); err != nil {
-				s.log.Warn("Failed to upload L0 segment; retrying next tick",
-					"project", projectID, "segment", record.ID, "error", err)
+			if err := s.upload(projectID, batch.records[0]); err != nil {
 				for _, ack := range batch.acks {
 					_ = ack.InProgress()
 				}
@@ -195,48 +369,136 @@ func (s *Sink) uploadFlushed(projectID uuid.UUID, buf *projectBuffer) {
 			batch.records = batch.records[1:]
 		}
 
-		for _, ack := range batch.acks {
-			if err := ack.Ack(); err != nil {
-				s.log.Warn("Failed to ack ingest batch; it will be redelivered", "project", projectID, "error", err)
-			}
-		}
+		s.ackAll(batch.acks)
 		s.held().Sub(float64(len(batch.acks)))
 		buf.flushed = buf.flushed[1:]
 	}
+}
+
+// upload makes one segment durable, at most concurrentUploads at once.
+func (s *Sink) upload(projectID uuid.UUID, record *segments.SegmentRecord) error {
+	s.uploads <- struct{}{}
+	defer func() { <-s.uploads }()
+	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
+	defer cancel()
+	started := time.Now()
+	err := s.writers[record.Stream].Upload(ctx, record)
+	s.observe("upload", started)
+	if err != nil {
+		s.log.Warn("Failed to upload L0 segment; retrying next tick",
+			"project", projectID, "segment", record.ID, "error", err)
+	}
+	return err
+}
+
+// ackAll acks batches whose rows are durable, keeping those JetStream didn't
+// confirm for the next tick.
+func (s *Sink) ackAll(acks []broker.Ack) {
+	now := time.Now().UTC()
+	pending := make([]unconfirmedAck, len(acks))
+	for i, ack := range acks {
+		pending[i] = unconfirmedAck{ack: ack, since: now}
+	}
+	s.confirm(pending)
+}
+
+// retryAcks acks again the batches whose ack wasn't confirmed.
+func (s *Sink) retryAcks() {
+	s.ackMu.Lock()
+	pending := s.unacked
+	s.unacked = nil
+	s.ackMu.Unlock()
+	if len(pending) > 0 {
+		s.confirm(pending)
+	}
+}
+
+func (s *Sink) confirm(pending []unconfirmedAck) {
+	acks := make([]broker.Ack, len(pending))
+	since := make(map[broker.Ack]time.Time, len(pending))
+	for i, item := range pending {
+		acks[i] = item.ack
+		since[item.ack] = item.since
+	}
+	started := time.Now()
+	unconfirmed := broker.AckAll(acks)
+	s.observe("ack", started)
+	cutoff := time.Now().UTC().Add(-AckWait)
+	var kept []unconfirmedAck
+	expired := 0
+	for _, ack := range unconfirmed {
+		if since[ack].Before(cutoff) {
+			expired++
+			continue
+		}
+		kept = append(kept, unconfirmedAck{ack: ack, since: since[ack]})
+	}
+
+	s.ackMu.Lock()
+	defer s.ackMu.Unlock()
+	switch {
+	case len(kept) > 0 && !s.ackFailing:
+		s.log.Warn("JetStream didn't confirm acks of written batches; retrying them", "messages", len(kept))
+		s.ackFailing = true
+	case len(unconfirmed) == 0 && s.ackFailing && len(s.unacked) == 0:
+		s.log.Info("JetStream confirms acks again")
+		s.ackFailing = false
+	}
+	if expired > 0 {
+		s.log.Warn("Gave up acking written batches after AckWait; they are redelivered and written twice",
+			"messages", expired)
+	}
+	s.unacked = append(s.unacked, kept...)
 }
 
 func (s *Sink) held() prometheus.Gauge {
 	return telemetry.IngestHeldMessages.WithLabelValues(s.signal)
 }
 
-func (s *Sink) buffer(shard int, projectID uuid.UUID) *projectBuffer {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	buf, ok := s.projects[projectID]
-	if !ok {
-		buf = &projectBuffer{shard: shard}
-		s.projects[projectID] = buf
-	}
-	return buf
+func (s *Sink) observe(step string, started time.Time) {
+	telemetry.IngestStepDuration.WithLabelValues(s.signal, step).Observe(time.Since(started).Seconds())
 }
 
-func (s *Sink) shardBuffers(shard int) map[uuid.UUID]*projectBuffer {
+// lockedBuffer is projectID's buffer, locked and carrying shard. s.mu is
+// never held while taking a buffer's lock.
+func (s *Sink) lockedBuffer(shard int, projectID uuid.UUID) *projectBuffer {
+	for {
+		s.mu.Lock()
+		buf, ok := s.projects[projectID]
+		if !ok {
+			buf = &projectBuffer{shards: map[int]bool{}}
+			buf.uploaded = sync.NewCond(&buf.mu)
+			s.projects[projectID] = buf
+		}
+		s.mu.Unlock()
+		buf.mu.Lock()
+		if buf.gone {
+			buf.mu.Unlock()
+			continue
+		}
+		buf.shards[shard] = true
+		return buf
+	}
+}
+
+// buffers is every project buffer; callers check under each buffer's lock
+// which shards it carries.
+func (s *Sink) buffers() map[uuid.UUID]*projectBuffer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	buffers := map[uuid.UUID]*projectBuffer{}
 	for projectID, buf := range s.projects {
-		if buf.shard == shard {
-			buffers[projectID] = buf
-		}
+		buffers[projectID] = buf
 	}
 	return buffers
 }
 
-func (s *Sink) forgetIfEmpty(projectID uuid.UUID, buf *projectBuffer) {
-	if len(buf.acks) > 0 || len(buf.flushed) > 0 {
-		return
-	}
+// forget removes buf from the sink. Call with buf.mu held.
+func (s *Sink) forget(projectID uuid.UUID, buf *projectBuffer) {
+	buf.gone = true
 	s.mu.Lock()
-	delete(s.projects, projectID)
+	if s.projects[projectID] == buf {
+		delete(s.projects, projectID)
+	}
 	s.mu.Unlock()
 }

@@ -111,7 +111,7 @@ func (c *MFAController) Enable(ctx *gin.Context) {
 }
 
 // Disable
-// @Summary Disable MFA (Member accounts only - refused for Admin)
+// @Summary Disable MFA - always refused (MFA is required for every account), kept for API compatibility
 // @Tags mfa
 // @Accept json
 // @Produce json
@@ -185,12 +185,11 @@ func (c *MFAController) LoginEnable(ctx *gin.Context) {
 		return
 	}
 
-	response, err := users_services.GetUserService().GenerateAccessToken(user)
+	response, err := users_services.GetUserService().CompleteMFASignIn(user, true)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
 		return
 	}
-	response.Email = user.Email
 
 	ctx.JSON(http.StatusOK, response)
 }
@@ -216,12 +215,11 @@ func (c *MFAController) LoginVerify(ctx *gin.Context) {
 		return
 	}
 
-	response, err := users_services.GetUserService().GenerateAccessToken(user)
+	response, err := users_services.GetUserService().CompleteMFASignIn(user, false)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
 		return
 	}
-	response.Email = user.Email
 
 	ctx.JSON(http.StatusOK, response)
 }
@@ -231,7 +229,7 @@ func (c *MFAController) handleError(ctx *gin.Context, err error) {
 	case errors.Is(err, mfa_services.ErrAlreadyEnabled),
 		errors.Is(err, mfa_services.ErrNotSetUp),
 		errors.Is(err, mfa_services.ErrNotEnabled),
-		errors.Is(err, mfa_services.ErrRequiredForAdmin):
+		errors.Is(err, mfa_services.ErrRequired):
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, mfa_services.ErrUserNotFound):
 		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})

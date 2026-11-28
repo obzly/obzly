@@ -41,6 +41,7 @@ func Test_ListSeriesLifetimes_WhenLabelsAreReadInSlices_ListsEachActiveSeriesOnc
 	require.NoError(t, ingester.StoreSamplesBatch(map[uuid.UUID][]*metrics_core.MetricSample{projectID: samples}))
 	_, err = ingester.FlushAll()
 	require.NoError(t, err)
+	require.NoError(t, storage.GetDb().Exec("UPDATE metric_series_coverage SET since = now() WHERE project_id = ?", projectID).Error)
 	querier, err := NewMetricQuerier(WithQueryDir(t.TempDir()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = querier.Close() })

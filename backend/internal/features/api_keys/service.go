@@ -1,6 +1,7 @@
 package api_keys
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 )
 
 type ApiKeyService struct {
@@ -32,16 +34,37 @@ type ApiKeyService struct {
 	// keys must not accumulate for the full default TTL.
 	negativeCacheUtil *cache_utils.CacheUtil[CachedApiKey]
 	singleflight      singleflight.Group // Prevents thundering herd on DB calls
+	// localKeys: active keys this replica resolved lately, read only while
+	// Valkey is unreachable (a revoked key can work that long, at most
+	// localKeyTTL), so an outage doesn't send every request to the database.
+	localKeys *cache_utils.LocalCache[CachedApiKey]
+	// localLastUsed: keys whose last use this replica recorded lately, checked
+	// before Valkey, so a Valkey outage doesn't make every request write it.
+	localLastUsed *cache_utils.LocalCache[bool]
 }
 
 const (
 	TokenPrefix = "lb_"
 	TokenLength = 32
+
+	localKeyTTL      = 30 * time.Second
+	localMaxEntries  = 100_000
+	lastUsedInterval = cache_utils.DefaultCacheExpiry
+	// A hung database must answer a retryable 503 quickly instead of holding
+	// every ingest request (and a pool connection) until the sender gives up.
+	lookupTimeout = 3 * time.Second
 )
+
+// LookupUnavailableMessage: the API key could not be checked (the database is
+// unreachable); receivers answer a retryable 503 / UNAVAILABLE with it.
+const LookupUnavailableMessage = "API key lookup is unavailable, retry later"
 
 var (
 	ErrMFACodeRequired = errors.New("MFA code required to confirm this action")
 	ErrMFACodeInvalid  = errors.New("invalid MFA code")
+	// ErrLookupUnavailable: the key could not be checked. Not the same as an
+	// invalid key: a sender drops data on 401 but retries on 503.
+	ErrLookupUnavailable = errors.New("API key lookup is unavailable")
 )
 
 func (s *ApiKeyService) CreateApiKey(
@@ -152,6 +175,7 @@ func (s *ApiKeyService) UpdateApiKey(
 	}
 
 	s.apiKeyCacheUtil.Invalidate(apiKey.TokenHash)
+	s.localKeys.Delete(apiKey.TokenHash)
 
 	s.auditLogService.WriteAuditLog(
 		fmt.Sprintf("API key updated: %s (%s)", apiKey.Name, apiKey.TokenPrefix),
@@ -194,6 +218,7 @@ func (s *ApiKeyService) DeleteApiKey(
 	}
 
 	s.apiKeyCacheUtil.Invalidate(apiKey.TokenHash)
+	s.localKeys.Delete(apiKey.TokenHash)
 
 	s.auditLogService.WriteAuditLog(
 		fmt.Sprintf("API key deleted: %s (%s)", apiKey.Name, apiKey.TokenPrefix),
@@ -246,6 +271,7 @@ func (s *ApiKeyService) BulkDeleteApiKeys(
 
 	for _, apiKey := range apiKeys {
 		s.apiKeyCacheUtil.Invalidate(apiKey.TokenHash)
+		s.localKeys.Delete(apiKey.TokenHash)
 	}
 
 	s.auditLogService.WriteAuditLog(
@@ -295,7 +321,7 @@ func (s *ApiKeyService) VerifyApiKeyValue(
 		return &VerifyApiKeyResponseDTO{IsValid: false}, nil
 	}
 
-	apiKey, err := s.apiKeyRepository.GetApiKeyByTokenHash(s.hashToken(token))
+	apiKey, err := s.apiKeyRepository.GetApiKeyByTokenHash(context.Background(), s.hashToken(token))
 	if err != nil || apiKey.ProjectID != projectID {
 		return &VerifyApiKeyResponseDTO{IsValid: false}, nil
 	}
@@ -324,9 +350,18 @@ func (s *ApiKeyService) ResolveProjectFromApiKey(token string) (*ValidateTokenRe
 
 	tokenHash := s.hashToken(token)
 
-	if cachedKey := s.apiKeyCacheUtil.Get(tokenHash); cachedKey != nil {
+	cachedKey, cacheErr := s.apiKeyCacheUtil.Lookup(tokenHash)
+	if cacheErr != nil {
+		if local, ok := s.localKeys.Get(tokenHash); ok {
+			cachedKey = &local
+		}
+	}
+	if cachedKey != nil {
 		if cachedKey.Status != ApiKeyStatusActive {
 			return &ValidateTokenResponse{IsValid: false}, nil
+		}
+		if cacheErr == nil {
+			s.localKeys.Set(tokenHash, *cachedKey)
 		}
 
 		s.recordLastUsed(cachedKey.ID)
@@ -340,10 +375,12 @@ func (s *ApiKeyService) ResolveProjectFromApiKey(token string) (*ValidateTokenRe
 
 	// Tier 2: Database lookup with singleflight protection (prevents thundering herd)
 	result, err, _ := s.singleflight.Do(tokenHash, func() (any, error) {
-		return s.apiKeyRepository.GetApiKeyByTokenHash(tokenHash)
+		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+		defer cancel()
+		return s.apiKeyRepository.GetApiKeyByTokenHash(ctx, tokenHash)
 	})
 
-	if err != nil {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		invalidCachedKey := &CachedApiKey{
 			ID:        uuid.Nil,
 			ProjectID: uuid.Nil,
@@ -352,6 +389,11 @@ func (s *ApiKeyService) ResolveProjectFromApiKey(token string) (*ValidateTokenRe
 
 		s.negativeCacheUtil.Set(tokenHash, invalidCachedKey)
 		return &ValidateTokenResponse{IsValid: false}, nil
+	}
+	if err != nil {
+		// Never cached: a database blip must not turn valid keys into 401s
+		// (which senders drop) for the cache's lifetime.
+		return nil, fmt.Errorf("%w: %w", ErrLookupUnavailable, err)
 	}
 
 	apiKey, ok := result.(*ApiKey)
@@ -363,12 +405,13 @@ func (s *ApiKeyService) ResolveProjectFromApiKey(token string) (*ValidateTokenRe
 		return &ValidateTokenResponse{IsValid: false}, nil
 	}
 
-	cachedKey := &CachedApiKey{
+	resolved := CachedApiKey{
 		ID:        apiKey.ID,
 		ProjectID: apiKey.ProjectID,
 		Status:    apiKey.Status,
 	}
-	s.apiKeyCacheUtil.Set(tokenHash, cachedKey)
+	s.apiKeyCacheUtil.Set(tokenHash, &resolved)
+	s.localKeys.Set(tokenHash, resolved)
 
 	s.recordLastUsed(apiKey.ID)
 
@@ -383,6 +426,10 @@ func (s *ApiKeyService) ResolveProjectFromApiKey(token string) (*ValidateTokenRe
 // (this runs on every ingested request), in a goroutine off the request path.
 func (s *ApiKeyService) recordLastUsed(apiKeyID uuid.UUID) {
 	throttleKey := apiKeyID.String()
+	if _, recent := s.localLastUsed.Get(throttleKey); recent {
+		return
+	}
+	s.localLastUsed.Set(throttleKey, true)
 	if s.lastUsedThrottleCacheUtil.Get(throttleKey) != nil {
 		return
 	}

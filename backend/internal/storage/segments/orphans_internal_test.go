@@ -10,6 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// orphanTestStream keeps these rows out of tests that list every uploaded
+// logs segment (the logs uploader's reconcile test saw them as lost).
+const orphanTestStream = "orphans_test"
+
 func Test_MarkOrphansLost_MovesOldPendingSegmentsOfGoneWritersOnly(t *testing.T) {
 	projectID := uuid.New()
 	now := time.Now().UTC()
@@ -25,11 +29,11 @@ func Test_MarkOrphansLost_MovesOldPendingSegmentsOfGoneWritersOnly(t *testing.T)
 		pendingSegment(t, projectID, &gone, 2*time.Hour, true),     // already uploaded
 	}
 
-	lost, err := markOrphansLost("logs", projectID, now)
+	lost, err := markOrphansLost(orphanTestStream, projectID, now)
 
 	require.NoError(t, err)
 	require.EqualValues(t, 2, lost)
-	remaining, err := (&SegmentRepository{}).ListByProject(projectID, "logs")
+	remaining, err := (&SegmentRepository{}).ListByProject(projectID, orphanTestStream)
 	require.NoError(t, err)
 	var remainingIDs []uuid.UUID
 	for _, record := range remaining {
@@ -59,14 +63,29 @@ func Test_HeartbeatWriter_AgainUpdatesLastSeen(t *testing.T) {
 func pendingSegment(t *testing.T, projectID uuid.UUID, writerID *string, age time.Duration, uploaded bool) uuid.UUID {
 	t.Helper()
 	now := time.Now().UTC()
-	record := &SegmentRecord{ID: uuid.New(), ProjectID: projectID, Stream: "logs",
+	record := &SegmentRecord{ID: uuid.New(), ProjectID: projectID, Stream: orphanTestStream,
 		Path: "/data/" + uuid.NewString() + ".parquet", RowCount: 1, SizeBytes: 1,
 		MinTime: now.Add(-age), MaxTime: now.Add(-age), CreatedAt: now.Add(-age),
 		SchemaVersion: CurrentSchemaVersion, WriterID: writerID}
 	if uploaded {
 		record.UploadedAt = &now
-		record.ObjectKey = "logs/" + record.ID.String()
+		record.ObjectKey = orphanTestStream + "/" + record.ID.String()
 	}
 	require.NoError(t, storage.GetDb().Create(record).Error)
 	return record.ID
+}
+
+// The repair tool read the row, then a merge deleted it and its object.
+func Test_MarkLost_RowMergedAwayMeanwhile_RecordsNoLoss(t *testing.T) {
+	now := time.Now().UTC()
+	row := &SegmentRecord{
+		ID: uuid.New(), ProjectID: uuid.New(), Stream: "logs", Path: "/gone.parquet",
+		MinTime: now, MaxTime: now, SchemaVersion: CurrentSchemaVersion,
+	}
+
+	require.NoError(t, markLost(row, "object missing"))
+
+	var lost int64
+	require.NoError(t, storage.GetDb().Table("lost_segments").Where("id = ?", row.ID).Count(&lost).Error)
+	require.Zero(t, lost)
 }

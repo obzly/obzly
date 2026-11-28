@@ -206,7 +206,7 @@ var toolMetas = map[string]toolMeta{
 	})},
 	"service_errors": {"Service errors", listOutput(jsonSchema{
 		"services": listField("Services, most errors first, with the previous window's counts"),
-		"from":     text(""), "to": text(""), "previousFrom": text(""), "clampedTo7Days": boolean(""),
+		"from":     text(""), "to": text(""), "previousFrom": text(""), "clamped": boolean(""),
 	})},
 	"incident_impact": {"Incident impact", listOutput(jsonSchema{
 		"services":  listField("Per service: error logs and error spans in the session window"),

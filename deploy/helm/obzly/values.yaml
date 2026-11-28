@@ -49,7 +49,8 @@ config:
   # OAuth in any mode; required in control-plane mode.
   publicUrl: ""
   # Anything else, as environment variables (e.g. QUERY_MAX_SCAN_GB,
-  # SITE_ID, CONTROL_PLANE_ISSUER to enroll a Site in a control plane).
+  # METRICS_PARTIALS_1M_DAYS, SITE_ID, CONTROL_PLANE_ISSUER to enroll a Site
+  # in a control plane).
   extra: {}
 
 # Optional TLS from kubernetes.io/tls Secrets you manage (e.g. written by a
@@ -148,6 +149,11 @@ broker:
   storage:
     size: 50Gi
     storageClass: ""
+  # How long a starting broker may take to recover its streams before it is
+  # restarted. A broker that stopped uncleanly rebuilds each stream's index
+  # from its files, minutes for a full buffer on a slow disk; restarting it
+  # midway starts the rebuild over.
+  startupSeconds: 1800
   # Only this release's pods may reach the client (4222) and cluster (6222)
   # ports; monitoring and metrics stay open (needs a CNI that enforces it).
   networkPolicy: true
@@ -155,9 +161,17 @@ broker:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Brokers spread over zones (required), and over nodes (required, maxSkew 1):
+  # one per node with three or more nodes, 2+1 on two nodes, all three on one.
+  # Two brokers on one node lose quorum with that node, and a descheduler
+  # (RemoveDuplicates) evicting one of them churns stream leaders.
   zoneSpread: true
+  hostSpread: true
+  # A full CPU each: brokers on a busy node at 250m were starved, missed
+  # heartbeats and changed stream leaders while ingest stalled. For Guaranteed
+  # QoS set requests equal to limits (e.g. cpu "1", memory 2Gi in both).
   resources:
-    requests: {cpu: 250m, memory: 512Mi}
+    requests: {cpu: "1", memory: 512Mi}
     limits: {memory: 2Gi}
 
 api:
@@ -210,6 +224,10 @@ querier:
   # On start each querier downloads its share of this many hours of data
   # (up to half the cache); 0 turns it off. Match your usual widest search.
   warmHours: 24
+  # A querier joining running ones (a rolling update) warms its share
+  # before it takes queries, for up to this long, and the rollout waits for
+  # it; the others serve meanwhile. 0 joins at once.
+  warmWaitSeconds: 300
   # A volume per querier, so the cache survives restarts: otherwise the
   # first wide search after a rollout reads everything from object storage.
   # Switching it on replaces the Deployment with a StatefulSet.
@@ -222,6 +240,8 @@ querier:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Prefer one querier per node (never blocks scheduling).
+  hostSpread: true
   resources:
     requests: {cpu: 500m, memory: 1Gi}
     limits: {cpu: "2", memory: 2Gi}

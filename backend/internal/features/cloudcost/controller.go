@@ -65,7 +65,11 @@ func (c *Controller) RegisterRoutes(router *gin.RouterGroup) {
 // @Router /v1/cloud/cost [post]
 func (c *Controller) Receive(ctx *gin.Context) {
 	resolved, err := api_keys.GetApiKeyService().ResolveProjectFromApiKey(ctx.GetHeader("X-API-Key"))
-	if err != nil || resolved == nil || !resolved.IsValid {
+	if err != nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": api_keys.LookupUnavailableMessage})
+		return
+	}
+	if resolved == nil || !resolved.IsValid {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "invalid API key"})
 		return
 	}

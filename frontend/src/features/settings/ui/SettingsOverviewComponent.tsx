@@ -270,10 +270,11 @@ export const SettingsOverviewComponent = ({ onNavigate }: Props) => {
         });
       }
     }
-    const adminsWithoutMFA = admins.filter((user) => !user.mfaEnabled).length;
-    if (adminsWithoutMFA > 0) {
+    // MFA is required for everyone; these set it up at their next sign-in.
+    const withoutMFA = activeUsers.filter((user) => !user.mfaEnabled).length;
+    if (withoutMFA > 0) {
       items.push({
-        text: `${adminsWithoutMFA} admin${adminsWithoutMFA === 1 ? " doesn't" : "s don't"} have MFA set up yet`,
+        text: `${withoutMFA} active user${withoutMFA === 1 ? " doesn't" : "s don't"} have MFA set up yet`,
         tab: 'identity',
       });
     }

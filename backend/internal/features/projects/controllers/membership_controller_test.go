@@ -6,13 +6,16 @@ import (
 	"testing"
 
 	projects_dto "obzly/internal/features/projects/dto"
+	projects_services "obzly/internal/features/projects/services"
 	projects_testing "obzly/internal/features/projects/testing"
 	users_enums "obzly/internal/features/users/enums"
+	users_services "obzly/internal/features/users/services"
 	users_testing "obzly/internal/features/users/testing"
 	test_utils "obzly/internal/util/testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ListMembers Tests
@@ -313,6 +316,38 @@ func Test_AddMemberToProject_WithNonExistentUser_ReturnsInvited(t *testing.T) {
 	)
 
 	assert.True(t, response.Status == projects_dto.AddStatusInvited)
+}
+
+// On a Site enrolled in a control plane an unknown email is refused with a
+// pointer to the control plane, and no INVITED account is left behind.
+func Test_AddMemberToProject_WithNonExistentUser_OnControlPlaneSite_RefusedWithoutInvite(t *testing.T) {
+	users_testing.CleanupPlans()
+	router := projects_testing.CreateTestRouter(GetProjectController(), GetMembershipController())
+	owner := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	project, _ := projects_testing.CreateTestProjectViaAPI("Test Project", owner, router)
+	t.Cleanup(projects_services.SetSiteEnrolledInControlPlaneForTest(true))
+
+	email := uuid.New().String() + "@example.com"
+	resp := test_utils.MakePostRequest(
+		t, router, "/api/v1/projects/memberships/"+project.ID.String()+"/members", "Bearer "+owner.Token,
+		projects_dto.AddMemberRequestDTO{Email: email, Role: users_enums.ProjectRoleMember},
+		http.StatusBadRequest,
+	)
+	assert.Contains(t, string(resp.Body), "managed by a control plane")
+
+	created, err := users_services.GetUserService().GetUserByEmail(email)
+	require.NoError(t, err)
+	assert.Nil(t, created)
+
+	// Someone who already has an account on the Site is still added.
+	member := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	var added projects_dto.AddMemberResponseDTO
+	test_utils.MakePostRequestAndUnmarshal(
+		t, router, "/api/v1/projects/memberships/"+project.ID.String()+"/members", "Bearer "+owner.Token,
+		projects_dto.AddMemberRequestDTO{Email: member.Email, Role: users_enums.ProjectRoleViewer},
+		http.StatusOK, &added,
+	)
+	assert.Equal(t, projects_dto.AddStatusAdded, added.Status)
 }
 
 func Test_AddMemberToProject_WhenProjectAdminTriesToAddAdmin_ReturnsBadRequest(t *testing.T) {

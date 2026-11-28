@@ -9,9 +9,14 @@ import (
 	"obzly/internal/config"
 	api_keys "obzly/internal/features/api_keys"
 	spans_core "obzly/internal/features/spans/core"
+	"obzly/internal/util/querylimit"
 
 	"github.com/google/uuid"
 )
+
+// maxLookupRange: how far back the service and operation lookups read, the
+// trace query API's own limit (traces_querying's maxLookupRange).
+const maxLookupRange = 31 * 24 * time.Hour
 
 var (
 	errUnauthenticated = errors.New("invalid or missing API key")
@@ -22,6 +27,9 @@ var (
 // the URL and reshapes span DTOs into Jaeger's JSON schema.
 type JaegerService struct {
 	apiKeyService *api_keys.ApiKeyService
+	// lookupLimiter bounds the service and operation lookups running at once
+	// per project: an API key has no user to count them by.
+	lookupLimiter *querylimit.Limiter
 }
 
 func (s *JaegerService) authenticate(projectID uuid.UUID, apiKey string) error {
@@ -39,24 +47,43 @@ func (s *JaegerService) authenticate(projectID uuid.UUID, apiKey string) error {
 	return nil
 }
 
-func (s *JaegerService) ListServices(projectID uuid.UUID, apiKey string) ([]string, error) {
+// ListServices is the services seen in the last maxLookupRange, the range
+// open at its end (a span stamped a little ahead of this clock is still
+// found). Jaeger's API has no range here, so it read from 1970 on, with no
+// scan budget, limiter or way to stop when the client left.
+func (s *JaegerService) ListServices(ctx context.Context, projectID uuid.UUID, apiKey string) ([]string, error) {
 	if err := s.authenticate(projectID, apiKey); err != nil {
 		return nil, err
 	}
+	release, err := s.lookupLimiter.Acquire(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
-	response, err := spans_core.GetSpanCoreRepository().ListServices(projectID, nil)
+	response, err := spans_core.GetSpanCoreRepository().
+		ListServices(ctx, projectID, lookupRange(time.Now().UTC()), config.GetEnv().QueryMaxScanBytes)
 	if err != nil {
 		return nil, err
 	}
 	return response.Services, nil
 }
 
-func (s *JaegerService) ListOperations(projectID uuid.UUID, apiKey, serviceName string) ([]string, error) {
+// ListOperations is serviceName's operations, bounded as ListServices is.
+func (s *JaegerService) ListOperations(
+	ctx context.Context, projectID uuid.UUID, apiKey, serviceName string,
+) ([]string, error) {
 	if err := s.authenticate(projectID, apiKey); err != nil {
 		return nil, err
 	}
+	release, err := s.lookupLimiter.Acquire(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
-	response, err := spans_core.GetSpanCoreRepository().ListOperations(projectID, serviceName, nil)
+	response, err := spans_core.GetSpanCoreRepository().
+		ListOperations(ctx, projectID, serviceName, lookupRange(time.Now().UTC()), config.GetEnv().QueryMaxScanBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -134,4 +161,9 @@ func (s *JaegerService) GetTrace(projectID uuid.UUID, apiKey, traceID string) (*
 
 	trace := ConvertTrace(full)
 	return &trace, nil
+}
+
+func lookupRange(now time.Time) *spans_core.TimeRangeDTO {
+	from := now.Add(-maxLookupRange)
+	return &spans_core.TimeRangeDTO{From: &from}
 }

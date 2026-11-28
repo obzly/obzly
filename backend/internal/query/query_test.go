@@ -113,6 +113,29 @@ func Test_Owned_IsWhatAssignSendsThatExecutor(t *testing.T) {
 	require.Equal(t, assigned, owned)
 }
 
+// An executor joining running ones warms its share before it registers, so
+// Owned counts it among them already.
+func Test_Owned_ForAnExecutorNotJoinedYet_IsWhatAssignSendsItOnceJoined(t *testing.T) {
+	records := make([]*segments.SegmentRecord, 200)
+	for i := range records {
+		records[i] = &segments.SegmentRecord{ID: uuid.New()}
+	}
+	running := []query.Executor{affinityExecutor{"id-1", "disk-a"}, affinityExecutor{"id-2", "disk-b"}}
+	joined := append(slices.Clone(running), affinityExecutor{"id-3", "disk-c"})
+
+	owned := query.Owned(records, running, "disk-c")
+
+	var assigned []*segments.SegmentRecord
+	for _, group := range query.Assign(records, joined) {
+		if group.Executor.(affinityExecutor).affinity == "disk-c" {
+			assigned = group.Segments
+		}
+	}
+	require.NotEmpty(t, owned)
+	require.Less(t, len(owned), len(records))
+	require.Equal(t, assigned, owned)
+}
+
 // An uploaded segment's notice reaches the executor it belongs to, which
 // fetches it; an executor that doesn't own it leaves it alone.
 func Test_ServePrefetch_FetchesUploadedSegmentsThisExecutorOwns(t *testing.T) {
@@ -141,11 +164,10 @@ func Test_ServePrefetch_FetchesUploadedSegmentsThisExecutorOwns(t *testing.T) {
 		<-served
 	})
 	time.Sleep(200 * time.Millisecond) // both subscriptions in place
-	record := &segments.SegmentRecord{
-		ID:        uuid.New(),
-		ProjectID: uuid.New(),
-		Stream:    "logs",
-		ObjectKey: "logs/x.parquet",
+	record := &segments.SegmentRecord{ProjectID: uuid.New(), Stream: "logs", ObjectKey: "logs/x.parquet"}
+	// One disk-a ranks first even counting disk-z, which may yet join.
+	for record.ID = uuid.New(); len(query.Owned([]*segments.SegmentRecord{record}, registry.Executors(),
+		"disk-z")) > 0; record.ID = uuid.New() {
 	}
 
 	query.PublishUploaded(client.Conn, record)

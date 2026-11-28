@@ -1,7 +1,6 @@
 package spans_jetstream
 
 import (
-	"fmt"
 	"log/slog"
 	"math"
 
@@ -17,10 +16,17 @@ import (
 // NewTail serves the spans rows still pending in JetStream (see
 // ingest.Tail), written under dir.
 func NewTail(dir string, log *slog.Logger) (*ingest.Tail, error) {
+	newWriter := func() (ingest.DeltaWriter, error) { return newDeltaWriter(dir) }
+	return ingest.NewTail(broker.SignalSpans, dir, newWriter, log)
+}
+
+// newDeltaWriter is one of the tail's writers, with its own segment writer:
+// it buffers one project's rows at a time.
+func newDeltaWriter(dir string) (ingest.DeltaWriter, error) {
 	writer, err := spans_ingester.NewSpanIngester(dir,
 		segments.WithMaxRows(math.MaxInt), segments.WithMaxBytes(math.MaxInt64))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create tail writer: %w", err)
+		return nil, err
 	}
 
 	write := func(projectID uuid.UUID, payloads [][]byte) (map[string]*segments.Segment, error) {
@@ -47,5 +53,5 @@ func NewTail(dir string, log *slog.Logger) (*ingest.Tail, error) {
 		}
 		return map[string]*segments.Segment{spans_ingester.SpanSchema.Stream: file}, nil
 	}
-	return ingest.NewTail(broker.SignalSpans, dir, write, log)
+	return write, nil
 }

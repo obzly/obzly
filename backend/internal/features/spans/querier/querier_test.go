@@ -233,7 +233,9 @@ func Test_ListServices_ReturnsDistinctServiceNamesSorted(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Millisecond)
 	projectID, querier := seedProject(t, oneTrace("trace-a", base))
 
-	response, err := querier.ListServices(projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)))
+	response, err := querier.ListServices(
+		context.Background(), projectID, timeRange(base.Add(-time.Minute), base.Add(time.Hour)), 0,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"gateway", "inventory", "payments"}, response.Services)
 }
@@ -248,9 +250,11 @@ func Test_ListOperations_ReturnsOperationsForOneService(t *testing.T) {
 	projectID, querier := seedProject(t, spanList)
 
 	response, err := querier.ListOperations(
+		context.Background(),
 		projectID,
 		"gateway",
 		timeRange(base.Add(-time.Minute), base.Add(time.Hour)),
+		0,
 	)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"GET /checkout", "GET /cart"}, response.Operations)

@@ -68,15 +68,18 @@ and which signals it was seen in (metrics, logs, traces, later cloud).
     for 24 hours.
 - Replaced and deleted machines are removed, not kept:
   - a Kubernetes node missing for an hour while other nodes of its cluster still report (a spot
-    node reclaimed, a node scaled down);
+    node reclaimed, a node scaled down). With the cluster agent, which reports NotReady nodes
+    too, such a node shows as terminated after 10 minutes instead of critical;
   - a cloud resource the cloud reports `terminated`, or one missing for an hour (and three
     refreshes) while scans of its account and region still arrive.
   - If the collector or the cloud scans stop instead, nothing is removed: the assets show as not
     reporting.
-- Retention: terminated pods and containers are kept 7 days, everything else 30 days
-  (`INVENTORY_RETENTION_DAYS`). A project keeps at most 50,000 assets
+- Retention: terminated pods and containers are kept 24 hours, deleted workloads 7 days,
+  everything else 30 days (`INVENTORY_RETENTION_DAYS`). Workloads an earlier version made up
+  from CronJob runs are removed. A project keeps at most 50,000 assets
   (`INVENTORY_MAX_ASSETS_PER_PROJECT`); past that the least recently seen are dropped and the
   worker logs a warning.
+- The Assets list hides terminated assets; **Show terminated** lists them.
 - **Job and CronJob runs** come and go every few minutes, so they don't pile up:
   - each run's Job belongs to its CronJob, which is the one workload shown;
   - a run's pod and containers show while it runs and leave once it succeeds;

@@ -89,7 +89,7 @@ export interface ServiceErrors {
 }
 
 export interface ServiceErrorsResponse {
-  /** After the clamp: ranges over 7 days count the last 7 days. */
+  /** After the clamp: ranges over 31 days count the last 31 days. */
   from: string;
   to: string;
   previousFrom: string;

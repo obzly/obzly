@@ -98,6 +98,31 @@ func Test_ConvertResourceMetrics_Sum_ProducesCounterType(t *testing.T) {
 	assert.InDelta(t, 42, samples[0].Value, 0.0001)
 }
 
+// An UpDownCounter (a non-monotonic sum, here host memory in use) is a gauge,
+// so generated dashboards plot its value, not its rate.
+func Test_ConvertResourceMetrics_NonMonotonicSum_ProducesGaugeType(t *testing.T) {
+	now := time.Now().UTC()
+	resourceMetrics := []*metricsv1.ResourceMetrics{{ScopeMetrics: []*metricsv1.ScopeMetrics{{
+		Metrics: []*metricsv1.Metric{{
+			Name: "system.memory.usage",
+			Data: &metricsv1.Metric_Sum{Sum: &metricsv1.Sum{
+				IsMonotonic:            false,
+				AggregationTemporality: metricsv1.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE,
+				DataPoints: []*metricsv1.NumberDataPoint{{
+					TimeUnixNano: uint64(now.UnixNano()),
+					Value:        &metricsv1.NumberDataPoint_AsInt{AsInt: 8 << 30},
+				}},
+			}},
+		}},
+	}}}}
+
+	samples := ConvertResourceMetrics(uuid.New(), resourceMetrics).Samples
+
+	require.Len(t, samples, 1)
+	assert.Equal(t, "system_memory_usage", samples[0].MetricName)
+	assert.Equal(t, metrics_core.MetricTypeGauge, samples[0].Type)
+}
+
 // OTel per-bucket counts become Prometheus cumulative buckets, plus le="+Inf".
 func Test_ConvertResourceMetrics_Histogram_DecomposesIntoSumCountAndCumulativeBuckets(t *testing.T) {
 	projectID := uuid.New()

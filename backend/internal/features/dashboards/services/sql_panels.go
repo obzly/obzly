@@ -59,7 +59,7 @@ func (s *DashboardService) executeSQLPanelQuery(
 			ScanBudget: config.GetEnv().QueryMaxScanBytes,
 		})
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute panel query: %w", err)
+		return nil, panelQueryError(err)
 	}
 	return &dashboards_dto.PanelQueryResponseDTO{
 		Buckets: []dashboards_dto.PanelBucketDTO{},

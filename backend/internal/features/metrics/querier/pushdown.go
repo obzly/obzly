@@ -70,7 +70,7 @@ type pushdownRow struct {
 var pushdownFunctions = map[string]bool{
 	"rate": true, "increase": true,
 	"sum_over_time": true, "avg_over_time": true, "count_over_time": true,
-	"min_over_time": true, "max_over_time": true,
+	"min_over_time": true, "max_over_time": true, metrics_core.FunctionInstant: true,
 }
 
 var pushdownAggregations = map[string]bool{"": true, "sum": true, "avg": true, "min": true, "max": true, "count": true}
@@ -78,35 +78,50 @@ var pushdownAggregations = map[string]bool{"": true, "sum": true, "avg": true, "
 // pushdownFragmentSQL turns a fragment's samples into one partial per
 // series and step whose window (t - range, t] holds any of them: count,
 // first and last samples, counter resets inside the window, sum, min, max,
-// and whether two samples share a millisecond. Each sample is copied to the
-// steps it falls in (at most maxStepsPerSample) and grouped; series are
-// keyed by hash(labels) - a window frame per row, or keying by the labels
-// string, was 3-5x slower.
+// whether two samples share a millisecond, and the latest stale marker.
+// Each sample is copied to the steps it falls in (at most
+// maxStepsPerSample) and grouped; series are keyed by hash(labels) - a
+// window frame per row, or keying by the labels string, was 3-5x slower.
+// Stale markers are left out of everything else, as the engine leaves them
+// out of range vectors; only an instant selector looks at them (one that
+// is the latest sample hides the series). A partial can have only a stale
+// marker (n = 0). A sample repeated with its timestamp and value (a batch
+// redelivered into another segment) counts once, as the engine keeps one;
+// a different value at the same millisecond can't be ordered (dup).
+//
+// s is read twice (samples, labels) rather than materialized with every
+// row's labels.
 //
 // %[1]s: WHERE clause; %[2]d: start ms; %[3]d: step ms; %[4]d: the
 // slice's last step index; %[5]d: range ms - 1; %[6]d: its first step index.
-const pushdownFragmentSQL = `WITH s AS (
-	SELECT hash(labels) AS id, labels, epoch_ms(timestamp) AS t, value FROM ` + query.SourcePlaceholder + ` WHERE %[1]s
+const pushdownFragmentSQL = `WITH s AS NOT MATERIALIZED (
+	SELECT hash(labels) AS id, labels, epoch_ms(timestamp) AS t, value,
+		CASE WHEN isnan(value) THEN obzly_is_stale(value) ELSE false END AS stale
+	FROM ` + query.SourcePlaceholder + ` WHERE %[1]s
 ), r AS (
-	SELECT id, t, value,
+	SELECT id, t, value, stale,
 		CASE WHEN value < lag(value) OVER w AND NOT isnan(lag(value) OVER w) THEN lag(value) OVER w ELSE 0 END AS reset,
-		coalesce(t = lag(t) OVER w, false) AS dup
-	FROM s WINDOW w AS (PARTITION BY id ORDER BY t)
+		coalesce(t = lag(t) OVER w AND value IS DISTINCT FROM lag(value) OVER w, false) AS dup,
+		coalesce(t = lag(t) OVER w AND value IS NOT DISTINCT FROM lag(value) OVER w, false) AS repeat
+	FROM s WINDOW w AS (PARTITION BY id, stale ORDER BY t)
 ), x AS (
-	SELECT id, t, value, reset, dup, unnest(generate_series(
+	SELECT id, t, value, stale, reset, dup, repeat, unnest(generate_series(
 		greatest(%[6]d, ceil((t - %[2]d) / %[3]d))::BIGINT,
 		least(%[4]d, floor((t + %[5]d - %[2]d) / %[3]d))::BIGINT)) AS k
 	FROM r
 ), a AS (
-	SELECT id, k, count(*) AS n,
-		min(t) AS first_t, arg_min(value, t) AS first_v, max(t) AS last_t, arg_max(value, t) AS last_v,
-		sum(reset) - arg_min(reset, t) AS resets, sum(value) AS sum, min(value) AS min,
-		max(CASE WHEN isnan(value) THEN NULL ELSE value END) AS max, bool_or(dup) AS dup
+	SELECT id, k, count(*) FILTER (WHERE NOT stale AND NOT repeat) AS n,
+		min(t) FILTER (WHERE NOT stale) AS first_t, arg_min(value, t) FILTER (WHERE NOT stale) AS first_v,
+		max(t) FILTER (WHERE NOT stale) AS last_t, arg_max(value, t) FILTER (WHERE NOT stale) AS last_v,
+		coalesce(sum(reset) FILTER (WHERE NOT stale) - arg_min(reset, t) FILTER (WHERE NOT stale), 0) AS resets,
+		sum(value) FILTER (WHERE NOT stale AND NOT repeat) AS sum, min(value) FILTER (WHERE NOT stale) AS min,
+		max(CASE WHEN isnan(value) THEN NULL ELSE value END) FILTER (WHERE NOT stale) AS max,
+		bool_or(dup) AS dup, max(t) FILTER (WHERE stale) AS stale_t
 	FROM x GROUP BY id, k
 ), l AS (
 	SELECT id, any_value(labels) AS labels FROM s GROUP BY id
 )
-SELECT l.labels, %[2]d + %[3]d * a.k AS t, n, first_t, first_v, last_t, last_v, resets, sum, min, max, dup
+SELECT l.labels, %[2]d + %[3]d * a.k AS t, n, first_t, first_v, last_t, last_v, resets, sum, min, max, dup, stale_t
 FROM a JOIN l USING (id)`
 
 // maxStepsPerSample: the most steps one sample may be copied to (range /
@@ -117,7 +132,7 @@ const maxStepsPerSample = 32
 // pushdownSingleSQL names a slice's partials "merged": a slice reads every
 // file its steps need, so each series and step has one partial.
 const pushdownSingleSQL = `WITH merged AS (
-	SELECT labels, t, n, first_t, first_v, last_t, last_v, resets, sum, min, max, dup AS bad
+	SELECT labels, t, n, first_t, first_v, last_t, last_v, resets, sum, min, max, stale_t, dup AS bad
 	FROM (%s)
 )`
 
@@ -136,7 +151,7 @@ const pushdownMergeSQL = `WITH p AS (
 		min(first_t) AS first_t, arg_min(first_v, first_t) AS first_v,
 		max(last_t) AS last_t, arg_max(last_v, last_t) AS last_v,
 		sum(resets + CASE WHEN first_v < prev_v AND NOT isnan(prev_v) THEN prev_v ELSE 0 END) AS resets,
-		sum(sum) AS sum, min(min) AS min, max(max) AS max,
+		sum(sum) AS sum, min(min) AS min, max(max) AS max, max(stale_t) AS stale_t,
 		bool_or(dup OR coalesce(first_t <= prev_t, false)) AS bad
 	FROM p GROUP BY labels, t
 )`
@@ -200,7 +215,13 @@ func (q *MetricQuerier) EvaluateRangeFunction(
 	if err != nil {
 		return nil, false, err
 	}
-	sources, err := q.sampleSources(projectID, from, to, records, tail, request.StepMs, request.RangeMs,
+	// Aligned steps read exact partials, never the approximate rollups.
+	aligned := partialsAligned(request, stepMs, lastStep)
+	rollupStep, rollupRange := request.StepMs, request.RangeMs
+	if aligned {
+		rollupStep, rollupRange = 0, 0
+	}
+	sources, err := q.sampleSources(projectID, from, to, records, tail, rollupStep, rollupRange,
 		segments.PruningHints{MetricNames: []string{name}})
 	if err != nil {
 		return nil, false, err
@@ -208,9 +229,23 @@ func (q *MetricQuerier) EvaluateRangeFunction(
 	if len(sources) != 1 {
 		return nil, false, nil
 	}
-	plan, err := q.pushdownPlan(projectID, request, stepMs, lastStep, sources[0])
-	if err != nil {
-		return nil, false, err
+	var plan *pushdownPlan
+	if aligned {
+		if plan, err = q.partialsPlan(projectID, request, stepMs, lastStep, sources[0], name); err != nil {
+			return nil, false, err
+		}
+	}
+	if plan == nil {
+		if plan, err = q.rollupPlan(projectID, request, stepMs, lastStep, sources[0], name); err != nil {
+			return nil, false, err
+		}
+	}
+	if plan == nil {
+		whole, err := q.pushdownPlan(projectID, request, stepMs, lastStep, sources[0])
+		if err != nil {
+			return nil, false, err
+		}
+		plan = &whole
 	}
 	finalSQL, finalArgs := pushdownFinalSQL(pushdownMergeSQL, request)
 	requests := []pushdownRun{
@@ -239,9 +274,7 @@ func (q *MetricQuerier) EvaluateRangeFunction(
 		found, bad, points = found || run.found, bad || run.bad, points+len(run.rows)
 	}
 	if points > maxSeriesRows {
-		return nil, false, fmt.Errorf(
-			"query returns more than %d points; narrow the time range or matchers", maxSeriesRows,
-		)
+		return nil, false, tooManyPoints()
 	}
 	if bad {
 		return nil, false, nil
@@ -352,6 +385,10 @@ func pushdownFinalSQL(merge string, request *metrics_core.RangeFunctionRequestDT
 			divisor = strconv.FormatFloat(float64(request.RangeMs)/1000, 'g', -1, 64) + "::DOUBLE"
 		}
 		sqlText += fmt.Sprintf(pushdownRateSQL, request.RangeMs, divisor)
+	case metrics_core.FunctionInstant:
+		// A stale marker as the latest sample hides the series at that step.
+		sqlText += ", v AS (SELECT labels, t, bad, last_v AS value FROM merged" +
+			" WHERE n > 0 AND (stale_t IS NULL OR stale_t < last_t))"
 	default:
 		value := map[string]string{
 			"sum_over_time":   "sum",
@@ -360,7 +397,7 @@ func pushdownFinalSQL(merge string, request *metrics_core.RangeFunctionRequestDT
 			"min_over_time":   "min",
 			"max_over_time":   "coalesce(max, 'NaN'::DOUBLE)",
 		}[request.Function]
-		sqlText += ", v AS (SELECT labels, t, bad, " + value + " AS value FROM merged)"
+		sqlText += ", v AS (SELECT labels, t, bad, " + value + " AS value FROM merged WHERE n > 0)"
 	}
 
 	if request.Aggregation == "" {
@@ -516,7 +553,7 @@ func (r *pushdownRun) run(ctx context.Context, q *MetricQuerier, groups int) {
 			}
 			r.rows = append(r.rows, row)
 			if len(r.rows) > maxSeriesRows {
-				return fmt.Errorf("query returns more than %d points; narrow the time range or matchers", maxSeriesRows)
+				return tooManyPoints()
 			}
 		}
 		return nil
@@ -642,4 +679,9 @@ func filesSpan(source sampleSource, fromMs, toMs int64) (int64, int64, int64) {
 		add(file.MinTime, file.MaxTime)
 	}
 	return first, last, files
+}
+
+func tooManyPoints() error {
+	return &metrics_core.LimitError{Message: fmt.Sprintf(
+		"query returns more than %d points; narrow the time range or matchers", maxSeriesRows)}
 }

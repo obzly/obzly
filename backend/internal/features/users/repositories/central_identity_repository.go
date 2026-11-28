@@ -46,6 +46,15 @@ func (r *CentralIdentityRepository) GetUserByIdentity(issuer, subject string) (*
 	return &user, nil
 }
 
+// HasIdentityForIssuer reports whether userID is already some subject at issuer.
+func (r *CentralIdentityRepository) HasIdentityForIssuer(userID uuid.UUID, issuer string) (bool, error) {
+	var count int64
+	err := storage.GetDb().Model(&CentralIdentity{}).
+		Where("user_id = ? AND issuer = ?", userID, issuer).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // LinkIdentity records that userID is subject at issuer; repeats are no-ops.
 func (r *CentralIdentityRepository) LinkIdentity(userID uuid.UUID, issuer, subject string) error {
 	identity := &CentralIdentity{

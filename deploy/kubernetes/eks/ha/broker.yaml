@@ -84,10 +84,22 @@ spec:
         # Replace with your on-demand node label (e.g.
         # karpenter.sh/capacity-type: on-demand). Never Spot.
         eks.amazonaws.com/capacityType: ON_DEMAND
+      # Constraints set here replace the scheduler's default node spreading, so
+      # the node spread is explicit too: one broker per node with three or more
+      # nodes (2+1 on two, all on one). Two brokers on one node lose quorum with
+      # it, and a descheduler (RemoveDuplicates) evicting one churns leaders.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: obzly-broker
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          nodeAffinityPolicy: Honor
+          nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
               app: obzly-broker
@@ -155,7 +167,7 @@ spec:
               mountPath: /jetstream
           resources:
             requests:
-              cpu: 250m
+              cpu: "1"
               memory: 512Mi
             limits:
               memory: 2Gi

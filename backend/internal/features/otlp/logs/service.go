@@ -1,7 +1,8 @@
 package otlp_logs
 
 import (
-	"fmt"
+	"errors"
+	"time"
 
 	api_keys "obzly/internal/features/api_keys"
 	logs_core "obzly/internal/features/logs/core"
@@ -17,7 +18,8 @@ type ExportErrorCode string
 const (
 	ExportErrorUnauthenticated ExportErrorCode = "UNAUTHENTICATED"
 	ExportErrorInvalidArgument ExportErrorCode = "INVALID_ARGUMENT"
-	// The two retryable ones: the ingest buffer is full or unreachable.
+	// The retryable ones: the project's rate limit or the ingest buffer is
+	// full, or the buffer or a lookup is unreachable.
 	ExportErrorResourceExhausted ExportErrorCode = "RESOURCE_EXHAUSTED"
 	ExportErrorUnavailable       ExportErrorCode = "UNAVAILABLE"
 )
@@ -25,6 +27,8 @@ const (
 type ExportError struct {
 	Code    ExportErrorCode
 	Message string
+	// RetryAfter: when a throttled batch may be sent again; 0 is the default.
+	RetryAfter time.Duration
 }
 
 func (e *ExportError) Error() string {
@@ -51,7 +55,7 @@ func (s *OtlpLogsService) Export(
 
 	resolved, err := s.apiKeyService.ResolveProjectFromApiKey(apiKey)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to resolve API key: %w", err)
+		return 0, 0, &ExportError{Code: ExportErrorUnavailable, Message: api_keys.LookupUnavailableMessage}
 	}
 	if !resolved.IsValid {
 		return 0, 0, &ExportError{Code: ExportErrorUnauthenticated, Message: "invalid API key"}
@@ -76,14 +80,20 @@ func (s *OtlpLogsService) Export(
 // mapSubmitError turns logs_core.ValidationError into an ExportError, so
 // transports don't depend on logs_core.
 func mapSubmitError(err error) error {
-	validationErr, ok := err.(*logs_core.ValidationError)
-	if !ok {
+	var validationErr *logs_core.ValidationError
+	if !errors.As(err, &validationErr) {
 		return err
 	}
 
 	switch validationErr.Code {
 	case logs_core.ErrorAPIKeyRequired, logs_core.ErrorAPIKeyInvalid:
 		return &ExportError{Code: ExportErrorUnauthenticated, Message: validationErr.Message}
+	case logs_core.ErrorRateLimitExceeded:
+		return &ExportError{
+			Code:       ExportErrorResourceExhausted,
+			Message:    validationErr.Message,
+			RetryAfter: validationErr.RetryAfter,
+		}
 	case logs_core.ErrorIngestBufferFull:
 		return &ExportError{Code: ExportErrorResourceExhausted, Message: validationErr.Message}
 	case logs_core.ErrorIngestUnavailable:

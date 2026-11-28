@@ -7,12 +7,11 @@ import type { AccessToken, CreateAccessTokenResponse } from '../model/AccessToke
 const baseUrl = () => `${getApplicationServer()}/api/v1/access-tokens`;
 
 export const accessTokenApi = {
-  async list(): Promise<AccessToken[]> {
-    const response: { accessTokens: AccessToken[] } = await apiHelper.fetchGetJson(
-      baseUrl(),
-      new RequestOptions(),
-    );
-    return response.accessTokens;
+  /** writeAvailable is false while the server has MCP write access turned off. */
+  async list(): Promise<{ accessTokens: AccessToken[]; writeAvailable: boolean }> {
+    const response: { accessTokens: AccessToken[]; writeAvailable?: boolean } =
+      await apiHelper.fetchGetJson(baseUrl(), new RequestOptions());
+    return { accessTokens: response.accessTokens, writeAvailable: !!response.writeAvailable };
   },
 
   /** write adds the mcp:write scope (MCP write tools); it needs a session that passed MFA. */

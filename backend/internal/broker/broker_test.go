@@ -131,11 +131,15 @@ func Test_ThreeBrokerCluster_R3StreamSurvivesOneBrokerLoss(t *testing.T) {
 	servers[0].WaitForShutdown()
 
 	// Bounded: a publish routed to the stopped broker can otherwise wait out the
-	// whole context.
+	// whole context. An attempt that times out may still be stored (its ack lost
+	// while the client reconnects, or later than the timeout under -race), so the
+	// retries carry one message id, as receivers' publishes do: without it the
+	// stream held the retried batch twice in 4 runs of 30 under -race.
 	require.Eventually(t, func() bool {
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, 3*time.Second)
 		defer attemptCancel()
-		_, err := client.JetStream.Publish(attemptCtx, "ingest.spans.1.project-a", []byte("after"))
+		_, err := client.JetStream.Publish(attemptCtx, "ingest.spans.1.project-a", []byte("after"),
+			jetstream.WithMsgID("after-broker-loss"))
 		return err == nil
 	}, 30*time.Second, 250*time.Millisecond, "two of three brokers keep acking")
 	info, err := stream.Info(ctx)

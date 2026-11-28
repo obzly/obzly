@@ -9,6 +9,7 @@ import (
 	users_enums "obzly/internal/features/users/enums"
 	mfa_controllers "obzly/internal/features/users/mfa/controllers"
 	mfa_dto "obzly/internal/features/users/mfa/dto"
+	mfa_services "obzly/internal/features/users/mfa/services"
 	users_middleware "obzly/internal/features/users/middleware"
 	users_services "obzly/internal/features/users/services"
 	sso_controllers "obzly/internal/features/users/sso/controllers"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -126,21 +128,8 @@ func Test_UserLifecycleE2E_CompletesSuccessfully(t *testing.T) {
 
 	test_utils.MakePostRequest(t, router, "/api/v1/users/signup", "", userSignupRequest, http.StatusOK)
 
-	userSigninRequest := users_dto.SignInRequestDTO{
-		Email:    userEmail,
-		Password: "userpassword123",
-	}
-
-	var signinResponse users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t,
-		router,
-		"/api/v1/users/signin",
-		"",
-		userSigninRequest,
-		http.StatusOK,
-		&signinResponse,
-	)
+	// The first sign-in goes through MFA setup, as for every role.
+	signinResponse, _ := signInAndSetUpMFA(t, router, userEmail, "userpassword123")
 	assert.NotEmpty(t, signinResponse.Token)
 	assert.NotEqual(t, uuid.Nil, signinResponse.UserID)
 
@@ -277,6 +266,79 @@ func completeForcedMFASetup(t *testing.T, router *gin.Engine, mfaToken string) u
 	)
 
 	return signInResponse
+}
+
+// signInAndSetUpMFA signs in with a password and completes the MFA setup every
+// account goes through at its first sign-in. The secret is returned for later codes.
+func signInAndSetUpMFA(
+	t *testing.T, router *gin.Engine, email, password string,
+) (users_dto.SignInResponseDTO, string) {
+	t.Helper()
+
+	var signIn users_dto.SignInResponseDTO
+	test_utils.MakePostRequestAndUnmarshal(
+		t, router, "/api/v1/users/signin", "",
+		users_dto.SignInRequestDTO{Email: email, Password: password},
+		http.StatusOK, &signIn,
+	)
+	require.True(t, signIn.MFASetupRequired, "a first sign-in goes through MFA setup")
+	require.Empty(t, signIn.Token)
+	return finishMFASetup(t, signIn.MFAToken)
+}
+
+// signInWithMFACode signs in an account that has MFA with a password and a code.
+func signInWithMFACode(t *testing.T, router *gin.Engine, email, password, code string) users_dto.SignInResponseDTO {
+	t.Helper()
+
+	var signIn users_dto.SignInResponseDTO
+	test_utils.MakePostRequestAndUnmarshal(
+		t, router, "/api/v1/users/signin", "",
+		users_dto.SignInRequestDTO{Email: email, Password: password},
+		http.StatusOK, &signIn,
+	)
+	require.True(t, signIn.MFARequired)
+	require.Empty(t, signIn.Token)
+	return finishMFALogin(t, signIn.MFAToken, code)
+}
+
+// finishMFASetup completes a setup challenge (password, OAuth or SSO sign-in)
+// through the service, so it works on routers without the MFA routes.
+func finishMFASetup(t *testing.T, mfaToken string) (users_dto.SignInResponseDTO, string) {
+	t.Helper()
+
+	setup, err := mfa_services.GetMFAService().SetupWithToken(mfaToken)
+	require.NoError(t, err)
+	code, err := totp.GenerateCode(setup.Secret, time.Now())
+	require.NoError(t, err)
+	user, err := mfa_services.GetMFAService().EnableWithToken(mfaToken, code)
+	require.NoError(t, err)
+
+	session, err := users_services.GetUserService().GenerateAccessToken(user)
+	require.NoError(t, err)
+	session.Email = user.Email
+	return *session, setup.Secret
+}
+
+// finishMFALogin completes a login challenge with code, like finishMFASetup.
+func finishMFALogin(t *testing.T, mfaToken, code string) users_dto.SignInResponseDTO {
+	t.Helper()
+
+	user, err := mfa_services.GetMFAService().VerifyLoginToken(mfaToken, code)
+	require.NoError(t, err)
+	session, err := users_services.GetUserService().GenerateAccessToken(user)
+	require.NoError(t, err)
+	session.Email = user.Email
+	return *session
+}
+
+// nextTOTPCode is the next 30 s step's code: a step already used (by setup,
+// say) is never accepted again.
+func nextTOTPCode(t *testing.T, secret string) string {
+	t.Helper()
+	code, err := totp.GenerateCodeCustom(secret, time.Now().Add(30*time.Second),
+		totp.ValidateOpts{Period: 30, Skew: 1, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1})
+	require.NoError(t, err)
+	return code
 }
 
 type AuditLogWriterStub struct{}

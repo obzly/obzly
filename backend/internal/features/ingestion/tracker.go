@@ -27,9 +27,10 @@ type Tracker struct {
 	logger *slog.Logger
 	now    func() time.Time
 
-	mu      sync.Mutex
-	entries map[entryKey]*trackedEntry
-	full    bool
+	mu       sync.Mutex
+	entries  map[entryKey]*trackedEntry
+	refusals map[refusalKey]*refusalEntry
+	full     bool
 }
 
 type entryKey struct {
@@ -89,10 +90,16 @@ func (t *Tracker) Flush(ctx context.Context) error {
 	t.mu.Lock()
 	entries := t.entries
 	t.entries = map[entryKey]*trackedEntry{}
+	refusals := t.refusals
+	t.refusals = map[refusalKey]*refusalEntry{}
 	t.full = false
 	t.mu.Unlock()
+	var firstErr error
+	if len(refusals) > 0 {
+		firstErr = t.repo.writeRefusals(ctx, refusals)
+	}
 	if len(entries) == 0 {
-		return nil
+		return firstErr
 	}
 	byProject := map[uuid.UUID]map[entryKey]*trackedEntry{}
 	for key, entry := range entries {
@@ -101,7 +108,6 @@ func (t *Tracker) Flush(ctx context.Context) error {
 		}
 		byProject[key.projectID][key] = entry
 	}
-	var firstErr error
 	for projectID, projectEntries := range byProject {
 		if err := t.repo.write(ctx, projectID, projectEntries); err != nil && firstErr == nil {
 			firstErr = err

@@ -47,12 +47,12 @@ export const UsersSummaryComponent = ({ summary }: Props): JSX.Element => {
         color="var(--v2-purple)"
         note={
           s ? (
-            s.adminsWithoutMfa > 0 ? (
+            s.activeAccounts > s.mfaEnabled ? (
               <span className="text-[var(--v2-red)]">
-                {s.adminsWithoutMfa} admin{s.adminsWithoutMfa === 1 ? '' : 's'} without MFA
+                {s.activeAccounts - s.mfaEnabled} without MFA yet
               </span>
             ) : (
-              'every admin has MFA'
+              'everyone has MFA'
             )
           ) : (
             'no data'

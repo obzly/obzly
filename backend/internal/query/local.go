@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"obzly/internal/storage/segments"
 	"obzly/internal/telemetry"
+	"obzly/internal/util/logger"
 )
 
 // LocalExecutor runs fragments in this process. It reads a segment from
@@ -39,8 +41,10 @@ func (e *LocalExecutor) ShipsLocalFiles() bool {
 // Execute writes the fragment's rows to resultPath, or returns ErrNoFiles
 // when none of its files can be read (ResolveFiles skips a missing one).
 func (e *LocalExecutor) Execute(ctx context.Context, fragment Fragment, resultPath string) error {
+	started := time.Now()
 	files := append([]segments.ResolvedFile{}, fragment.LocalFiles...)
 	candidates := segments.SkipByTokens(ctx, e.store, e.cacheDir, fragment.Segments, fragment.Tokens)
+	tokensDone := time.Now()
 	telemetry.TokenFilterSkips.Add(float64(len(fragment.Segments) - len(candidates)))
 	fragment.Segments = candidates
 	// A large cold segment is fetched only for the columns the SQL reads.
@@ -58,6 +62,16 @@ func (e *LocalExecutor) Execute(ctx context.Context, fragment Fragment, resultPa
 	if err != nil {
 		return err
 	}
+	resolved := time.Now()
+	defer func() {
+		if took := time.Since(started); took >= slowQueryLog {
+			logger.GetLogger().Info("Slow query fragment", "fragment", fragment.ID, "stream", fragment.Stream,
+				"segments", len(fragment.Segments), "files", len(files), "args", len(args),
+				"duration", took.Round(time.Millisecond), "tokenFilters", tokensDone.Sub(started).Round(time.Millisecond),
+				"resolve", resolved.Sub(tokensDone).Round(time.Millisecond),
+				"run", time.Since(resolved).Round(time.Millisecond))
+		}
+	}()
 	copySQL := fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET)", sqlText, strings.ReplaceAll(resultPath, "'", "''"))
 	if _, err := e.db.ExecContext(ctx, copySQL, args...); err != nil {
 		return fmt.Errorf("fragment %s: %w", fragment.ID, err)

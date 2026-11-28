@@ -8,6 +8,7 @@ import (
 
 	metrics_core "obzly/internal/features/metrics/core"
 	metrics_querying "obzly/internal/features/metrics/querying"
+	metrics_testsupport "obzly/internal/features/metrics/testsupport"
 	projects_testing "obzly/internal/features/projects/testing"
 	users_enums "obzly/internal/features/users/enums"
 	users_testing "obzly/internal/features/users/testing"
@@ -96,4 +97,40 @@ func Test_PromQLQuery_WithMaxSeries_ReturnsMoreThanDefaultLimit(t *testing.T) {
 		http.StatusOK, &all)
 	assert.Len(t, all.Series, 150)
 	assert.False(t, all.Truncated)
+}
+
+// Storage failing under a valid query answers 500 with a fixed message. The
+// cause (which names the fragment, the executor and the segment file) used
+// to come back in a 400 as "invalid PromQL: ...", from building the query
+// (its pushed-down fragments) and from evaluating it alike.
+func Test_PromQLQuery_WhenStorageFails_Returns500WithoutTheCause(t *testing.T) {
+	router := createTestRouter()
+	owner := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	project, _ := projects_testing.CreateTestProjectWithToken("PromQL storage failure", owner.Token, router)
+	metrics_testsupport.FailSampleReads(t, nil)
+
+	for _, expression := range []string{"sum(rate(queue_depth[5m]))", "queue_depth"} {
+		resp := test_utils.MakePostRequest(t, router, "/api/v1/metrics/query/promql/"+project.ID.String(),
+			"Bearer "+owner.Token, metrics_querying.PromQLQueryRequestDTO{Query: expression},
+			http.StatusInternalServerError)
+
+		assert.JSONEq(t, `{"error":"failed to execute the PromQL query"}`, string(resp.Body), expression)
+	}
+}
+
+// A limit storage sets is the caller's to fix: its text still reaches them.
+func Test_PromQLQuery_WhenStorageRefusesForALimit_ReturnsTheLimit(t *testing.T) {
+	router := createTestRouter()
+	owner := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	project, _ := projects_testing.CreateTestProjectWithToken("PromQL storage limit", owner.Token, router)
+	metrics_testsupport.FailSampleReads(t, fmt.Errorf("failed to merge query fragments: %w",
+		&metrics_core.LimitError{Message: "query returns more than 10 points; narrow the time range or matchers"}))
+
+	resp := test_utils.MakePostRequest(t, router, "/api/v1/metrics/query/promql/"+project.ID.String(),
+		"Bearer "+owner.Token, metrics_querying.PromQLQueryRequestDTO{Query: "sum(rate(queue_depth[5m]))"},
+		http.StatusBadRequest)
+
+	assert.JSONEq(t,
+		`{"error":"invalid PromQL: query returns more than 10 points; narrow the time range or matchers"}`,
+		string(resp.Body))
 }

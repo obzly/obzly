@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	spans_core "obzly/internal/features/spans/core"
 	"obzly/internal/query"
@@ -13,9 +14,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// TraceSummary answers the Traces summary in at most two scans: the tiles
-// (both periods' totals and the current period's buckets, one GROUPING SETS
-// query over [PreviousFrom, To]) and the capped matching-traces count.
+// TraceSummary answers the Traces summary: the tiles (both periods' totals
+// and the current period's buckets) from span stats, rollups where they
+// answer, and the capped matching-traces count.
 func (q *SpanQuerier) TraceSummary(
 	ctx context.Context,
 	projectID uuid.UUID,
@@ -35,6 +36,9 @@ func (q *SpanQuerier) TraceSummary(
 	return result, nil
 }
 
+// traceSummaryTiles reads [PreviousFrom, From) and [From, To] in one stats
+// query. The duration bounds apply to each span: exactly where spans are read
+// raw, at histogram resolution (about 9%) on rollup rows.
 func (q *SpanQuerier) traceSummaryTiles(
 	ctx context.Context,
 	projectID uuid.UUID,
@@ -47,73 +51,49 @@ func (q *SpanQuerier) traceSummaryTiles(
 	if request.ServiceName != "" {
 		hints.Services = []string{request.ServiceName}
 	}
-	tail, records, err := q.inputs(projectID, previousFrom, to, hints)
-	if err != nil {
-		return err
-	}
+	where, whereArgs := summaryFilters(request)
+	stepMs := max(request.StepMs, 1)
 
-	where := []string{"project_id = ?", "start_time >= ?", "start_time <= ?"}
-	whereArgs := []any{projectID.String(), previousFrom, to}
-	if request.RootSpansOnly {
-		where = append(where, "parent_span_id = ''")
-	}
-	if request.ServiceName != "" {
-		where = append(where, "service_name = ?")
-		whereArgs = append(whereArgs, request.ServiceName)
-	}
-	if request.OperationName != "" {
-		where = append(where, "name = ?")
-		whereArgs = append(whereArgs, request.OperationName)
-	}
-	if request.ErrorsOnly {
-		where = append(where, "status_code = 'ERROR'")
-	}
-	if request.MinDurationMs != nil {
-		where = append(where, spanDurationMsExpr+" >= ?")
-		whereArgs = append(whereArgs, *request.MinDurationMs)
-	}
-	if request.MaxDurationMs != nil {
-		where = append(where, spanDurationMsExpr+" <= ?")
-		whereArgs = append(whereArgs, *request.MaxDurationMs)
-	}
-
-	stepNs := max(request.StepMs, 1) * 1_000_000
-	// Previous-period rows get a NULL bucket: their (is_current, bucket) set
-	// repeats the period total and is skipped.
-	sqlText := "SELECT is_current, bucket, GROUPING(bucket) AS is_total, count(*), " +
-		"count(*) FILTER (WHERE is_error), approx_quantile(duration_ms, 0.5), approx_quantile(duration_ms, 0.95) " +
-		"FROM (SELECT start_time >= ? AS is_current, " +
-		"CASE WHEN start_time >= ? THEN epoch_ns(start_time) // ? END AS bucket, " +
-		"status_code = 'ERROR' AS is_error, " + spanDurationMsExpr + " AS duration_ms " +
-		"FROM " + query.SourcePlaceholder + " WHERE " + strings.Join(where, " AND ") + ") " +
-		"GROUP BY GROUPING SETS ((is_current), (is_current, bucket))"
-	args := append([]any{from, from, stepNs}, whereArgs...)
-
-	_, err = q.runContext(ctx, query.Request{
-		Segments:       records,
-		LocalFiles:     tail,
-		SingleSQL:      sqlText,
-		SingleArgs:     args,
-		SingleFragment: true,
-		ScanBudget:     request.ScanBudget,
+	// Previous-period rows get a NULL bucket; totals are per period, buckets
+	// only for the current one.
+	finalSQL := "WITH m AS (SELECT is_current, bucket, duration_bucket, sum(cnt) AS cnt, sum(errs) AS errs " +
+		"FROM " + query.ResultsPlaceholder + " GROUP BY ALL), " +
+		"g AS (SELECT is_current, NULL::BIGINT AS bucket, 1 AS is_total, duration_bucket, sum(cnt) AS cnt, " +
+		"sum(errs) AS errs FROM m GROUP BY is_current, duration_bucket " +
+		"UNION ALL SELECT is_current, bucket, 0 AS is_total, duration_bucket, cnt, errs FROM m WHERE bucket IS NOT NULL) " +
+		histogramSQL("g", "cnt", []string{"is_current", "bucket", "is_total"},
+			[]string{"sum(errs)::BIGINT AS errs"}, []float64{0.5, 0.95})
+	_, err := q.runStats(ctx, projectID, statsQuery{
+		schema: spanStats,
+		ranges: []interval{{start: previousFrom, end: from}, {start: from, end: to, includeEnd: true}},
+		hints:  hints,
+		grain:  time.Duration(stepMs) * time.Millisecond,
+		selectSQL: "timestamp >= ? AS is_current, CASE WHEN timestamp >= ? THEN epoch_ns(timestamp) // ? END AS bucket, " +
+			"duration_bucket, sum(cnt)::BIGINT AS cnt, (sum(cnt) FILTER (WHERE status_code = 'ERROR'))::BIGINT AS errs",
+		selectArgs: []any{from, from, stepMs * 1_000_000},
+		whereSQL:   where,
+		whereArgs:  whereArgs,
+		groupSQL:   " GROUP BY 1, 2, 3",
+		finalSQL:   finalSQL,
+		scanBudget: request.ScanBudget,
 	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var isCurrent bool
-			var bucket sql.NullInt64
-			var isTotal, count, errors int64
+			var bucket, errors sql.NullInt64
+			var isTotal, count int64
 			var p50, p95 sql.NullFloat64
 			if err := rows.Scan(&isCurrent, &bucket, &isTotal, &count, &errors, &p50, &p95); err != nil {
 				return fmt.Errorf("failed to scan trace summary row: %w", err)
 			}
+			period := summaryPeriod(count, errors.Int64, p50, p95)
 			switch {
 			case isTotal == 1 && isCurrent:
-				result.Current = summaryPeriod(count, errors, p50, p95)
+				result.Current = period
 			case isTotal == 1:
-				result.Previous = summaryPeriod(count, errors, p50, p95)
+				result.Previous = period
 			case isCurrent && bucket.Valid:
-				period := summaryPeriod(count, errors, p50, p95)
 				result.Buckets = append(result.Buckets, spans_core.TraceSummaryBucket{
-					Index: bucket.Int64, Count: count, Errors: errors, P50Ms: period.P50Ms, P95Ms: period.P95Ms,
+					Index: bucket.Int64, Count: count, Errors: errors.Int64, P50Ms: period.P50Ms, P95Ms: period.P95Ms,
 				})
 			}
 		}
@@ -129,46 +109,52 @@ func (q *SpanQuerier) traceSummaryTiles(
 // that match the filters as ListTraces applies them (service and operation:
 // any span; errors: any span), except that the duration bounds apply to the
 // root span, which spans the trace in practice. Counting stops at
-// MatchCap+1, so a big window costs at most that many matches past the scan.
+// MatchCap+1. Without a membership filter it's a count of root spans (span
+// stats); with a service and/or errors filter, of root spans by their
+// trace's services and errors (trace stats); with an operation filter, see
+// matchingTracesRaw. Duration bounds are exact on raw spans and at
+// histogram resolution on rollup rows, as in the tiles.
 func (q *SpanQuerier) matchingTraces(
 	ctx context.Context,
 	projectID uuid.UUID,
 	request *spans_core.TraceSummaryQuery,
 ) (int64, error) {
-	from, to := resolveTimeRange(&spans_core.TimeRangeDTO{From: &request.From, To: &request.To})
-	tail, records, err := q.inputs(projectID, from, to, segments.PruningHints{})
-	if err != nil {
-		return 0, err
+	if request.OperationName != "" {
+		return q.matchingTracesRaw(ctx, projectID, request)
 	}
-	limit := request.MatchCap + 1
-
-	var rootWhere []string
-	var rootArgs []any
+	schema := spanStats
+	where := []string{"root"}
+	var whereArgs []any
+	if request.ServiceName != "" || request.ErrorsOnly {
+		schema = traceStats
+		where = []string{"service_name IS NULL"}
+		if request.ServiceName != "" {
+			where = []string{"service_name = ?"}
+			whereArgs = append(whereArgs, request.ServiceName)
+		}
+		if request.ErrorsOnly {
+			where = append(where, "errors")
+		}
+	}
 	if request.MinDurationMs != nil {
-		rootWhere = append(rootWhere, spanDurationMsExpr+" >= ?")
-		rootArgs = append(rootArgs, *request.MinDurationMs)
+		where = append(where, "duration_ms >= ?")
+		whereArgs = append(whereArgs, *request.MinDurationMs)
 	}
 	if request.MaxDurationMs != nil {
-		rootWhere = append(rootWhere, spanDurationMsExpr+" <= ?")
-		rootArgs = append(rootArgs, *request.MaxDurationMs)
+		where = append(where, "duration_ms <= ?")
+		whereArgs = append(whereArgs, *request.MaxDurationMs)
 	}
-
-	var memberships []string
-	var membershipArgs []any
-	if request.ServiceName != "" {
-		memberships = append(memberships, "trace_id IN (SELECT trace_id FROM segs WHERE service_name = ?)")
-		membershipArgs = append(membershipArgs, request.ServiceName)
-	}
-	if request.OperationName != "" {
-		memberships = append(memberships, "trace_id IN (SELECT trace_id FROM segs WHERE name = ?)")
-		membershipArgs = append(membershipArgs, request.OperationName)
-	}
-	if request.ErrorsOnly {
-		memberships = append(memberships, "trace_id IN (SELECT trace_id FROM segs WHERE status_code = 'ERROR')")
-	}
-
+	from, to := resolveTimeRange(&spans_core.TimeRangeDTO{From: &request.From, To: &request.To})
 	var count int64
-	scan := func(rows *sql.Rows) error {
+	_, err := q.runStats(ctx, projectID, statsQuery{
+		schema:     schema,
+		ranges:     []interval{{start: from, end: to, includeEnd: true}},
+		selectSQL:  "sum(cnt)::BIGINT AS n",
+		whereSQL:   strings.Join(where, " AND "),
+		whereArgs:  whereArgs,
+		finalSQL:   "SELECT sum(n)::BIGINT FROM " + query.ResultsPlaceholder,
+		scanBudget: request.ScanBudget,
+	}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var n sql.NullInt64
 			if err := rows.Scan(&n); err != nil {
@@ -177,34 +163,61 @@ func (q *SpanQuerier) matchingTraces(
 			count += n.Int64
 		}
 		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute matching-traces query: %w", err)
 	}
+	return min(count, int64(request.MatchCap+1)), nil
+}
 
-	if len(memberships) == 0 {
-		// Root spans alone: each fragment counts its own up to the cap.
-		where := append([]string{"project_id = ?", "start_time >= ?", "start_time <= ?", "parent_span_id = ''"},
-			rootWhere...)
-		args := append(append([]any{projectID.String(), from, to}, rootArgs...), limit)
-		countSQL := "SELECT count(*) AS n FROM (SELECT 1 FROM " + query.SourcePlaceholder +
-			" WHERE " + strings.Join(where, " AND ") + " LIMIT ?)"
-		_, err = q.runContext(ctx, query.Request{
-			Segments:     records,
-			LocalFiles:   tail,
-			FragmentSQL:  countSQL,
-			FragmentArgs: args,
-			FinalSQL:     "SELECT sum(n)::BIGINT FROM " + query.ResultsPlaceholder,
-			SingleSQL:    countSQL,
-			SingleArgs:   args,
-			ScanBudget:   request.ScanBudget,
-		}, scan)
-	} else {
-		// A trace's spans can sit in several fragments: one fragment.
-		where := append([]string{"parent_span_id = ''"}, rootWhere...)
-		where = append(where, memberships...)
-		args := append(append(append([]any{projectID.String(), from, to}, rootArgs...), membershipArgs...), limit)
-		countSQL := "WITH segs AS (SELECT trace_id, parent_span_id, service_name, name, status_code, " +
-			"start_time, end_time FROM " + query.SourcePlaceholder +
-			" WHERE project_id = ? AND start_time >= ? AND start_time <= ?) " +
-			"SELECT count(*) FROM (SELECT 1 FROM segs WHERE " + strings.Join(where, " AND ") + " LIMIT ?)"
+// matchingTracesRaw counts with an operation filter (any span of the
+// trace with that name; the other filters apply too), which needs raw
+// spans. It counts newest first, window by window (newestFirstWindows), and stops once the cap is
+// reached: a root's children start after it, so a window holding the root
+// holds every span that can make its trace match.
+func (q *SpanQuerier) matchingTracesRaw(
+	ctx context.Context,
+	projectID uuid.UUID,
+	request *spans_core.TraceSummaryQuery,
+) (int64, error) {
+	from, to := resolveTimeRange(&spans_core.TimeRangeDTO{From: &request.From, To: &request.To})
+	limit := request.MatchCap + 1
+
+	where := []string{"parent_span_id = ''"}
+	var whereArgs []any
+	if request.MinDurationMs != nil {
+		where = append(where, spans_core.SpanDurationMsSQL+" >= ?")
+		whereArgs = append(whereArgs, *request.MinDurationMs)
+	}
+	if request.MaxDurationMs != nil {
+		where = append(where, spans_core.SpanDurationMsSQL+" <= ?")
+		whereArgs = append(whereArgs, *request.MaxDurationMs)
+	}
+	if request.ServiceName != "" {
+		where = append(where, "trace_id IN (SELECT trace_id FROM segs WHERE service_name = ?)")
+		whereArgs = append(whereArgs, request.ServiceName)
+	}
+	if request.OperationName != "" {
+		where = append(where, "trace_id IN (SELECT trace_id FROM segs WHERE name = ?)")
+		whereArgs = append(whereArgs, request.OperationName)
+	}
+	if request.ErrorsOnly {
+		where = append(where, "trace_id IN (SELECT trace_id FROM segs WHERE status_code = 'ERROR')")
+	}
+	// A trace's spans can sit in several fragments: one fragment.
+	countSQL := "WITH segs AS (SELECT trace_id, parent_span_id, service_name, name, status_code, " +
+		"start_time, end_time FROM " + query.SourcePlaceholder +
+		" WHERE project_id = ? AND start_time >= ? AND start_time <= ?) " +
+		"SELECT count(*) FROM (SELECT 1 FROM segs WHERE " + strings.Join(where, " AND ") + " LIMIT ?)"
+
+	var count int64
+	for _, windowFrom := range newestFirstWindows(from, to) {
+		tail, records, err := q.inputs(projectID, windowFrom, to, segments.PruningHints{})
+		if err != nil {
+			return 0, err
+		}
+		args := append(append([]any{projectID.String(), windowFrom, to}, whereArgs...), limit)
+		count = 0
 		_, err = q.runContext(ctx, query.Request{
 			Segments:       records,
 			LocalFiles:     tail,
@@ -212,12 +225,53 @@ func (q *SpanQuerier) matchingTraces(
 			SingleArgs:     args,
 			SingleFragment: true,
 			ScanBudget:     request.ScanBudget,
-		}, scan)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("failed to execute matching-traces query: %w", err)
+		}, func(rows *sql.Rows) error {
+			for rows.Next() {
+				var n sql.NullInt64
+				if err := rows.Scan(&n); err != nil {
+					return fmt.Errorf("failed to scan matching-traces row: %w", err)
+				}
+				count += n.Int64
+			}
+			return nil
+		})
+		if err != nil {
+			return 0, fmt.Errorf("failed to execute matching-traces query: %w", err)
+		}
+		if count >= int64(limit) {
+			break
+		}
 	}
 	return min(count, int64(limit)), nil
+}
+
+// summaryFilters are the summary's span filters over spanStats columns.
+func summaryFilters(request *spans_core.TraceSummaryQuery) (string, []any) {
+	var where []string
+	var args []any
+	if request.RootSpansOnly {
+		where = append(where, "root")
+	}
+	if request.ServiceName != "" {
+		where = append(where, "service_name = ?")
+		args = append(args, request.ServiceName)
+	}
+	if request.OperationName != "" {
+		where = append(where, "name = ?")
+		args = append(args, request.OperationName)
+	}
+	if request.ErrorsOnly {
+		where = append(where, "status_code = 'ERROR'")
+	}
+	if request.MinDurationMs != nil {
+		where = append(where, "duration_ms >= ?")
+		args = append(args, *request.MinDurationMs)
+	}
+	if request.MaxDurationMs != nil {
+		where = append(where, "duration_ms <= ?")
+		args = append(args, *request.MaxDurationMs)
+	}
+	return strings.Join(where, " AND "), args
 }
 
 func summaryPeriod(count, errors int64, p50, p95 sql.NullFloat64) spans_core.TraceSummaryPeriod {

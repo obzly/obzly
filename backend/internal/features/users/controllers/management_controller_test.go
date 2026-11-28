@@ -680,21 +680,7 @@ func Test_InviteUserToProject_MembershipReceivedAfterSignUp(t *testing.T) {
 	)
 	assert.Contains(t, string(resp.Body), "User created successfully")
 
-	signInRequest := users_dto.SignInRequestDTO{
-		Email:    inviteEmail,
-		Password: "testpassword123",
-	}
-
-	var signInResponse users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t,
-		router,
-		"/api/v1/users/signin",
-		"",
-		signInRequest,
-		http.StatusOK,
-		&signInResponse,
-	)
+	signInResponse, _ := signInAndSetUpMFA(t, router, inviteEmail, "testpassword123")
 
 	var membersResponse projects_dto.GetMembersResponseDTO
 	test_utils.MakeGetRequestAndUnmarshal(
@@ -714,7 +700,7 @@ func Test_InviteUserToProject_MembershipReceivedAfterSignUp(t *testing.T) {
 		}
 	}
 
-	assert.NotNil(t, foundMember, "Invited user should be automatically added as project member after sign up")
+	require.NotNil(t, foundMember, "Invited user should be automatically added as project member after sign up")
 	assert.Equal(t, users_enums.ProjectRoleMember, foundMember.Role)
 	assert.Equal(t, inviteEmail, foundMember.Email)
 }
@@ -923,16 +909,7 @@ func Test_SetUserPassword_ForInvitedUser_ActivatesAndAllowsSignIn(t *testing.T) 
 	)
 	assert.True(t, profile.IsActive, "Setting a password for an invited user should activate their account")
 
-	var signInResponse users_dto.SignInResponseDTO
-	test_utils.MakePostRequestAndUnmarshal(
-		t,
-		router,
-		"/api/v1/users/signin",
-		"",
-		users_dto.SignInRequestDTO{Email: inviteEmail, Password: "admin-assigned-password-123"},
-		http.StatusOK,
-		&signInResponse,
-	)
+	signInResponse, _ := signInAndSetUpMFA(t, router, inviteEmail, "admin-assigned-password-123")
 	assert.Equal(t, inviteEmail, signInResponse.Email)
 }
 

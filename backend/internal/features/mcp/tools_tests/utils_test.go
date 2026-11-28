@@ -106,9 +106,12 @@ func createRouter() *gin.Engine {
 
 func createToken(t *testing.T, router *gin.Engine, user *users_dto.SignInResponseDTO) string {
 	t.Helper()
+	// MFA is required for every account, so creating a token asks for a code.
+	code := users_testing.EnableRealMFAForTestUser(user.UserID, user.Email)
 	var created access_tokens.CreateAccessTokenResponseDTO
 	test_utils.MakePostRequestAndUnmarshal(t, router, "/api/v1/access-tokens", "Bearer "+user.Token,
-		access_tokens.CreateAccessTokenRequestDTO{Name: "test agent", ExpiresInDays: 30}, http.StatusOK, &created)
+		access_tokens.CreateAccessTokenRequestDTO{Name: "test agent", ExpiresInDays: 30, MFACode: &code},
+		http.StatusOK, &created)
 	return created.Token
 }
 

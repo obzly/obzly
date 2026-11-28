@@ -24,9 +24,14 @@ type fakeWriter struct {
 	mu          sync.Mutex
 	stream      string
 	buffered    map[uuid.UUID]int
+	flushedRows map[uuid.UUID]int
 	flushed     int
 	uploaded    int
 	failUploads bool
+	// failFlushEvery: every nth flush fails and drops its rows, as a real
+	// writer does.
+	failFlushEvery int
+	flushCalls     int
 }
 
 func Test_Sink_WhenUploadFails_HoldsTheBatchUntilARetrySucceeds(t *testing.T) {
@@ -41,12 +46,14 @@ func Test_Sink_WhenUploadFails_HoldsTheBatchUntilARetrySucceeds(t *testing.T) {
 	sink.Tick(context.Background(), broker.ShardFor(projectID))
 
 	require.Equal(t, 1, logs.flushCount())
-	require.EqualValues(t, 1, pendingAcks(t, consumer), "not acked while the segment is only on local disk")
+	require.Never(t, func() bool { return pendingAcks(t, consumer) == 0 }, 300*time.Millisecond, 50*time.Millisecond,
+		"not acked while the segment is only on local disk")
 
 	logs.setFailUploads(false)
-	sink.Tick(context.Background(), broker.ShardFor(projectID))
-
-	require.Equal(t, 1, logs.uploadCount())
+	require.Eventually(t, func() bool {
+		sink.Tick(context.Background(), broker.ShardFor(projectID))
+		return logs.uploadCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "a later tick uploads it")
 	require.Eventually(t, func() bool { return streamMessages(t, client) == 0 },
 		5*time.Second, 50*time.Millisecond, "acked once uploaded")
 }
@@ -86,6 +93,100 @@ func Test_Sink_BeforeMaxAge_KeepsRowsBufferedAndTheBatchUnacked(t *testing.T) {
 		5*time.Second, 50*time.Millisecond)
 }
 
+// With lanes, two of a worker's shards can carry one project, sharing its
+// writer buffer: releasing one flushes and acks both shards' batches, and
+// the other keeps serving the project.
+func Test_Sink_ProjectOnTwoShards_ReleasingOneAcksBothAndTheOtherKeepsServing(t *testing.T) {
+	client, consumer := startStream(t)
+	logs, ai := newFakeWriter(logs_core.StreamLogs), newFakeWriter(logs_core.StreamAILogs)
+	sink := NewSink(logs, ai, 1<<30, time.Hour, discardLogger())
+	projectID := uuid.New()
+	laneA, laneB := broker.LaneShard(projectID, 0), broker.LaneShard(projectID, 1)
+	publish(t, client, projectID, 2)
+	publish(t, client, projectID, 2)
+
+	handleNextOn(t, client, consumer, sink, laneA, projectID)
+	handleNextOn(t, client, consumer, sink, laneB, projectID)
+	sink.Release(context.Background(), laneA)
+
+	require.Equal(t, 1, logs.flushCount())
+	require.Eventually(t, func() bool { return streamMessages(t, client) == 0 },
+		5*time.Second, 50*time.Millisecond, "both shards' batches acked: their rows are in the segment")
+
+	publish(t, client, projectID, 2)
+	handleNextOn(t, client, consumer, sink, laneB, projectID)
+	sink.Release(context.Background(), laneB)
+
+	require.Equal(t, 2, logs.flushCount(), "the other shard still flushes the project")
+	require.Eventually(t, func() bool { return streamMessages(t, client) == 0 },
+		5*time.Second, 50*time.Millisecond)
+}
+
+// Two shards handling one project's batches at once: every batch is acked
+// once its rows are written, none lost.
+func Test_Sink_ProjectOnTwoShardsConcurrently_AcksEveryBatchWithItsRows(t *testing.T) {
+	client, consumer := startStream(t)
+	logs, ai := newFakeWriter(logs_core.StreamLogs), newFakeWriter(logs_core.StreamAILogs)
+	sink := NewSink(logs, ai, 4<<10, time.Hour, discardLogger())
+	projectID := uuid.New()
+	const batches = 100
+	for range batches {
+		publish(t, client, projectID, 5)
+	}
+
+	var wg sync.WaitGroup
+	for lane := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range batches / 2 {
+				handleNextOn(t, client, consumer, sink, broker.LaneShard(projectID, lane), projectID)
+			}
+		}()
+	}
+	wg.Wait()
+	sink.Release(context.Background(), broker.LaneShard(projectID, 0))
+	sink.Release(context.Background(), broker.LaneShard(projectID, 1))
+
+	require.Eventually(t, func() bool { return streamMessages(t, client) == 0 },
+		5*time.Second, 50*time.Millisecond, "every batch acked")
+	require.Equal(t, batches*5, logs.rowsFlushed(projectID), "every row in a flushed segment")
+}
+
+// Flushes that fail drop their rows and leave their batches unacked for
+// redelivery; with two lanes of a project interleaving, a batch is acked only
+// when a flush that succeeded wrote its rows.
+func Test_Sink_ProjectOnTwoShardsWithFailingFlushes_AcksOnlyBatchesWhoseRowsWereWritten(t *testing.T) {
+	client, consumer := startStream(t)
+	logs, ai := newFakeWriter(logs_core.StreamLogs), newFakeWriter(logs_core.StreamAILogs)
+	logs.failFlushEvery = 3
+	sink := NewSink(logs, ai, 2<<10, time.Hour, discardLogger())
+	projectID := uuid.New()
+	const batches = 200
+	for range batches {
+		publish(t, client, projectID, 5)
+	}
+
+	var wg sync.WaitGroup
+	for lane := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range batches / 2 {
+				handleNextOn(t, client, consumer, sink, broker.LaneShard(projectID, lane), projectID)
+			}
+		}()
+	}
+	wg.Wait()
+	sink.Release(context.Background(), broker.LaneShard(projectID, 0))
+	sink.Release(context.Background(), broker.LaneShard(projectID, 1))
+
+	time.Sleep(200 * time.Millisecond)
+	unacked := int(streamMessages(t, client))
+	require.Positive(t, unacked, "some flushes failed")
+	require.Equal(t, (batches-unacked)*5, logs.rowsFlushed(projectID), "every acked batch's rows written")
+}
+
 func Test_Sink_UndecodableBatch_IsTerminatedNotRedelivered(t *testing.T) {
 	client, consumer := startStream(t)
 	sink := NewSink(newFakeWriter(logs_core.StreamLogs), newFakeWriter(logs_core.StreamAILogs),
@@ -101,7 +202,7 @@ func Test_Sink_UndecodableBatch_IsTerminatedNotRedelivered(t *testing.T) {
 }
 
 func newFakeWriter(stream string) *fakeWriter {
-	return &fakeWriter{stream: stream, buffered: map[uuid.UUID]int{}}
+	return &fakeWriter{stream: stream, buffered: map[uuid.UUID]int{}, flushedRows: map[uuid.UUID]int{}}
 }
 
 func (w *fakeWriter) Append(entries map[uuid.UUID][]*logs_core.LogItem) error {
@@ -121,6 +222,11 @@ func (w *fakeWriter) Flush(projectID uuid.UUID) (*segments.SegmentRecord, error)
 		return nil, nil
 	}
 	delete(w.buffered, projectID)
+	w.flushCalls++
+	if w.failFlushEvery > 0 && w.flushCalls%w.failFlushEvery == 0 {
+		return nil, errors.New("disk full")
+	}
+	w.flushedRows[projectID] += rows
 	w.flushed++
 	return &segments.SegmentRecord{ID: uuid.New(), ProjectID: projectID, Stream: w.stream, RowCount: int64(rows)}, nil
 }
@@ -201,6 +307,21 @@ func handleNext(
 	require.NoError(t, client.Conn.Flush())
 }
 
+func handleNextOn(
+	t *testing.T,
+	client *broker.Client,
+	consumer jetstream.Consumer,
+	sink *ingest.Sink,
+	shard int,
+	projectID uuid.UUID,
+) {
+	t.Helper()
+	msg, err := consumer.Next(jetstream.FetchMaxWait(5 * time.Second))
+	require.NoError(t, err)
+	require.NoError(t, sink.Handle(shard, projectID, msg.Data(), broker.NewAck(client.Conn, msg.Reply())))
+	require.NoError(t, client.Conn.Flush())
+}
+
 func pendingAcks(t *testing.T, consumer jetstream.Consumer) int {
 	t.Helper()
 	info, err := consumer.Info(context.Background())
@@ -219,4 +340,10 @@ func streamMessages(t *testing.T, client *broker.Client) uint64 {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func (w *fakeWriter) rowsFlushed(projectID uuid.UUID) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.flushedRows[projectID]
 }

@@ -88,7 +88,31 @@ var (
 	IngestRejectedRows = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "ingest_rejected_rows_total",
-		Help:      "Items rejected individually inside an otherwise accepted batch (validation, per-project rate limit).",
+		Help:      "Items rejected individually inside an otherwise accepted batch (validation).",
+	}, []string{"signal"})
+
+	IngestThrottledRows = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "ingest_throttled_rows_total",
+		Help:      "Rows in batches refused with 429 by a project's rate limit; the sender retries them.",
+	}, []string{"signal"})
+
+	RateLimitLocalDecisions = factory.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "rate_limit_local_decisions_total",
+		Help:      "Rate-limit decisions made by a replica's own bucket because Valkey was unreachable.",
+	})
+
+	ValkeyUnreachable = factory.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "valkey_unreachable_total",
+		Help:      "Times a Valkey call got no reply, after which request-path calls skip Valkey for 2 s.",
+	})
+
+	IngestShardLeaseUnconfirmed = factory.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "ingest_shard_leases_unconfirmed",
+		Help:      "Shards a worker keeps consuming while Valkey can't renew their leases; compaction waits for them.",
 	}, []string{"signal"})
 
 	OTLPDeltaSamples = factory.NewCounterVec(prometheus.CounterOpts{
@@ -168,6 +192,29 @@ var (
 		Help:      "Object storage request latency by operation.",
 		Buckets:   latencyBuckets,
 	}, []string{"op"})
+
+	QueryMemorySandboxBytes = factory.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "query_memory_sandbox_bytes",
+		Help:      "Memory limits of the SQL-mode DuckDB handles running now, as the memory gate admitted them.",
+	})
+
+	// QueryMemoryAdmissions counts SQL-mode queries by how the memory gate
+	// admitted them: full (their usual cap), reduced (less, spilling more),
+	// waited (after others finished) or refused (429).
+	QueryMemoryAdmissions = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "query_memory_admissions_total",
+		Help:      "SQL-mode queries by how the memory gate admitted them: full, reduced, waited or refused.",
+	}, []string{"outcome"})
+
+	// CompactionRepeatedRows counts rows merges dropped as copies of another
+	// row's id: batches the broker redelivered after they were persisted.
+	CompactionRepeatedRows = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "compaction_repeated_rows_total",
+		Help:      "Rows dropped by merges as repeats of another row's id (batches redelivered after a restart).",
+	}, []string{"stream"})
 
 	ObjectStoreBytes = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
@@ -422,6 +469,57 @@ var (
 		Name:      "ingest_owned_shards",
 		Help:      "Ingest shards this worker consumes.",
 	}, []string{"signal"})
+
+	IngestShardLoad = factory.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "ingest_shard_load_bytes",
+		Help:      "Weighted payload bytes per second of each ingest shard this worker owns (load-aware balancing).",
+	}, []string{"signal", "shard"})
+
+	IngestWorkerLoadRatio = factory.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "ingest_worker_load_ratio",
+		Help:      "This worker's ingest load against its target share (1 is even).",
+	})
+
+	IngestShardMoves = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "ingest_shard_moves_total",
+		Help:      "Ingest shards this worker handed away or claimed (shed: by load, release: idle by count, lanes: a second lane of one project to another worker, claim).",
+	}, []string{"reason"})
+
+	IngestProjectsWithLanes = factory.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "ingest_projects_with_lanes",
+		Help:      "Projects whose batches spread over more than one ingest lane (set by the lane controller).",
+	}, []string{"signal"})
+
+	IngestLaneChanges = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "ingest_lane_changes_total",
+		Help:      "Lane count changes the lane controller made.",
+	}, []string{"direction"})
+
+	IngestStepDuration = factory.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Name:      "ingest_step_duration_seconds",
+		Help: "Time a worker spends on each step of writing ingest batches: fetch (waiting on JetStream), " +
+			"append (decoding one batch), flush (writing one project's segments), upload, ack, and wait " +
+			"(a shard held until queued uploads finish).",
+		Buckets: latencyBuckets,
+	}, []string{"signal", "step"})
+
+	IngestShardBehind = factory.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "ingest_shard_behind_seconds",
+		Help:      "How long an owned ingest shard needs to drain its undelivered batches at its current rate.",
+	}, []string{"signal", "shard"})
+
+	IngestUnsplittableShards = factory.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "ingest_unsplittable_shards",
+		Help:      "Shards on this overloaded worker busier than any other worker's room: moving one only moves the overload.",
+	})
 
 	IngestTerminatedMessages = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
